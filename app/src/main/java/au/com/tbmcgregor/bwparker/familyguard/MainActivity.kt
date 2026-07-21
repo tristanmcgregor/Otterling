@@ -14,6 +14,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -115,27 +117,75 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun HomeScreen(onOpenSettings: () -> Unit) {
         val ownerManager = remember { DeviceOwnerManager(applicationContext) }
+        val restrictionsManager = remember { DeviceRestrictionsManager(applicationContext) }
         val status = remember { ownerManager.currentStatus() }
+        val activeRestrictions = remember {
+            Restriction.entries.count { restrictionsManager.isEnabled(it) } +
+                if (restrictionsManager.isUninstallBlocked()) 1 else 0
+        }
+        val totalRestrictions = Restriction.entries.size + 1
 
         Column(
-            modifier = Modifier.fillMaxSize().padding(24.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(24.dp),
+            verticalArrangement = Arrangement.spacedBy(24.dp),
         ) {
-            Text("Family Device Guard", style = MaterialTheme.typography.headlineMedium)
-            Text(
-                if (status.isDeviceOwner) "Protections: Active" else "Protections: Not set up yet",
-                style = MaterialTheme.typography.titleMedium,
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("Family Device Guard", style = MaterialTheme.typography.headlineMedium)
+                Text(
+                    "Parental controls for this device",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            HomeStatusCard(
+                isDeviceOwner = status.isDeviceOwner,
+                activeRestrictions = activeRestrictions,
+                totalRestrictions = totalRestrictions,
             )
-            Text(
-                if (status.isDeviceOwner) {
-                    "This device is under Device Owner control."
-                } else {
-                    "Open Settings to finish setup (Device Admin / Device Owner section)."
-                },
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Button(onClick = onOpenSettings) {
+
+            Button(onClick = onOpenSettings, modifier = Modifier.fillMaxWidth()) {
                 Text("Open Settings")
+            }
+        }
+    }
+
+    @Composable
+    private fun HomeStatusCard(isDeviceOwner: Boolean, activeRestrictions: Int, totalRestrictions: Int) {
+        val containerColor = if (isDeviceOwner) {
+            MaterialTheme.colorScheme.primaryContainer
+        } else {
+            MaterialTheme.colorScheme.errorContainer
+        }
+        val contentColor = if (isDeviceOwner) {
+            MaterialTheme.colorScheme.onPrimaryContainer
+        } else {
+            MaterialTheme.colorScheme.onErrorContainer
+        }
+
+        Card(colors = CardDefaults.cardColors(containerColor = containerColor)) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Text(
+                    if (isDeviceOwner) "Protected" else "Setup required",
+                    style = MaterialTheme.typography.titleLarge,
+                    color = contentColor,
+                )
+                Text(
+                    if (isDeviceOwner) {
+                        "$activeRestrictions of $totalRestrictions tamper protections active"
+                    } else {
+                        "Device Owner hasn't been set up yet. Open Settings to finish setup."
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = contentColor,
+                )
             }
         }
     }
