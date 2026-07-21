@@ -53,8 +53,6 @@ tee "$INSTALL_PATH/Contents/Info.plist" > /dev/null <<PLIST
     <string>0.1</string>
     <key>LSMinimumSystemVersion</key>
     <string>13.0</string>
-    <key>LSUIElement</key>
-    <true/>
 </dict>
 </plist>
 PLIST
@@ -90,4 +88,10 @@ echo "==> Verifying signatures"
 codesign -dv --verbose=4 "$INSTALL_PATH" 2>&1 | grep -E "Identifier|TeamIdentifier|Authority"
 codesign -dv --verbose=4 "$INSTALL_PATH/Contents/MacOS/FocusLockHelperd" 2>&1 | grep -E "Identifier|TeamIdentifier|Authority"
 
+echo "==> Installing focuslockctl to /usr/local/bin"
+mkdir -p /usr/local/bin
+cp "$BUILD_DIR/focuslockctl" /usr/local/bin/focuslockctl
+codesign --force --options runtime --sign "$SIGN_IDENTITY" /usr/local/bin/focuslockctl
+
 echo "==> Done. Launch with: open ${INSTALL_PATH}"
+echo "    Guardian CLI: focuslockctl status"
