@@ -22,6 +22,70 @@ project remains buildable before Samsung's proprietary JAR is downloaded. The
 JAR is still declared as a compile-only dependency for direct API integration
 in later phases.
 
+## Phase 2 — Device Owner provisioning
+
+Requires a factory-reset or never-configured test device (no Google account
+added yet).
+
+1. Install the debug APK: `adb install app/build/outputs/apk/debug/app-debug.apk`
+2. Open the app once so the package is known to the system, then run the
+   command shown in the "Device Admin / Device Owner" section (also shown in
+   Logcat-free form here):
+   ```
+   adb shell dpm set-device-owner au.com.tbmcgregor.bwparker.familyguard/.admin.DeviceAdminReceiverImpl
+   ```
+3. Reopen the app and tap **Refresh status** — it should report
+   `Device owner: true`.
+4. If you need to uninstall/rebuild, first remove the admin or the app can't
+   be uninstalled normally:
+   ```
+   adb shell dpm remove-active-admin au.com.tbmcgregor.bwparker.familyguard/.admin.DeviceAdminReceiverImpl
+   ```
+
+## Phase 3 — Tamper resistance
+
+Applied automatically once Device Owner is active (see Phase 2). The "Phase 3 —
+Tamper resistance" section has per-restriction toggles and an
+"Enable all recommended protections" button for re-applying everything at once.
+All of it is stock Android (`UserManager`/`DevicePolicyManager`), no Knox
+license required:
+
+- Block Safe Mode boot, factory reset, USB debugging, guest mode/additional
+  users (`UserManager` restrictions).
+- Block app uninstall (`setUninstallBlocked`).
+
+**Known gap to verify physically**: Samsung's bootloader-level recovery menu
+(power + volume-up before Android loads) may not be fully covered by the
+stock `DISALLOW_FACTORY_RESET` restriction — some MDM vendors say this
+specific path needs Knox on Samsung hardware. Test both the Safe Mode key
+combo (volume-down during boot) and the recovery-menu factory reset on the
+real device; if the latter isn't blocked, Knox's `RestrictionPolicy` can
+reinforce it once the license arrives.
+
+## Phase 4 — Content filtering
+
+Also stock Android, no Knox required. In the "Phase 4 — Content filtering"
+section:
+
+- **DNS content filter**: forces CleanBrowsing's free family-filter
+  DNS-over-TLS resolver via `setGlobalPrivateDnsModeSpecifiedHost`. Blocks
+  adult/proxy/VPN domains and forces Safe Search on Google/Bing/YouTube in one
+  call. Requires Android 10+ (API 29); shows a status message on API 28.
+- **Blocked apps**: enter a package name (e.g. `com.facebook.katana`) and tap
+  **Block** to suspend it via `setPackagesSuspended`. Toggle or remove
+  entries from the list below. The list is persisted in a local Room database
+  so it can be re-applied after a reboot in a later phase.
+- **Scheduled access windows** (the "Phase 4 — Scheduled access windows"
+  section): define a rule name, comma-separated package names, a start/end
+  time (`HH:mm`, can wrap past midnight for bedtime), and which days it
+  applies to, then tap **Add rule**. A `WorkManager` periodic job
+  (`ScheduleEnforcementWorker`) re-evaluates every 15 minutes — WorkManager's
+  minimum interval — and suspends/releases the listed packages accordingly.
+  Tap **Apply now** to force an immediate re-check instead of waiting for the
+  next tick. This layers independently of the permanent block list above: a
+  package stays suspended if it's permanently blocked, even outside any
+  schedule window.
+
 ## Secret handling
 
 `local.properties` and `app/libs/*.jar` are ignored. Never commit Knox license

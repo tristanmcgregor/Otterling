@@ -24,6 +24,18 @@
                 <action android:name="com.samsung.android.knox.intent.action.KNOX_LICENSE_STATUS" />
             </intent-filter>
         </receiver>
+
+        <receiver
+            android:name=".admin.DeviceAdminReceiverImpl"
+            android:exported="true"
+            android:permission="android.permission.BIND_DEVICE_ADMIN">
+            <meta-data
+                android:name="android.app.device_admin"
+                android:resource="@xml/device_admin" />
+            <intent-filter>
+                <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
+            </intent-filter>
+        </receiver>
     </application>
 
 </manifest>

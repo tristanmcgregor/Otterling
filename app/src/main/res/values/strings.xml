@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">Family Device Guard</string>
+    <string name="device_admin_disable_warning">Disabling this admin removes parental controls from this device.</string>
 </resources>

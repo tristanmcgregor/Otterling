@@ -3,6 +3,7 @@ import java.util.Properties
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
+    id("com.google.devtools.ksp")
 }
 
 val localProperties = Properties().apply {
@@ -62,6 +63,11 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
+
+    implementation("androidx.room:room-runtime:2.8.4")
+    ksp("androidx.room:room-compiler:2.8.4")
+
+    implementation("androidx.work:work-runtime:2.11.2")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
