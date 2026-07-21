@@ -111,4 +111,27 @@ final class XPCService: NSObject, FocusLockXPCProtocol {
         onStateChanged()
         reply(FocusLockCodec.encode(FocusLockResult.ok))
     }
+
+    func enableDNSEnforcement(reply: @escaping (Data) -> Void) {
+        stateStore.mutate { state in
+            state.dnsEnforcementEnabled = true
+        }
+        // Apply immediately -- don't wait for the enforcement loop's 15s DNS cadence.
+        DNSEnforcer.apply()
+        onStateChanged()
+        reply(FocusLockCodec.encode(FocusLockResult.ok))
+    }
+
+    func disableDNSEnforcement(reply: @escaping (Data) -> Void) {
+        guard isCallerAdmin() else {
+            reply(FocusLockCodec.encode(FocusLockResult.denied("Only the Guardian admin account can disable DNS enforcement.")))
+            return
+        }
+        stateStore.mutate { state in
+            state.dnsEnforcementEnabled = false
+        }
+        DNSEnforcer.remove()
+        onStateChanged()
+        reply(FocusLockCodec.encode(FocusLockResult.ok))
+    }
 }

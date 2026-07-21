@@ -2,8 +2,13 @@ import Foundation
 import FocusLockShared
 
 /// Secondary defense layer: blocks DNS-over-TLS (port 853) and a handful of well-known public
-/// DNS-over-HTTPS resolver IPs so a browser can't sidestep the /etc/hosts redirect by resolving
-/// through its own encrypted resolver instead of the system one.
+/// DNS-over-HTTPS resolver IPs so a browser can't sidestep the /etc/hosts redirect (while site
+/// blocking is active) or the mandated Cloudflare resolver (while DNS enforcement is on) by
+/// resolving through its own encrypted resolver instead of the system one. The IP list
+/// deliberately includes Cloudflare's *unfiltered* 1.1.1.1/1.0.0.1 -- when DNS enforcement wants
+/// the filtered 1.1.1.3/1.0.0.3, blocking the unfiltered pair closes the obvious "just point at
+/// Cloudflare's other IP" bypass. `EnforcementLoop` activates this whenever either site blocking
+/// or DNS enforcement is on.
 ///
 /// This is deliberately narrow -- it does not attempt a general-purpose firewall. Rules are
 /// loaded into a *named* pf anchor, and /etc/pf.conf is only ever touched to add one marked
@@ -56,11 +61,18 @@ enum PFBlocker {
             return
         }
 
+        // Only block DNS-ish ports on known alternate resolvers -- never "block to <ip>" for
+        // all protocols. A full-IP drop on 1.1.1.1/8.8.8.8 wedged browsers whenever anything
+        // briefly fell back to those resolvers (or used DoH to them) while system DNS was still
+        // settling on Cloudflare Family (1.1.1.3).
         var lines = ["# Managed by FocusLockHelperd -- forces DNS through the system resolver"]
         lines.append("block drop quick proto udp from any to any port 853")
         lines.append("block drop quick proto tcp from any to any port 853")
         for ip in knownDoHResolverIPs {
-            lines.append("block drop quick to \(ip)")
+            lines.append("block drop quick proto udp from any to \(ip) port 53")
+            lines.append("block drop quick proto tcp from any to \(ip) port 53")
+            lines.append("block drop quick proto tcp from any to \(ip) port 443")
+            lines.append("block drop quick proto udp from any to \(ip) port 443")
         }
         let content = lines.joined(separator: "\n") + "\n"
         try? content.write(toFile: FocusLockConstants.pfAnchorFilePath, atomically: true, encoding: .utf8)
