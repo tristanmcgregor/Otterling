@@ -24,7 +24,6 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -55,9 +54,12 @@ import au.com.tbmcgregor.bwparker.familyguard.restrictions.Restriction
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.RestrictionEnforcementWorker
 import au.com.tbmcgregor.bwparker.familyguard.tamper.TamperEvent
 import au.com.tbmcgregor.bwparker.familyguard.tamper.TamperEventLogger
+import au.com.tbmcgregor.bwparker.familyguard.ui.AppPickerDialog
+import au.com.tbmcgregor.bwparker.familyguard.ui.InstalledAppInfo
 import au.com.tbmcgregor.bwparker.familyguard.ui.PinLockScreen
 import au.com.tbmcgregor.bwparker.familyguard.ui.SectionCard
 import au.com.tbmcgregor.bwparker.familyguard.ui.SettingsScreen
+import au.com.tbmcgregor.bwparker.familyguard.ui.loadInstalledApps
 import au.com.tbmcgregor.bwparker.familyguard.ui.StatusText
 import au.com.tbmcgregor.bwparker.familyguard.ui.SwitchRow
 import java.text.DateFormat
@@ -327,9 +329,24 @@ class MainActivity : ComponentActivity() {
         val uninstallGuard = remember { AppUninstallGuard(applicationContext) }
         var refreshTrigger by remember { mutableIntStateOf(0) }
         var protectedApps by remember { mutableStateOf<List<ProtectedApp>>(emptyList()) }
-        var newProtectedPackageName by remember { mutableStateOf("") }
+        var installedApps by remember { mutableStateOf<List<InstalledAppInfo>>(emptyList()) }
+        var showAppPicker by remember { mutableStateOf(false) }
         LaunchedEffect(refreshTrigger) {
             protectedApps = uninstallGuard.protectedApps()
+        }
+
+        if (showAppPicker) {
+            AppPickerDialog(
+                apps = installedApps,
+                onDismiss = { showAppPicker = false },
+                onSelect = { app ->
+                    coroutineScope.launch {
+                        uninstallGuard.protect(app.packageName)
+                        refreshTrigger++
+                    }
+                    showAppPicker = false
+                },
+            )
         }
 
         SectionCard(
@@ -338,29 +355,13 @@ class MainActivity : ComponentActivity() {
             subtitle = "These apps can't be uninstalled while Device Owner is active, even " +
                 "from Settings → Apps.",
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                OutlinedTextField(
-                    value = newProtectedPackageName,
-                    onValueChange = { newProtectedPackageName = it },
-                    label = { Text("Package name") },
-                    singleLine = true,
-                    modifier = Modifier.weight(1f),
-                )
-                Button(onClick = {
-                    val packageName = newProtectedPackageName.trim()
-                    if (packageName.isNotEmpty()) {
-                        coroutineScope.launch {
-                            uninstallGuard.protect(packageName)
-                            newProtectedPackageName = ""
-                            refreshTrigger++
-                        }
-                    }
-                }) {
-                    Text("Protect")
+            Button(onClick = {
+                coroutineScope.launch {
+                    installedApps = withContext(Dispatchers.IO) { loadInstalledApps(applicationContext) }
+                    showAppPicker = true
                 }
+            }) {
+                Text("Choose app to protect")
             }
             if (protectedApps.isEmpty()) {
                 Text("No apps protected yet.", style = MaterialTheme.typography.bodySmall)
@@ -394,7 +395,8 @@ class MainActivity : ComponentActivity() {
 
         var refreshTrigger by remember { mutableIntStateOf(0) }
         var blockedApps by remember { mutableStateOf<List<BlockedApp>>(emptyList()) }
-        var newPackageName by remember { mutableStateOf("") }
+        var installedApps by remember { mutableStateOf<List<InstalledAppInfo>>(emptyList()) }
+        var showAppPicker by remember { mutableStateOf(false) }
         var dnsStatus by remember { mutableStateOf("Checking…") }
 
         LaunchedEffect(refreshTrigger) {
@@ -406,6 +408,20 @@ class MainActivity : ComponentActivity() {
                     ?.let { "Active: $it" }
                     ?: "Not set"
             }
+        }
+
+        if (showAppPicker) {
+            AppPickerDialog(
+                apps = installedApps,
+                onDismiss = { showAppPicker = false },
+                onSelect = { app ->
+                    coroutineScope.launch {
+                        suspensionManager.setBlocked(app.packageName, true)
+                        refreshTrigger++
+                    }
+                    showAppPicker = false
+                },
+            )
         }
 
         SectionCard(title = "Content Filtering", icon = Icons.Default.FilterAlt) {
@@ -437,29 +453,13 @@ class MainActivity : ComponentActivity() {
             HorizontalDivider()
 
             Text("Blocked apps", style = MaterialTheme.typography.bodyLarge)
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                OutlinedTextField(
-                    value = newPackageName,
-                    onValueChange = { newPackageName = it },
-                    label = { Text("Package name") },
-                    singleLine = true,
-                    modifier = Modifier.weight(1f),
-                )
-                Button(onClick = {
-                    val packageName = newPackageName.trim()
-                    if (packageName.isNotEmpty()) {
-                        coroutineScope.launch {
-                            suspensionManager.setBlocked(packageName, true)
-                            newPackageName = ""
-                            refreshTrigger++
-                        }
-                    }
-                }) {
-                    Text("Block")
+            Button(onClick = {
+                coroutineScope.launch {
+                    installedApps = withContext(Dispatchers.IO) { loadInstalledApps(applicationContext) }
+                    showAppPicker = true
                 }
+            }) {
+                Text("Choose app to block")
             }
 
             blockedApps.forEach { app ->
