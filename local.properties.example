@@ -1,0 +1,5 @@
+# Copy to local.properties and keep the real key out of source control.
+KNOX_LICENSE_KEY=your-development-key
+
+# Android Studio normally writes this automatically.
+# sdk.dir=/Users/your-name/Library/Android/sdk

@@ -1,0 +1,10 @@
+*.iml
+.gradle/
+.idea/
+.kotlin/
+build/
+captures/
+local.properties
+app/build/
+app/libs/*.jar
+!app/libs/README.md
