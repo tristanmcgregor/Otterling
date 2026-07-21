@@ -12,8 +12,8 @@ enum ConsoleUser {
         process.standardOutput = pipe
         process.standardError = FileHandle.nullDevice
         guard (try? process.run()) != nil else { return nil }
-        process.waitUntilExit()
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
         guard let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
               let uid = UInt32(output) else { return nil }
         return uid_t(uid)

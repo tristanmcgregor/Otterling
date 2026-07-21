@@ -31,18 +31,19 @@ enum AppProtector {
         process.standardOutput = pipe
         process.standardError = FileHandle.nullDevice
         guard (try? process.run()) != nil else { return false }
-        process.waitUntilExit()
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
         let flags = String(data: data, encoding: .utf8) ?? ""
         return flags.contains("schg")
     }
 
     /// Relaunches the app in the console user's GUI session (not root's) if it isn't currently
-    /// running. Returns true if a relaunch was triggered.
+    /// running (per `runningExecutables`, from `CommandLineScanner`, computed once per
+    /// enforcement tick and shared across all protected apps). Returns true if a relaunch was
+    /// triggered.
     @discardableResult
-    static func relaunchIfNeeded(_ app: ProtectedApp) -> Bool {
-        let isRunning = ProcessScanner.listRunningProcesses().contains { $0.executableName == app.executableName }
-        guard !isRunning else { return false }
+    static func relaunchIfNeeded(_ app: ProtectedApp, runningExecutables: Set<String>) -> Bool {
+        guard !runningExecutables.contains(app.executableName.lowercased()) else { return false }
         guard let uid = ConsoleUser.currentUID() else {
             log("relaunch skipped for \(app.displayName): could not determine console user")
             return false
@@ -70,8 +71,8 @@ enum AppProtector {
         } catch {
             return (-1, "\(error)")
         }
-        process.waitUntilExit()
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
         let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return (process.terminationStatus, output)
     }

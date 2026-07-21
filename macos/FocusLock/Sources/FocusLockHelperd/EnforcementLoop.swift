@@ -59,19 +59,22 @@ final class EnforcementLoop {
                 )
             }
 
-            for app in state.protectedApps {
-                if !AppProtector.isLocked(bundlePath: app.bundlePath) {
-                    AppProtector.lock(bundlePath: app.bundlePath)
-                }
+            if !state.protectedApps.isEmpty {
+                let runningExecutables = CommandLineScanner.runningExecutableBasenames()
+                for app in state.protectedApps {
+                    if !AppProtector.isLocked(bundlePath: app.bundlePath) {
+                        AppProtector.lock(bundlePath: app.bundlePath)
+                    }
 
-                if let last = self.lastRelaunchAttempt[app.executableName], Date().timeIntervalSince(last) < self.relaunchCooldown {
-                    continue
-                }
-                if AppProtector.relaunchIfNeeded(app) {
-                    self.lastRelaunchAttempt[app.executableName] = Date()
-                    FileHandle.standardError.write(
-                        "[enforcement] relaunched protected app: \(app.displayName)\n".data(using: .utf8)!
-                    )
+                    if let last = self.lastRelaunchAttempt[app.executableName], Date().timeIntervalSince(last) < self.relaunchCooldown {
+                        continue
+                    }
+                    if AppProtector.relaunchIfNeeded(app, runningExecutables: runningExecutables) {
+                        self.lastRelaunchAttempt[app.executableName] = Date()
+                        FileHandle.standardError.write(
+                            "[enforcement] relaunched protected app: \(app.displayName)\n".data(using: .utf8)!
+                        )
+                    }
                 }
             }
         }
