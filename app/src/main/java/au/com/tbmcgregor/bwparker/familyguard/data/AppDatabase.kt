@@ -10,26 +10,21 @@ import au.com.tbmcgregor.bwparker.familyguard.monitoring.AppUsageSession
 import au.com.tbmcgregor.bwparker.familyguard.monitoring.AppUsageSessionDao
 import au.com.tbmcgregor.bwparker.familyguard.monitoring.AppUsageStat
 import au.com.tbmcgregor.bwparker.familyguard.monitoring.AppUsageStatDao
-import au.com.tbmcgregor.bwparker.familyguard.schedule.ScheduleRule
-import au.com.tbmcgregor.bwparker.familyguard.schedule.ScheduleRuleDao
 import au.com.tbmcgregor.bwparker.familyguard.tamper.TamperEvent
 import au.com.tbmcgregor.bwparker.familyguard.tamper.TamperEventDao
 
 @Database(
     entities = [
         BlockedApp::class,
-        ScheduleRule::class,
         AppUsageStat::class,
         AppUsageSession::class,
         TamperEvent::class,
     ],
-    version = 5,
+    version = 6,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun blockedAppDao(): BlockedAppDao
-
-    abstract fun scheduleRuleDao(): ScheduleRuleDao
 
     abstract fun appUsageStatDao(): AppUsageStatDao
 
@@ -53,6 +48,7 @@ abstract class AppDatabase : RoomDatabase() {
                         MIGRATION_2_3,
                         MIGRATION_3_4,
                         MIGRATION_4_5,
+                        MIGRATION_5_6,
                     )
                     .build()
                     .also { instance = it }
@@ -118,6 +114,13 @@ abstract class AppDatabase : RoomDatabase() {
                     )
                     """.trimIndent(),
                 )
+            }
+        }
+
+        // Scheduled access windows feature was removed; drop the now-unused table.
+        private val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("DROP TABLE IF EXISTS schedule_rules")
             }
         }
     }

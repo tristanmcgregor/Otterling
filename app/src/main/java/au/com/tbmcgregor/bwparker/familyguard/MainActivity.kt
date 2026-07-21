@@ -50,9 +50,6 @@ import au.com.tbmcgregor.bwparker.familyguard.pin.PinAuthManager
 import au.com.tbmcgregor.bwparker.familyguard.reporting.DailySummaryWorker
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.DeviceRestrictionsManager
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.Restriction
-import au.com.tbmcgregor.bwparker.familyguard.schedule.ScheduleEnforcementWorker
-import au.com.tbmcgregor.bwparker.familyguard.schedule.ScheduleEngine
-import au.com.tbmcgregor.bwparker.familyguard.schedule.ScheduleRule
 import au.com.tbmcgregor.bwparker.familyguard.tamper.TamperEvent
 import au.com.tbmcgregor.bwparker.familyguard.tamper.TamperEventLogger
 import au.com.tbmcgregor.bwparker.familyguard.ui.PinLockScreen
@@ -72,7 +69,6 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         requestNotificationPermissionIfNeeded()
-        ScheduleEnforcementWorker.enqueuePeriodic(applicationContext)
         DailySummaryWorker.enqueuePeriodic(applicationContext)
         UsageTrackingService.start(applicationContext)
         setContent {
@@ -100,8 +96,6 @@ class MainActivity : ComponentActivity() {
                             RestrictionsSection()
                             HorizontalDivider()
                             ContentFilterSection()
-                            HorizontalDivider()
-                            ScheduleSection()
                             HorizontalDivider()
                             UsageSection()
                             HorizontalDivider()
@@ -417,185 +411,6 @@ class MainActivity : ComponentActivity() {
         PrivateDnsFilterManager.Result.Success -> "Applied"
         PrivateDnsFilterManager.Result.UnsupportedApiLevel -> "Requires Android 10+"
         is PrivateDnsFilterManager.Result.Failed -> "Failed: ${result.message}"
-    }
-
-    private fun parseTimeToMinutes(text: String): Int? {
-        val parts = text.trim().split(":")
-        if (parts.size != 2) return null
-        val hour = parts[0].toIntOrNull() ?: return null
-        val minute = parts[1].toIntOrNull() ?: return null
-        if (hour !in 0..23 || minute !in 0..59) return null
-        return hour * 60 + minute
-    }
-
-    private fun formatTime(minuteOfDay: Int): String =
-        "%02d:%02d".format(minuteOfDay / 60, minuteOfDay % 60)
-
-    private fun formatDaysMask(mask: Int): String =
-        if (mask == ScheduleRule.ALL_DAYS_MASK) {
-            "Every day"
-        } else {
-            DAY_LABELS.filterIndexed { index, _ -> (mask and (1 shl index)) != 0 }
-                .joinToString(",")
-                .ifEmpty { "No days" }
-        }
-
-    private companion object {
-        val DAY_LABELS = listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
-    }
-
-    @Composable
-    private fun ScheduleSection() {
-        val coroutineScope = rememberCoroutineScope()
-        val scheduleEngine = remember { ScheduleEngine(applicationContext) }
-
-        var refreshTrigger by remember { mutableIntStateOf(0) }
-        var rules by remember { mutableStateOf<List<ScheduleRule>>(emptyList()) }
-        var label by remember { mutableStateOf("") }
-        var packageNames by remember { mutableStateOf("") }
-        var startTime by remember { mutableStateOf("21:00") }
-        var endTime by remember { mutableStateOf("07:00") }
-        var daysMask by remember { mutableIntStateOf(ScheduleRule.ALL_DAYS_MASK) }
-        var statusMessage by remember { mutableStateOf("") }
-
-        LaunchedEffect(refreshTrigger) {
-            rules = scheduleEngine.rules()
-        }
-
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Phase 4 — Scheduled access windows", style = MaterialTheme.typography.titleMedium)
-            Text(
-                "Allows the listed packages only during the window below. Outside it they are blocked. " +
-                    "Re-checked every 15 minutes by WorkManager; tap \"Apply now\" to test immediately.",
-                style = MaterialTheme.typography.bodySmall,
-            )
-
-            OutlinedTextField(
-                value = label,
-                onValueChange = { label = it },
-                label = { Text("Rule name (e.g. Bedtime)") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            OutlinedTextField(
-                value = packageNames,
-                onValueChange = { packageNames = it },
-                label = { Text("Package names, comma-separated") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(
-                    value = startTime,
-                    onValueChange = { startTime = it },
-                    label = { Text("Start (HH:mm)") },
-                    singleLine = true,
-                    modifier = Modifier.weight(1f),
-                )
-                OutlinedTextField(
-                    value = endTime,
-                    onValueChange = { endTime = it },
-                    label = { Text("End (HH:mm)") },
-                    singleLine = true,
-                    modifier = Modifier.weight(1f),
-                )
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                DAY_LABELS.forEachIndexed { index, dayLabel ->
-                    val bit = 1 shl index
-                    val selected = (daysMask and bit) != 0
-                    FilterChipLike(
-                        text = dayLabel,
-                        selected = selected,
-                        onClick = { daysMask = daysMask xor bit },
-                    )
-                }
-            }
-
-            if (statusMessage.isNotEmpty()) {
-                Text(statusMessage, style = MaterialTheme.typography.bodySmall)
-            }
-
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = {
-                    val start = parseTimeToMinutes(startTime)
-                    val end = parseTimeToMinutes(endTime)
-                    if (label.isBlank() || packageNames.isBlank() || start == null || end == null) {
-                        statusMessage = "Fill in name, packages, and valid HH:mm times"
-                    } else {
-                        coroutineScope.launch {
-                            scheduleEngine.upsert(
-                                ScheduleRule(
-                                    label = label,
-                                    daysOfWeekMask = daysMask,
-                                    startMinuteOfDay = start,
-                                    endMinuteOfDay = end,
-                                    packageNames = packageNames,
-                                ),
-                            )
-                            label = ""
-                            packageNames = ""
-                            statusMessage = "Added"
-                            refreshTrigger++
-                        }
-                    }
-                }) {
-                    Text("Add rule")
-                }
-                OutlinedButton(onClick = {
-                    coroutineScope.launch {
-                        withContext(Dispatchers.IO) { scheduleEngine.applyNow() }
-                        statusMessage = "Applied now"
-                        refreshTrigger++
-                    }
-                }) {
-                    Text("Apply now")
-                }
-            }
-
-            rules.forEach { rule ->
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(rule.label)
-                        Text(
-                            "${formatTime(rule.startMinuteOfDay)}–${formatTime(rule.endMinuteOfDay)} · " +
-                                formatDaysMask(rule.daysOfWeekMask) + " · " + rule.packageNames,
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                    }
-                    Switch(
-                        checked = rule.enabled,
-                        onCheckedChange = { enabled ->
-                            coroutineScope.launch {
-                                scheduleEngine.upsert(rule.copy(enabled = enabled))
-                                withContext(Dispatchers.IO) { scheduleEngine.applyNow() }
-                                refreshTrigger++
-                            }
-                        },
-                    )
-                    TextButton(onClick = {
-                        coroutineScope.launch {
-                            scheduleEngine.delete(rule.id)
-                            refreshTrigger++
-                        }
-                    }) {
-                        Text("Delete")
-                    }
-                }
-            }
-        }
-    }
-
-    @Composable
-    private fun FilterChipLike(text: String, selected: Boolean, onClick: () -> Unit) {
-        val label = if (selected) "[$text]" else text
-        TextButton(onClick = onClick) {
-            Text(label)
-        }
     }
 
     @Composable

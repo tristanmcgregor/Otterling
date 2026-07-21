@@ -38,14 +38,6 @@ class AppSuspensionManager(private val context: Context) {
         dao.getAll().forEach { applyToSystem(it.packageName, it.blocked) }
     }
 
-    /**
-     * Suspends/unsuspends a package without touching the persisted manual block list --
-     * used by [au.com.tbmcgregor.bwparker.familyguard.schedule.ScheduleEngine] for time-window
-     * enforcement, which is layered independently of the permanent block list.
-     */
-    fun applyTemporarySuspension(packageName: String, suspended: Boolean): Boolean =
-        applyToSystem(packageName, suspended)
-
     private fun applyToSystem(packageName: String, blocked: Boolean): Boolean {
         val dpm = devicePolicyManager ?: return false
         return try {

@@ -8,7 +8,6 @@ import au.com.tbmcgregor.bwparker.familyguard.R
 import au.com.tbmcgregor.bwparker.familyguard.monitoring.UsageTrackingService
 import au.com.tbmcgregor.bwparker.familyguard.reporting.DailySummaryWorker
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.DeviceRestrictionsManager
-import au.com.tbmcgregor.bwparker.familyguard.schedule.ScheduleEnforcementWorker
 import au.com.tbmcgregor.bwparker.familyguard.tamper.TamperEventLogger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -19,7 +18,6 @@ class DeviceAdminReceiverImpl : DeviceAdminReceiver() {
         super.onEnabled(context, intent)
         Log.i(TAG, "Device admin enabled")
         DeviceRestrictionsManager(context).applyDefaults()
-        ScheduleEnforcementWorker.enqueuePeriodic(context)
         DailySummaryWorker.enqueuePeriodic(context)
         UsageTrackingService.start(context)
     }

@@ -79,17 +79,10 @@ section:
 - **Blocked apps**: enter a package name (e.g. `com.facebook.katana`) and tap
   **Block** to suspend it via `setPackagesSuspended`. Toggle or remove
   entries from the list below. The list is persisted in a local Room database
-  so it can be re-applied after a reboot in a later phase.
-- **Scheduled access windows** (the "Phase 4 — Scheduled access windows"
-  section): define a rule name, comma-separated package names, a start/end
-  time (`HH:mm`, can wrap past midnight for bedtime), and which days it
-  applies to, then tap **Add rule**. A `WorkManager` periodic job
-  (`ScheduleEnforcementWorker`) re-evaluates every 15 minutes — WorkManager's
-  minimum interval — and blocks listed packages outside their allowed windows.
-  Tap **Apply now** to force an immediate re-check instead of waiting for the
-  next tick. This layers independently of the permanent block list above: a
-  package stays suspended if it's permanently blocked, even outside any
-  schedule window.
+  so it can be re-applied after a reboot.
+
+Note: Scheduled access windows (time-based allow/block rules) were removed —
+not needed for this app.
 
 ## Phase 5 — Usage logging & reporting
 
