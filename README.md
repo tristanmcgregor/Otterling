@@ -57,13 +57,15 @@ license required:
   Recent tamper events appear in Settings and the daily summary includes the
   day's tamper-event count.
 
-**Known gap to verify physically**: Samsung's bootloader-level recovery menu
-(power + volume-up before Android loads) may not be fully covered by the
-stock `DISALLOW_FACTORY_RESET` restriction — some MDM vendors say this
-specific path needs Knox on Samsung hardware. Test both the Safe Mode key
-combo (volume-down during boot) and the recovery-menu factory reset on the
-real device; if the latter isn't blocked, Knox's `RestrictionPolicy` can
-reinforce it once the license arrives.
+**Physical Samsung test results**:
+
+- Safe Mode hardware-key boot: **blocked successfully** while Family Device
+  Guard was Device Owner.
+- Bootloader recovery-menu factory reset (power + volume-up): **not yet
+  tested** because this path is destructive. Some MDM vendors report that this
+  Samsung-specific path may need Knox `RestrictionPolicy`; test it on a
+  disposable/factory-reset-ready device before relying on stock
+  `DISALLOW_FACTORY_RESET` alone.
 
 ## Phase 4 — Content filtering
 
