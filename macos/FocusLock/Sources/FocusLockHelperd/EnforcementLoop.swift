@@ -5,9 +5,8 @@ import FocusLockShared
 /// site/content blocking. Runs independently of XPC calls so a reboot or a killed GUI app
 /// doesn't lift anything -- this loop reads persisted state straight off disk via `stateStore`.
 ///
-/// Blocking only takes effect while a session is active (`state.isSessionActive`); the
-/// blockedApps/blockedDomains lists persist across sessions so they don't need re-entering, but
-/// nothing is enforced until a session is started.
+/// Blocking is unconditional: anything in blockedApps/blockedDomains is enforced 24/7 as soon as
+/// it's added, with no session/timer to wait out. It only stops once the Guardian removes it.
 final class EnforcementLoop {
     static let shared = EnforcementLoop()
 
@@ -35,7 +34,7 @@ final class EnforcementLoop {
             guard let self, let stateStore = self.stateStore else { return }
             let state = stateStore.snapshot()
 
-            let domainsToBlock = state.isSessionActive ? state.blockedDomains : []
+            let domainsToBlock = state.blockedDomains
             if domainsToBlock != self.lastAppliedDomains {
                 HostsFileBlocker.apply(domains: domainsToBlock)
                 self.lastAppliedDomains = domainsToBlock
@@ -46,8 +45,6 @@ final class EnforcementLoop {
                 PFBlocker.apply(active: siteBlockActive)
                 self.lastAppliedSiteBlockActive = siteBlockActive
             }
-
-            guard state.isSessionActive else { return }
 
             let killed = AppBlockEnforcer.enforce(blockedApps: state.blockedApps)
             if !killed.isEmpty {

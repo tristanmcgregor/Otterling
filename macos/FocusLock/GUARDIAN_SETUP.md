@@ -36,21 +36,23 @@ account is your own, undermining the split.
 
 ## 4. Verify the split actually works
 
-From your (now Standard) account, run:
+From your (now Standard) account, add and then try to remove a test domain:
 
 ```
-focuslockctl end-session
+focuslockctl add-domain example.com
+focuslockctl remove-domain example.com
 ```
 
-with an active session -- it should print `DENIED: Only the Guardian admin account can end a
-session early.`. If it instead succeeds, the demotion in step 2 didn't take; recheck Users &
-Groups.
+The remove should print `DENIED: Only the Guardian admin account can remove a blocked domain.`.
+If it instead succeeds, the demotion in step 2 didn't take; recheck Users & Groups. (Clean up the
+test entry once verified: have the Guardian run the remove command themselves.)
 
 ## 5. What this does and doesn't protect against
 
-**Does protect against:** removing a blocked app/domain or ending a session early from your
-normal login, including via the GUI, `focuslockctl`, or a raw XPC call from any code you write --
-the check is on the daemon side against your real uid, not anything the client claims.
+**Does protect against:** removing a blocked app or domain from your normal login, including via
+the GUI, `focuslockctl`, or a raw XPC call from any code you write -- the check is on the daemon
+side against your real uid, not anything the client claims. Blocking itself is unconditional and
+permanent once added: there's no timer to wait out, only removal by the Guardian lifts it.
 
 **Does not protect against**, because no software running under an admin-controlled OS can:
 

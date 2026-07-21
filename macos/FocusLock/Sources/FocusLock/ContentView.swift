@@ -4,13 +4,10 @@ import FocusLockShared
 
 struct ContentView: View {
     @StateObject private var viewModel = FocusLockViewModel()
-    @State private var customHours: String = "1"
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             header
-            Divider()
-            sessionSection
             Divider()
             appsSection
             Divider()
@@ -18,7 +15,7 @@ struct ContentView: View {
             Spacer(minLength: 0)
         }
         .padding(20)
-        .frame(width: 440, height: 620)
+        .frame(width: 440, height: 560)
         .onAppear { viewModel.startPolling() }
         .alert(
             "Action denied",
@@ -33,59 +30,28 @@ struct ContentView: View {
         }
     }
 
+    private var isBlocking: Bool {
+        !viewModel.state.blockedApps.isEmpty || !viewModel.state.blockedDomains.isEmpty
+    }
+
     private var header: some View {
         HStack(spacing: 12) {
             Image(systemName: "lock.shield.fill")
                 .font(.system(size: 28))
-                .foregroundStyle(viewModel.state.isSessionActive ? .red : .green)
+                .foregroundStyle(isBlocking ? .red : .green)
             VStack(alignment: .leading, spacing: 2) {
                 Text("FocusLock").font(.title3).bold()
-                if viewModel.state.isSessionActive {
-                    Text("Blocking active - \(formattedRemaining) left")
+                if isBlocking {
+                    Text("Blocking active - 24/7 until removed by the Guardian")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 } else {
-                    Text("Not blocking")
+                    Text("Nothing blocked")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
             }
             Spacer()
-        }
-    }
-
-    private var formattedRemaining: String {
-        let seconds = Int(viewModel.state.remainingSeconds)
-        let h = seconds / 3600
-        let m = (seconds % 3600) / 60
-        let s = seconds % 60
-        return h > 0 ? String(format: "%dh %02dm", h, m) : String(format: "%dm %02ds", m, s)
-    }
-
-    private var sessionSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Session").font(.headline)
-            HStack {
-                Button("Start 1h") { viewModel.startSession(seconds: 3600) }
-                Button("Start 4h") { viewModel.startSession(seconds: 4 * 3600) }
-                Button("Start 8h") { viewModel.startSession(seconds: 8 * 3600) }
-                Spacer()
-            }
-            HStack {
-                TextField("Hours", text: $customHours)
-                    .frame(width: 50)
-                Button("Start / Extend") {
-                    if let hours = Double(customHours), hours > 0 {
-                        viewModel.startSession(seconds: hours * 3600)
-                    }
-                }
-                Spacer()
-                Button("End Session Early") { viewModel.endSessionEarly() }
-                    .foregroundStyle(.red)
-            }
-            Text("Starting/extending is always allowed. Ending early requires the Guardian admin account.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
         }
     }
 

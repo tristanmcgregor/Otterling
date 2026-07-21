@@ -18,25 +18,17 @@ public struct BlockedApp: Codable, Hashable, Identifiable, Sendable {
 
 /// The full state the daemon owns and persists to a root-owned file. The GUI app only ever
 /// sees a copy of this via `getStatus`; it can never write it directly.
+///
+/// Blocking is unconditional and permanent: anything in `blockedApps`/`blockedDomains` is
+/// enforced 24/7, with no timer or session to wait out. The only way off the list is removal,
+/// which the daemon restricts to the Guardian admin account.
 public struct FocusLockState: Codable, Sendable {
     public var blockedApps: [BlockedApp]
     public var blockedDomains: [String]
-    public var sessionExpiresAt: Date?
 
-    public init(blockedApps: [BlockedApp] = [], blockedDomains: [String] = [], sessionExpiresAt: Date? = nil) {
+    public init(blockedApps: [BlockedApp] = [], blockedDomains: [String] = []) {
         self.blockedApps = blockedApps
         self.blockedDomains = blockedDomains
-        self.sessionExpiresAt = sessionExpiresAt
-    }
-
-    public var isSessionActive: Bool {
-        guard let expiresAt = sessionExpiresAt else { return false }
-        return Date() < expiresAt
-    }
-
-    public var remainingSeconds: TimeInterval {
-        guard let expiresAt = sessionExpiresAt else { return 0 }
-        return max(0, expiresAt.timeIntervalSinceNow)
     }
 }
 

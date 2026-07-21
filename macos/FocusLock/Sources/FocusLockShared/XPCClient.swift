@@ -47,14 +47,6 @@ public final class FocusLockXPCClient {
         }
     }
 
-    public func startOrExtendSession(durationSeconds: Double) async -> FocusLockResult {
-        await withCheckedContinuation { continuation in
-            proxy().startOrExtendSession(durationSeconds: durationSeconds) { data in
-                continuation.resume(returning: FocusLockCodec.decode(FocusLockResult.self, from: data) ?? .denied("Malformed reply"))
-            }
-        }
-    }
-
     public func removeBlockedApp(executableName: String) async -> FocusLockResult {
         await withCheckedContinuation { continuation in
             proxy().removeBlockedApp(executableName: executableName) { data in
@@ -66,14 +58,6 @@ public final class FocusLockXPCClient {
     public func removeBlockedDomain(_ domain: String) async -> FocusLockResult {
         await withCheckedContinuation { continuation in
             proxy().removeBlockedDomain(domain) { data in
-                continuation.resume(returning: FocusLockCodec.decode(FocusLockResult.self, from: data) ?? .denied("Malformed reply"))
-            }
-        }
-    }
-
-    public func endSessionEarly() async -> FocusLockResult {
-        await withCheckedContinuation { continuation in
-            proxy().endSessionEarly { data in
                 continuation.resume(returning: FocusLockCodec.decode(FocusLockResult.self, from: data) ?? .denied("Malformed reply"))
             }
         }

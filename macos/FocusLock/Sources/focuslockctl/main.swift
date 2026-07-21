@@ -9,20 +9,20 @@ func printUsage() {
     print("""
     focuslockctl -- FocusLock command-line control
 
+    Blocking is unconditional and permanent: anything added below is enforced 24/7 until
+    removed. Adding is always allowed; removing requires the Guardian admin account.
+
     Usage:
       focuslockctl status
       focuslockctl add-domain <domain>
       focuslockctl remove-domain <domain>          (Guardian admin account only)
       focuslockctl add-app <displayName> <executableName>
       focuslockctl remove-app <executableName>     (Guardian admin account only)
-      focuslockctl start <hours>
-      focuslockctl end-session                     (Guardian admin account only)
     """)
 }
 
 func formatState(_ state: FocusLockState) -> String {
     var lines: [String] = []
-    lines.append("Session: \(state.isSessionActive ? "ACTIVE (\(Int(state.remainingSeconds))s remaining)" : "inactive")")
     lines.append("Blocked apps (\(state.blockedApps.count)):")
     for app in state.blockedApps {
         lines.append("  - \(app.displayName) [\(app.executableName)]")
@@ -77,13 +77,6 @@ Task {
     case "remove-app":
         guard arguments.count >= 3 else { printUsage(); semaphore.signal(); exit(1) }
         printResult(await client.removeBlockedApp(executableName: arguments[2]))
-
-    case "start":
-        guard arguments.count >= 3, let hours = Double(arguments[2]), hours > 0 else { printUsage(); semaphore.signal(); exit(1) }
-        printResult(await client.startOrExtendSession(durationSeconds: hours * 3600))
-
-    case "end-session":
-        printResult(await client.endSessionEarly())
 
     default:
         printUsage()
