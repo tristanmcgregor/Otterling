@@ -13,6 +13,11 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AdminPanelSettings
+import androidx.compose.material.icons.filled.FilterAlt
+import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.VerifiedUser
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -51,7 +56,10 @@ import au.com.tbmcgregor.bwparker.familyguard.restrictions.RestrictionEnforcemen
 import au.com.tbmcgregor.bwparker.familyguard.tamper.TamperEvent
 import au.com.tbmcgregor.bwparker.familyguard.tamper.TamperEventLogger
 import au.com.tbmcgregor.bwparker.familyguard.ui.PinLockScreen
+import au.com.tbmcgregor.bwparker.familyguard.ui.SectionCard
 import au.com.tbmcgregor.bwparker.familyguard.ui.SettingsScreen
+import au.com.tbmcgregor.bwparker.familyguard.ui.StatusText
+import au.com.tbmcgregor.bwparker.familyguard.ui.SwitchRow
 import java.text.DateFormat
 import java.util.Date
 import kotlinx.coroutines.Dispatchers
@@ -90,13 +98,10 @@ class MainActivity : ComponentActivity() {
                             },
                         ) {
                             DeviceOwnerSection()
-                            HorizontalDivider()
                             RestrictionsSection()
-                            HorizontalDivider()
+                            UninstallProtectionSection()
                             ContentFilterSection()
-                            HorizontalDivider()
                             KnoxSetupSection()
-                            HorizontalDivider()
                         }
                     }
                 }
@@ -195,23 +200,40 @@ class MainActivity : ComponentActivity() {
         var refreshTrigger by remember { mutableIntStateOf(0) }
         val status = remember(refreshTrigger) { ownerManager.currentStatus() }
 
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Phase 2 — Device Admin / Device Owner", style = MaterialTheme.typography.titleMedium)
-            Text("Device admin active: ${status.isDeviceAdminActive}")
-            Text("Device owner: ${status.isDeviceOwner}")
+        SectionCard(title = "Device Owner Setup", icon = Icons.Default.AdminPanelSettings) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text("Device admin", style = MaterialTheme.typography.bodyLarge)
+                StatusText(
+                    if (status.isDeviceAdminActive) "Active" else "Not active",
+                    isGood = status.isDeviceAdminActive,
+                )
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text("Device owner", style = MaterialTheme.typography.bodyLarge)
+                StatusText(
+                    if (status.isDeviceOwner) "Active" else "Not active",
+                    isGood = status.isDeviceOwner,
+                )
+            }
 
             if (!status.isDeviceOwner) {
                 Text(
                     "Run on a factory-reset test device (before adding any Google account):",
                     style = MaterialTheme.typography.bodySmall,
                 )
-                Text(ownerManager.provisioningAdbCommand, fontFamily = FontFamily.Monospace)
+                CodeBlock(ownerManager.provisioningAdbCommand)
             } else {
                 Text(
                     "To rebuild/remove this admin later:",
                     style = MaterialTheme.typography.bodySmall,
                 )
-                Text(ownerManager.removeAdminAdbCommand, fontFamily = FontFamily.Monospace)
+                CodeBlock(ownerManager.removeAdminAdbCommand)
             }
 
             OutlinedButton(onClick = { refreshTrigger++ }) {
@@ -221,62 +243,58 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
+    private fun CodeBlock(text: String) {
+        Surface(
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            shape = MaterialTheme.shapes.small,
+        ) {
+            Text(
+                text,
+                fontFamily = FontFamily.Monospace,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(10.dp),
+            )
+        }
+    }
+
+    @Composable
     private fun RestrictionsSection() {
-        val coroutineScope = rememberCoroutineScope()
         val restrictionsManager = remember { DeviceRestrictionsManager(applicationContext) }
         val tamperLogger = remember { TamperEventLogger(applicationContext) }
-        val uninstallGuard = remember { AppUninstallGuard(applicationContext) }
         var refreshTrigger by remember { mutableIntStateOf(0) }
         var recentEvents by remember { mutableStateOf<List<TamperEvent>>(emptyList()) }
-        var protectedApps by remember { mutableStateOf<List<ProtectedApp>>(emptyList()) }
-        var newProtectedPackageName by remember { mutableStateOf("") }
         val states = remember(refreshTrigger) {
             Restriction.entries.associateWith { restrictionsManager.isEnabled(it) }
         }
         val uninstallBlocked = remember(refreshTrigger) { restrictionsManager.isUninstallBlocked() }
         LaunchedEffect(refreshTrigger) {
             recentEvents = tamperLogger.recent()
-            protectedApps = uninstallGuard.protectedApps()
         }
 
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Phase 3 — Tamper resistance", style = MaterialTheme.typography.titleMedium)
-            Text(
-                "Requires device owner (see above). Samsung's bootloader recovery-menu " +
-                    "factory reset may need Knox on top of this — verify physically.",
-                style = MaterialTheme.typography.bodySmall,
+        SectionCard(
+            title = "Tamper Protection",
+            icon = Icons.Default.Shield,
+            subtitle = "Requires Device Owner (see above). Samsung's bootloader recovery-menu " +
+                "factory reset may need Knox on top of this — verify physically.",
+        ) {
+            SwitchRow(
+                label = "Block app uninstall",
+                checked = uninstallBlocked,
+                onCheckedChange = {
+                    restrictionsManager.setUninstallBlocked(it)
+                    refreshTrigger++
+                },
             )
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text("Block app uninstall")
-                Switch(
-                    checked = uninstallBlocked,
+            states.forEach { (restriction, enabled) ->
+                SwitchRow(
+                    label = restriction.displayName,
+                    checked = enabled,
                     onCheckedChange = {
-                        restrictionsManager.setUninstallBlocked(it)
+                        restrictionsManager.setEnabled(restriction, it)
                         refreshTrigger++
                     },
                 )
-            }
-
-            states.forEach { (restriction, enabled) ->
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(restriction.displayName)
-                    Switch(
-                        checked = enabled,
-                        onCheckedChange = {
-                            restrictionsManager.setEnabled(restriction, it)
-                            refreshTrigger++
-                        },
-                    )
-                }
             }
 
             OutlinedButton(onClick = {
@@ -288,12 +306,38 @@ class MainActivity : ComponentActivity() {
 
             HorizontalDivider()
 
-            Text("Protect apps from uninstall", style = MaterialTheme.typography.bodyMedium)
-            Text(
-                "These apps can't be uninstalled while device owner is active, even from " +
-                    "Settings → Apps.",
-                style = MaterialTheme.typography.bodySmall,
-            )
+            Text("Recent tamper events", style = MaterialTheme.typography.bodyMedium)
+            if (recentEvents.isEmpty()) {
+                Text("No tamper events recorded.", style = MaterialTheme.typography.bodySmall)
+            } else {
+                recentEvents.forEach { event ->
+                    val timestamp = DateFormat.getDateTimeInstance().format(Date(event.timestampMillis))
+                    Text(
+                        "$timestamp — ${event.details}",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+        }
+    }
+
+    @Composable
+    private fun UninstallProtectionSection() {
+        val coroutineScope = rememberCoroutineScope()
+        val uninstallGuard = remember { AppUninstallGuard(applicationContext) }
+        var refreshTrigger by remember { mutableIntStateOf(0) }
+        var protectedApps by remember { mutableStateOf<List<ProtectedApp>>(emptyList()) }
+        var newProtectedPackageName by remember { mutableStateOf("") }
+        LaunchedEffect(refreshTrigger) {
+            protectedApps = uninstallGuard.protectedApps()
+        }
+
+        SectionCard(
+            title = "Protect Apps From Uninstall",
+            icon = Icons.Default.VerifiedUser,
+            subtitle = "These apps can't be uninstalled while Device Owner is active, even " +
+                "from Settings → Apps.",
+        ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -339,19 +383,6 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
-
-            Text("Recent tamper events", style = MaterialTheme.typography.bodyMedium)
-            if (recentEvents.isEmpty()) {
-                Text("No tamper events recorded.", style = MaterialTheme.typography.bodySmall)
-            } else {
-                recentEvents.forEach { event ->
-                    val timestamp = DateFormat.getDateTimeInstance().format(Date(event.timestampMillis))
-                    Text(
-                        "$timestamp — ${event.details}",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
-            }
         }
     }
 
@@ -377,10 +408,8 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Phase 4 — Content filtering", style = MaterialTheme.typography.titleMedium)
-
-            Text("DNS content filter (blocks adult content + Safe Search)")
+        SectionCard(title = "Content Filtering", icon = Icons.Default.FilterAlt) {
+            Text("DNS content filter (blocks adult content + Safe Search)", style = MaterialTheme.typography.bodyLarge)
             Text(dnsStatus, style = MaterialTheme.typography.bodySmall)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = {
@@ -407,7 +436,7 @@ class MainActivity : ComponentActivity() {
 
             HorizontalDivider()
 
-            Text("Blocked apps")
+            Text("Blocked apps", style = MaterialTheme.typography.bodyLarge)
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -495,11 +524,26 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Phase 1 — Knox environment and license", style = MaterialTheme.typography.titleMedium)
-            Text("License manager available: ${availability.licenseManager}")
-            Text("RestrictionPolicy available: ${availability.restrictionPolicy}")
-            Text("Activation: $activationStatus")
+        SectionCard(
+            title = "Knox License (Advanced)",
+            icon = Icons.Default.VerifiedUser,
+            subtitle = "Not required for the features above — reserved for future Knox-backed protections.",
+        ) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("License manager", style = MaterialTheme.typography.bodyLarge)
+                StatusText(
+                    if (availability.licenseManager) "Available" else "Unavailable",
+                    isGood = availability.licenseManager,
+                )
+            }
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text("RestrictionPolicy", style = MaterialTheme.typography.bodyLarge)
+                StatusText(
+                    if (availability.restrictionPolicy) "Available" else "Unavailable",
+                    isGood = availability.restrictionPolicy,
+                )
+            }
+            Text("Activation: $activationStatus", style = MaterialTheme.typography.bodySmall)
             Button(onClick = ::requestActivation) {
                 Text("Activate Knox license")
             }
