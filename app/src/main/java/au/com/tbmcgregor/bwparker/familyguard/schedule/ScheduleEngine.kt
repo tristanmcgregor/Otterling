@@ -19,26 +19,36 @@ class ScheduleEngine(private val context: Context) {
 
     suspend fun upsert(rule: ScheduleRule) = dao.upsert(rule)
 
-    suspend fun delete(id: Long) = dao.delete(id)
+    suspend fun delete(id: Long) {
+        val removedPackages = dao.getById(id)?.packageList.orEmpty()
+        dao.delete(id)
+        val stillScheduled = dao.getAll().flatMapTo(mutableSetOf()) { it.packageList }
+        val permanentlyBlocked = suspensionManager.blockedApps()
+            .filter { it.blocked }
+            .mapTo(mutableSetOf()) { it.packageName }
+        (removedPackages - stillScheduled - permanentlyBlocked).forEach {
+            suspensionManager.applyTemporarySuspension(it, suspended = false)
+        }
+    }
 
     /** Re-evaluates all rules against [now] and applies/releases suspensions. */
     suspend fun applyNow(now: LocalDateTime = LocalDateTime.now()) {
         val rules = dao.getAll()
         val minuteOfDay = now.hour * 60 + now.minute
 
-        val toSuspend = mutableSetOf<String>()
-        val toRelease = mutableSetOf<String>()
-        rules.forEach { rule ->
-            val target = if (rule.isActiveAt(now.dayOfWeek, minuteOfDay)) toSuspend else toRelease
-            target += rule.packageList
-        }
+        val allScheduledPackages = rules.flatMapTo(mutableSetOf()) { it.packageList }
+        val enabledPackages = rules.filter { it.enabled }.flatMapTo(mutableSetOf()) { it.packageList }
+        val currentlyAllowed = rules
+            .filter { it.isActiveAt(now.dayOfWeek, minuteOfDay) }
+            .flatMapTo(mutableSetOf()) { it.packageList }
+        val toSuspend = enabledPackages - currentlyAllowed
+        val toRelease = (allScheduledPackages - toSuspend).toMutableSet()
 
         val permanentlyBlocked = suspensionManager.blockedApps()
             .filter { it.blocked }
             .map { it.packageName }
             .toSet()
         toRelease -= permanentlyBlocked
-        toRelease -= toSuspend
 
         toSuspend.forEach { suspensionManager.applyTemporarySuspension(it, suspended = true) }
         toRelease.forEach { suspensionManager.applyTemporarySuspension(it, suspended = false) }

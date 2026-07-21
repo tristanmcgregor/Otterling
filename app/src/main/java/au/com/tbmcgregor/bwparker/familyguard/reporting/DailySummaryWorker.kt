@@ -12,6 +12,9 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import au.com.tbmcgregor.bwparker.familyguard.monitoring.AppUsageStat
 import au.com.tbmcgregor.bwparker.familyguard.monitoring.UsageStatsCollector
+import au.com.tbmcgregor.bwparker.familyguard.tamper.TamperEventLogger
+import java.time.LocalDate
+import java.time.ZoneId
 import java.util.concurrent.TimeUnit
 
 /**
@@ -25,23 +28,27 @@ class DailySummaryWorker(context: Context, params: WorkerParameters) :
         val collector = UsageStatsCollector(applicationContext)
         collector.collectToday()
         val topApps = collector.today().sortedByDescending { it.totalForegroundMillis }.take(5)
-        postNotification(topApps)
+        val zone = ZoneId.systemDefault()
+        val startOfDay = LocalDate.now(zone).atStartOfDay(zone).toInstant().toEpochMilli()
+        val tamperEvents = TamperEventLogger(applicationContext).since(startOfDay)
+        postNotification(topApps, tamperEvents.size)
         Result.success()
     } catch (error: Exception) {
         Result.retry()
     }
 
-    private fun postNotification(topApps: List<AppUsageStat>) {
+    private fun postNotification(topApps: List<AppUsageStat>, tamperEventCount: Int) {
         val manager = applicationContext.getSystemService(NotificationManager::class.java) ?: return
         manager.createNotificationChannel(
             NotificationChannel(CHANNEL_ID, "Daily usage summary", NotificationManager.IMPORTANCE_DEFAULT),
         )
 
-        val body = if (topApps.isEmpty()) {
+        val usageBody = if (topApps.isEmpty()) {
             "No app usage recorded today."
         } else {
             topApps.joinToString("\n") { "${it.packageName}: ${formatDuration(it.totalForegroundMillis)}" }
         }
+        val body = "$usageBody\nTamper events: $tamperEventCount"
 
         val notification = Notification.Builder(applicationContext, CHANNEL_ID)
             .setContentTitle("Today's screen time summary")

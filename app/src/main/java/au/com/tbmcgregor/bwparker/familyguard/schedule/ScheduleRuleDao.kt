@@ -13,6 +13,9 @@ interface ScheduleRuleDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(rule: ScheduleRule): Long
 
+    @Query("SELECT * FROM schedule_rules WHERE id = :id")
+    suspend fun getById(id: Long): ScheduleRule?
+
     @Query("DELETE FROM schedule_rules WHERE id = :id")
     suspend fun delete(id: Long)
 }

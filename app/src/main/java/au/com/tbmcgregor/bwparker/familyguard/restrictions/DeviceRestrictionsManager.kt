@@ -5,6 +5,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.util.Log
 import au.com.tbmcgregor.bwparker.familyguard.admin.DeviceAdminReceiverImpl
+import au.com.tbmcgregor.bwparker.familyguard.tamper.TamperEventLogger
 
 class DeviceRestrictionsManager(private val context: Context) {
     private val devicePolicyManager: DevicePolicyManager? =
@@ -46,6 +47,18 @@ class DeviceRestrictionsManager(private val context: Context) {
         Restriction.entries.forEach { setEnabled(it, true) }
         setUninstallBlocked(true)
         Log.i(TAG, "Applied default tamper-resistance restrictions")
+    }
+
+    suspend fun detectDriftAndReapply(logger: TamperEventLogger) {
+        val missing = Restriction.entries.filterNot(::isEnabled).map { it.displayName }.toMutableList()
+        if (!isUninstallBlocked()) missing += "Block app uninstall"
+        if (missing.isEmpty()) return
+
+        logger.log(
+            type = "RESTRICTION_DRIFT",
+            details = "Protection disabled or missing: ${missing.joinToString()}",
+        )
+        applyDefaults()
     }
 
     private companion object {

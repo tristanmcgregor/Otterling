@@ -9,6 +9,7 @@ import android.content.Intent
 import android.os.IBinder
 import android.util.Log
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.DeviceRestrictionsManager
+import au.com.tbmcgregor.bwparker.familyguard.tamper.TamperEventLogger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -35,11 +36,12 @@ class UsageTrackingService : Service() {
         if (loopJob == null) {
             val collector = UsageStatsCollector(applicationContext)
             val restrictionsManager = DeviceRestrictionsManager(applicationContext)
+            val tamperLogger = TamperEventLogger(applicationContext)
             loopJob = scope.launch {
                 while (isActive) {
                     runCatching { collector.collectToday() }
                         .onFailure { Log.w(TAG, "Usage stats poll failed", it) }
-                    runCatching { restrictionsManager.applyDefaults() }
+                    runCatching { restrictionsManager.detectDriftAndReapply(tamperLogger) }
                         .onFailure { Log.w(TAG, "Restriction drift check failed", it) }
                     delay(POLL_INTERVAL_MS)
                 }

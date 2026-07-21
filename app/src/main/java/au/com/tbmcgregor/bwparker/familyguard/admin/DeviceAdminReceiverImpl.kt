@@ -9,6 +9,10 @@ import au.com.tbmcgregor.bwparker.familyguard.monitoring.UsageTrackingService
 import au.com.tbmcgregor.bwparker.familyguard.reporting.DailySummaryWorker
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.DeviceRestrictionsManager
 import au.com.tbmcgregor.bwparker.familyguard.schedule.ScheduleEnforcementWorker
+import au.com.tbmcgregor.bwparker.familyguard.tamper.TamperEventLogger
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 class DeviceAdminReceiverImpl : DeviceAdminReceiver() {
     override fun onEnabled(context: Context, intent: Intent) {
@@ -27,6 +31,17 @@ class DeviceAdminReceiverImpl : DeviceAdminReceiver() {
 
     override fun onDisableRequested(context: Context, intent: Intent): CharSequence {
         Log.w(TAG, "Device admin disable requested")
+        val pendingResult = goAsync()
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                TamperEventLogger(context).log(
+                    type = "ADMIN_DISABLE_REQUESTED",
+                    details = "A user attempted to disable Device Admin",
+                )
+            } finally {
+                pendingResult.finish()
+            }
+        }
         return context.getString(R.string.device_admin_disable_warning)
     }
 

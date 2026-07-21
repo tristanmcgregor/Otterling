@@ -65,9 +65,12 @@ dependencies {
     implementation("androidx.compose.ui:ui-tooling-preview")
 
     implementation("androidx.room:room-runtime:2.8.4")
+    implementation("androidx.room:room-ktx:2.8.4")
     ksp("androidx.room:room-compiler:2.8.4")
 
     implementation("androidx.work:work-runtime:2.11.2")
+    implementation("androidx.work:work-runtime-ktx:2.11.2")
+    implementation("androidx.security:security-crypto:1.1.0")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

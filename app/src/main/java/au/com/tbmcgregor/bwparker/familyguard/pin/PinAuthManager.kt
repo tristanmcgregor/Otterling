@@ -1,20 +1,30 @@
+@file:Suppress("DEPRECATION")
+
 package au.com.tbmcgregor.bwparker.familyguard.pin
 
 import android.content.Context
 import android.util.Base64
+import androidx.security.crypto.EncryptedSharedPreferences
+import androidx.security.crypto.MasterKey
 import java.security.SecureRandom
 import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.PBEKeySpec
 
 /**
- * Gates the Settings screen behind a PIN. Stores a salted PBKDF2 hash in plain
- * [android.content.SharedPreferences] rather than `androidx.security:security-crypto` --
- * EncryptedSharedPreferences is on its way out (keyset-corruption crashes on some OEMs, and
- * Google itself now steers away from it) and isn't needed here anyway: only a one-way hash is
- * stored, never the PIN itself, so there's nothing reversible to protect at rest.
+ * Gates the Settings screen behind a PIN. Only a salted PBKDF2 hash is retained, inside
+ * [EncryptedSharedPreferences]; the PIN itself is never stored.
  */
 class PinAuthManager(context: Context) {
-    private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    private val masterKey = MasterKey.Builder(context)
+        .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+        .build()
+    private val prefs = EncryptedSharedPreferences.create(
+        context,
+        PREFS_NAME,
+        masterKey,
+        EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
+    )
 
     fun hasPin(): Boolean = prefs.contains(KEY_HASH)
 

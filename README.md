@@ -53,6 +53,9 @@ license required:
 - Block Safe Mode boot, factory reset, USB debugging, guest mode/additional
   users (`UserManager` restrictions).
 - Block app uninstall (`setUninstallBlocked`).
+- Record Device Admin disable attempts and periodic restriction drift in Room.
+  Recent tamper events appear in Settings and the daily summary includes the
+  day's tamper-event count.
 
 **Known gap to verify physically**: Samsung's bootloader-level recovery menu
 (power + volume-up before Android loads) may not be fully covered by the
@@ -80,7 +83,7 @@ section:
   time (`HH:mm`, can wrap past midnight for bedtime), and which days it
   applies to, then tap **Add rule**. A `WorkManager` periodic job
   (`ScheduleEnforcementWorker`) re-evaluates every 15 minutes — WorkManager's
-  minimum interval — and suspends/releases the listed packages accordingly.
+  minimum interval — and blocks listed packages outside their allowed windows.
   Tap **Apply now** to force an immediate re-check instead of waiting for the
   next tick. This layers independently of the permanent block list above: a
   package stays suspended if it's permanently blocked, even outside any
@@ -125,10 +128,7 @@ The home screen is now a minimal status view (Device Owner state + an
   immediately prompts you to set a new one.
 
 The PIN itself is never stored — only a salted PBKDF2 (120k iterations,
-SHA-256) hash, in plain `SharedPreferences`. `androidx.security:security-crypto`
-(`EncryptedSharedPreferences`) was deliberately skipped: it's being phased out
-upstream (keyset-corruption crashes on some OEMs) and buys nothing here since
-only a one-way hash is stored, never anything reversible.
+SHA-256) hash, protected by `EncryptedSharedPreferences`.
 
 ## Secret handling
 

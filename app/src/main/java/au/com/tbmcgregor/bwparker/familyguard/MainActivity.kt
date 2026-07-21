@@ -13,10 +13,9 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -52,7 +51,12 @@ import au.com.tbmcgregor.bwparker.familyguard.restrictions.Restriction
 import au.com.tbmcgregor.bwparker.familyguard.schedule.ScheduleEnforcementWorker
 import au.com.tbmcgregor.bwparker.familyguard.schedule.ScheduleEngine
 import au.com.tbmcgregor.bwparker.familyguard.schedule.ScheduleRule
+import au.com.tbmcgregor.bwparker.familyguard.tamper.TamperEvent
+import au.com.tbmcgregor.bwparker.familyguard.tamper.TamperEventLogger
 import au.com.tbmcgregor.bwparker.familyguard.ui.PinLockScreen
+import au.com.tbmcgregor.bwparker.familyguard.ui.SettingsScreen
+import java.text.DateFormat
+import java.util.Date
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -88,7 +92,20 @@ class MainActivity : ComponentActivity() {
                                 pinAuthManager.clearPin()
                                 screen = Screen.PinEntry
                             },
-                        )
+                        ) {
+                            DeviceOwnerSection()
+                            HorizontalDivider()
+                            RestrictionsSection()
+                            HorizontalDivider()
+                            ContentFilterSection()
+                            HorizontalDivider()
+                            ScheduleSection()
+                            HorizontalDivider()
+                            UsageSection()
+                            HorizontalDivider()
+                            KnoxSetupSection()
+                            HorizontalDivider()
+                        }
                     }
                 }
             }
@@ -119,41 +136,6 @@ class MainActivity : ComponentActivity() {
             )
             Button(onClick = onOpenSettings) {
                 Text("Open Settings")
-            }
-        }
-    }
-
-    @Composable
-    private fun SettingsScreen(onBack: () -> Unit, onChangePin: () -> Unit) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .padding(24.dp),
-            verticalArrangement = Arrangement.spacedBy(24.dp),
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text("Settings", style = MaterialTheme.typography.headlineMedium)
-                TextButton(onClick = onBack) { Text("Back") }
-            }
-            DeviceOwnerSection()
-            HorizontalDivider()
-            RestrictionsSection()
-            HorizontalDivider()
-            ContentFilterSection()
-            HorizontalDivider()
-            ScheduleSection()
-            HorizontalDivider()
-            UsageSection()
-            HorizontalDivider()
-            KnoxSetupSection()
-            HorizontalDivider()
-            OutlinedButton(onClick = onChangePin) {
-                Text("Change PIN")
             }
         }
     }
@@ -201,11 +183,16 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun RestrictionsSection() {
         val restrictionsManager = remember { DeviceRestrictionsManager(applicationContext) }
+        val tamperLogger = remember { TamperEventLogger(applicationContext) }
         var refreshTrigger by remember { mutableIntStateOf(0) }
+        var recentEvents by remember { mutableStateOf<List<TamperEvent>>(emptyList()) }
         val states = remember(refreshTrigger) {
             Restriction.entries.associateWith { restrictionsManager.isEnabled(it) }
         }
         val uninstallBlocked = remember(refreshTrigger) { restrictionsManager.isUninstallBlocked() }
+        LaunchedEffect(refreshTrigger) {
+            recentEvents = tamperLogger.recent()
+        }
 
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Phase 3 — Tamper resistance", style = MaterialTheme.typography.titleMedium)
@@ -252,6 +239,19 @@ class MainActivity : ComponentActivity() {
                 refreshTrigger++
             }) {
                 Text("Enable all recommended protections")
+            }
+
+            Text("Recent tamper events", style = MaterialTheme.typography.bodyMedium)
+            if (recentEvents.isEmpty()) {
+                Text("No tamper events recorded.", style = MaterialTheme.typography.bodySmall)
+            } else {
+                recentEvents.forEach { event ->
+                    val timestamp = DateFormat.getDateTimeInstance().format(Date(event.timestampMillis))
+                    Text(
+                        "$timestamp — ${event.details}",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
             }
         }
     }
@@ -415,7 +415,7 @@ class MainActivity : ComponentActivity() {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("Phase 4 — Scheduled access windows", style = MaterialTheme.typography.titleMedium)
             Text(
-                "Blocks the listed packages during the window below (e.g. bedtime 21:00–07:00). " +
+                "Allows the listed packages only during the window below. Outside it they are blocked. " +
                     "Re-checked every 15 minutes by WorkManager; tap \"Apply now\" to test immediately.",
                 style = MaterialTheme.typography.bodySmall,
             )
@@ -574,10 +574,17 @@ class MainActivity : ComponentActivity() {
                 if (topApps.isEmpty()) {
                     Text("No usage recorded yet today.", style = MaterialTheme.typography.bodySmall)
                 } else {
+                    val maximumUsage = topApps.maxOf { it.totalForegroundMillis }.coerceAtLeast(1)
                     topApps.forEach { stat ->
                         Text(
                             "${stat.packageName}: ${formatUsageDuration(stat.totalForegroundMillis)}",
                             style = MaterialTheme.typography.bodySmall,
+                        )
+                        LinearProgressIndicator(
+                            progress = {
+                                stat.totalForegroundMillis.toFloat() / maximumUsage.toFloat()
+                            },
+                            modifier = Modifier.fillMaxWidth(),
                         )
                     }
                 }

@@ -5,7 +5,7 @@ import androidx.room.PrimaryKey
 import java.time.DayOfWeek
 
 /**
- * A recurring window during which [packageNames] are suspended.
+ * A recurring window during which [packageNames] are allowed.
  *
  * [daysOfWeekMask] uses bit 0 = Monday .. bit 6 = Sunday (see [dayBit]).
  * [startMinuteOfDay] / [endMinuteOfDay] are minutes since midnight (0-1439). If
@@ -26,11 +26,18 @@ data class ScheduleRule(
 
     fun isActiveAt(dayOfWeek: DayOfWeek, minuteOfDay: Int): Boolean {
         if (!enabled) return false
-        if ((daysOfWeekMask and dayBit(dayOfWeek)) == 0) return false
         return if (startMinuteOfDay <= endMinuteOfDay) {
-            minuteOfDay in startMinuteOfDay until endMinuteOfDay
+            (daysOfWeekMask and dayBit(dayOfWeek)) != 0 &&
+                minuteOfDay in startMinuteOfDay until endMinuteOfDay
         } else {
-            minuteOfDay >= startMinuteOfDay || minuteOfDay < endMinuteOfDay
+            if (minuteOfDay >= startMinuteOfDay) {
+                (daysOfWeekMask and dayBit(dayOfWeek)) != 0
+            } else if (minuteOfDay < endMinuteOfDay) {
+                val previousDay = dayOfWeek.minus(1)
+                (daysOfWeekMask and dayBit(previousDay)) != 0
+            } else {
+                false
+            }
         }
     }
 
