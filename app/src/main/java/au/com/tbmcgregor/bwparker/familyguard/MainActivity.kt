@@ -47,6 +47,7 @@ import au.com.tbmcgregor.bwparker.familyguard.pin.PinAuthManager
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.AppUninstallGuard
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.DeviceRestrictionsManager
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.Restriction
+import au.com.tbmcgregor.bwparker.familyguard.restrictions.RestrictionEnforcementWorker
 import au.com.tbmcgregor.bwparker.familyguard.tamper.TamperEvent
 import au.com.tbmcgregor.bwparker.familyguard.tamper.TamperEventLogger
 import au.com.tbmcgregor.bwparker.familyguard.ui.PinLockScreen
@@ -67,6 +68,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         requestNotificationPermissionIfNeeded()
         ProtectionEnforcementService.start(applicationContext)
+        RestrictionEnforcementWorker.enqueuePeriodic(applicationContext)
         setContent {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {

@@ -62,6 +62,19 @@ license required:
 - Record Device Admin disable attempts and periodic restriction drift in Room.
   Recent tamper events appear in Settings.
 
+**Restrictions resetting on their own**: Android can momentarily clear Device
+Owner restrictions (e.g. right after an app update); `ProtectionEnforcementService`
+normally catches and reapplies this within seconds while the app is running.
+But Samsung's battery management can kill/freeze that foreground service
+while the app isn't open, so a restriction cleared in the background could
+stay cleared until you next open the app. `RestrictionEnforcementWorker` is a
+`WorkManager` job (every 15 minutes, independent of the app process) that
+re-checks and reapplies restrictions/blocked-apps/protected-apps as a backup.
+For best reliability, also exclude Family Device Guard from Samsung's
+battery optimization: Settings → Apps → Family Device Guard → Battery →
+**Unrestricted**, and remove it from any "Sleeping apps"/"Deep sleeping
+apps" list under Settings → Battery and device care.
+
 **Physical Samsung test results**:
 
 - Safe Mode hardware-key boot: **blocked successfully** while Family Device

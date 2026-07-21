@@ -7,6 +7,7 @@ import android.util.Log
 import au.com.tbmcgregor.bwparker.familyguard.R
 import au.com.tbmcgregor.bwparker.familyguard.monitoring.ProtectionEnforcementService
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.DeviceRestrictionsManager
+import au.com.tbmcgregor.bwparker.familyguard.restrictions.RestrictionEnforcementWorker
 import au.com.tbmcgregor.bwparker.familyguard.tamper.TamperEventLogger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -18,6 +19,7 @@ class DeviceAdminReceiverImpl : DeviceAdminReceiver() {
         Log.i(TAG, "Device admin enabled")
         DeviceRestrictionsManager(context).applyDefaults()
         ProtectionEnforcementService.start(context)
+        RestrictionEnforcementWorker.enqueuePeriodic(context)
     }
 
     override fun onDisabled(context: Context, intent: Intent) {
