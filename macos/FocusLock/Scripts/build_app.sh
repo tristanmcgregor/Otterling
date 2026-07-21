@@ -75,6 +75,10 @@ tee "$INSTALL_PATH/Contents/Library/LaunchDaemons/${HELPER_LABEL}.plist" > /dev/
     <true/>
     <key>KeepAlive</key>
     <true/>
+    <key>StandardOutPath</key>
+    <string>/var/log/focuslock-helperd.log</string>
+    <key>StandardErrorPath</key>
+    <string>/var/log/focuslock-helperd.log</string>
 </dict>
 </plist>
 PLIST

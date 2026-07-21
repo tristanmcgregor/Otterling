@@ -62,4 +62,20 @@ public final class FocusLockXPCClient {
             }
         }
     }
+
+    public func addProtectedApp(_ app: ProtectedApp) async -> FocusLockResult {
+        await withCheckedContinuation { continuation in
+            proxy().addProtectedApp(FocusLockCodec.encode(app)) { data in
+                continuation.resume(returning: FocusLockCodec.decode(FocusLockResult.self, from: data) ?? .denied("Malformed reply"))
+            }
+        }
+    }
+
+    public func removeProtectedApp(executableName: String) async -> FocusLockResult {
+        await withCheckedContinuation { continuation in
+            proxy().removeProtectedApp(executableName: executableName) { data in
+                continuation.resume(returning: FocusLockCodec.decode(FocusLockResult.self, from: data) ?? .denied("Malformed reply"))
+            }
+        }
+    }
 }

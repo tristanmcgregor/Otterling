@@ -9,13 +9,18 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 16) {
             header
             Divider()
-            appsSection
-            Divider()
-            domainsSection
-            Spacer(minLength: 0)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    appsSection
+                    Divider()
+                    domainsSection
+                    Divider()
+                    protectedAppsSection
+                }
+            }
         }
         .padding(20)
-        .frame(width: 440, height: 560)
+        .frame(width: 440, height: 700)
         .onAppear { viewModel.startPolling() }
         .alert(
             "Action denied",
@@ -34,19 +39,23 @@ struct ContentView: View {
         !viewModel.state.blockedApps.isEmpty || !viewModel.state.blockedDomains.isEmpty
     }
 
+    private var isProtecting: Bool {
+        !viewModel.state.protectedApps.isEmpty
+    }
+
     private var header: some View {
         HStack(spacing: 12) {
             Image(systemName: "lock.shield.fill")
                 .font(.system(size: 28))
-                .foregroundStyle(isBlocking ? .red : .green)
+                .foregroundStyle((isBlocking || isProtecting) ? .red : .green)
             VStack(alignment: .leading, spacing: 2) {
                 Text("FocusLock").font(.title3).bold()
-                if isBlocking {
-                    Text("Blocking active - 24/7 until removed by the Guardian")
+                if isBlocking || isProtecting {
+                    Text("Active 24/7 - only the Guardian can undo this")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 } else {
-                    Text("Nothing blocked")
+                    Text("Nothing blocked or protected")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
@@ -112,13 +121,56 @@ struct ContentView: View {
         }
     }
 
+    private var protectedAppsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Protected Apps").font(.headline)
+                Spacer()
+                Button("+ Protect App...") { pickProtectedApp() }
+            }
+            Text("Can't be quit or deleted -- relaunched automatically and locked against removal. Use this for accountability apps you don't want to be able to get around.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            if viewModel.state.protectedApps.isEmpty {
+                Text("No apps protected").font(.caption).foregroundStyle(.secondary)
+            } else {
+                List(viewModel.state.protectedApps) { app in
+                    HStack {
+                        Text(app.displayName)
+                        Spacer()
+                        Button {
+                            viewModel.removeProtectedApp(app.executableName)
+                        } label: {
+                            Image(systemName: "minus.circle")
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.red)
+                    }
+                }
+                .frame(height: 130)
+            }
+        }
+    }
+
     private func pickApp() {
+        guard let (executableName, displayName, _) = pickAppBundle(prompt: "Block") else { return }
+        let app = BlockedApp(displayName: displayName, executableName: executableName)
+        viewModel.addApp(app)
+    }
+
+    private func pickProtectedApp() {
+        guard let (executableName, displayName, bundlePath) = pickAppBundle(prompt: "Protect") else { return }
+        let app = ProtectedApp(displayName: displayName, executableName: executableName, bundlePath: bundlePath)
+        viewModel.addProtectedApp(app)
+    }
+
+    private func pickAppBundle(prompt: String) -> (executableName: String, displayName: String, bundlePath: String)? {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.application]
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
-        panel.prompt = "Block"
-        guard panel.runModal() == .OK, let url = panel.url, let bundle = Bundle(url: url) else { return }
+        panel.prompt = prompt
+        guard panel.runModal() == .OK, let url = panel.url, let bundle = Bundle(url: url) else { return nil }
 
         let executableName = bundle.executableURL?.lastPathComponent
             ?? url.deletingPathExtension().lastPathComponent
@@ -126,7 +178,6 @@ struct ContentView: View {
             ?? (bundle.object(forInfoDictionaryKey: "CFBundleName") as? String)
             ?? url.deletingPathExtension().lastPathComponent
 
-        let app = BlockedApp(displayName: displayName, executableName: executableName, bundleIdentifier: bundle.bundleIdentifier)
-        viewModel.addApp(app)
+        return (executableName, displayName, url.path)
     }
 }

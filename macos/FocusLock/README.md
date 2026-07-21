@@ -33,8 +33,14 @@ focuslockctl (CLI, runs as you)   --XPC-->        |
 - **Site blocking** redirects blocked domains to `127.0.0.1` via `/etc/hosts`, plus a narrow `pf`
   anchor that blocks DNS-over-TLS and known public DoH resolver IPs so a browser can't sidestep
   the hosts redirect with its own encrypted DNS.
-- There's no session or expiry: whatever's on the blocklist stays blocked until the Guardian
-  removes it.
+- **App protection** is the inverse of app blocking, for apps you want to be unable to get around
+  rather than unable to run (e.g. an accountability app's reporting): the daemon locks the app
+  bundle with the filesystem-level `schg` (system-immutable) flag, which only root can set or
+  clear -- a Standard account can't touch it even with `sudo`, since it has no admin password to
+  give `sudo` in the first place -- and relaunches the app within one enforcement tick if it's not
+  running.
+- There's no session or expiry: whatever's on the blocklist/protected list stays that way until
+  the Guardian removes it.
 
 ## Requirements
 
@@ -81,8 +87,14 @@ ps aux | grep FocusLockHelperd
 ```bash
 focuslockctl add-domain reddit.com
 focuslockctl add-app "Steam" steam_osx
+focuslockctl add-protected-app "Accountable2You" Accountable2You "/Applications/Accountable2You.app"
 focuslockctl status
 ```
+
+For a protected app, `executableName` is the actual binary inside `Contents/MacOS/` (usually,
+but not always, the same as the app's display name -- check with `ls "/Applications/Accountable2You.app/Contents/MacOS/"`
+if unsure), and `bundlePath` is the full path to the `.app` itself. The GUI's "+ Protect App..."
+button fills both in for you from a file picker.
 
 ## Project layout
 
@@ -103,5 +115,13 @@ GUARDIAN_SETUP.md      Account-split setup and its limits
   on your own machine(s), not for distribution to others.
 - The `pf` DoH/DoT blocking is a best-effort secondary layer, not exhaustive; a determined bypass
   via a VPN or a non-standard resolver port isn't specifically covered.
+- App protection locks the bundle and keeps the process alive, but doesn't lock down the app's own
+  granted permissions (Screen Recording, Accessibility, etc. in System Settings > Privacy &
+  Security). Revoking those is a plain checkbox toggle for the app's own user and isn't something
+  FocusLock currently detects or restores -- a real gap if the protected app depends on them.
+- Protecting a path under `/System` (or anywhere else SIP already governs) doesn't get the `schg`
+  lock -- `chflags` fails there with "Read-only file system" -- but SIP already prevents deletion
+  on those paths anyway, so it's a non-issue in practice. This feature is meant for
+  user-installed apps in `/Applications`.
 - See `GUARDIAN_SETUP.md` for the deeper caveats (Recovery Mode, SIP, physical access) that no
   software running under an admin-controlled OS can fully close.

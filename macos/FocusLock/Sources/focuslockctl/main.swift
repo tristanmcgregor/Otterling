@@ -18,6 +18,13 @@ func printUsage() {
       focuslockctl remove-domain <domain>          (Guardian admin account only)
       focuslockctl add-app <displayName> <executableName>
       focuslockctl remove-app <executableName>     (Guardian admin account only)
+
+      focuslockctl add-protected-app <displayName> <executableName> <bundlePath>
+      focuslockctl remove-protected-app <executableName>  (Guardian admin account only)
+
+    Protected apps (e.g. an accountability app) can't be quit -- the daemon relaunches them
+    within seconds -- or deleted -- their bundle is locked with the filesystem-level immutable
+    flag, which only root can clear, so a Standard account can't touch it even with sudo.
     """)
 }
 
@@ -30,6 +37,10 @@ func formatState(_ state: FocusLockState) -> String {
     lines.append("Blocked domains (\(state.blockedDomains.count)):")
     for domain in state.blockedDomains {
         lines.append("  - \(domain)")
+    }
+    lines.append("Protected apps (\(state.protectedApps.count)):")
+    for app in state.protectedApps {
+        lines.append("  - \(app.displayName) [\(app.executableName)] @ \(app.bundlePath)")
     }
     return lines.joined(separator: "\n")
 }
@@ -77,6 +88,15 @@ Task {
     case "remove-app":
         guard arguments.count >= 3 else { printUsage(); semaphore.signal(); exit(1) }
         printResult(await client.removeBlockedApp(executableName: arguments[2]))
+
+    case "add-protected-app":
+        guard arguments.count >= 5 else { printUsage(); semaphore.signal(); exit(1) }
+        let app = ProtectedApp(displayName: arguments[2], executableName: arguments[3], bundlePath: arguments[4])
+        printResult(await client.addProtectedApp(app))
+
+    case "remove-protected-app":
+        guard arguments.count >= 3 else { printUsage(); semaphore.signal(); exit(1) }
+        printResult(await client.removeProtectedApp(executableName: arguments[2]))
 
     default:
         printUsage()

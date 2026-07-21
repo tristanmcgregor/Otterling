@@ -77,4 +77,38 @@ final class XPCService: NSObject, FocusLockXPCProtocol {
         onStateChanged()
         reply(FocusLockCodec.encode(FocusLockResult.ok))
     }
+
+    func addProtectedApp(_ appJSON: Data, reply: @escaping (Data) -> Void) {
+        guard let app = FocusLockCodec.decode(ProtectedApp.self, from: appJSON) else {
+            reply(FocusLockCodec.encode(FocusLockResult.denied("Invalid app payload")))
+            return
+        }
+        guard FileManager.default.fileExists(atPath: app.bundlePath) else {
+            reply(FocusLockCodec.encode(FocusLockResult.denied("No app bundle found at \(app.bundlePath)")))
+            return
+        }
+        stateStore.mutate { state in
+            if !state.protectedApps.contains(where: { $0.executableName == app.executableName }) {
+                state.protectedApps.append(app)
+            }
+        }
+        AppProtector.lock(bundlePath: app.bundlePath)
+        onStateChanged()
+        reply(FocusLockCodec.encode(FocusLockResult.ok))
+    }
+
+    func removeProtectedApp(executableName: String, reply: @escaping (Data) -> Void) {
+        guard isCallerAdmin() else {
+            reply(FocusLockCodec.encode(FocusLockResult.denied("Only the Guardian admin account can remove a protected app.")))
+            return
+        }
+        stateStore.mutate { state in
+            if let app = state.protectedApps.first(where: { $0.executableName == executableName }) {
+                AppProtector.unlock(bundlePath: app.bundlePath)
+            }
+            state.protectedApps.removeAll { $0.executableName == executableName }
+        }
+        onStateChanged()
+        reply(FocusLockCodec.encode(FocusLockResult.ok))
+    }
 }

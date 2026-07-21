@@ -51,6 +51,14 @@ final class FocusLockViewModel: ObservableObject {
         Task { await handle(await client.removeBlockedApp(executableName: executableName)) }
     }
 
+    func addProtectedApp(_ app: ProtectedApp) {
+        Task { await handle(await client.addProtectedApp(app)) }
+    }
+
+    func removeProtectedApp(_ executableName: String) {
+        Task { await handle(await client.removeProtectedApp(executableName: executableName)) }
+    }
+
     private func handle(_ result: FocusLockResult) async {
         if !result.success {
             errorMessage = result.message ?? "Action denied."

@@ -19,6 +19,12 @@ final class EnforcementLoop {
     private var lastAppliedDomains: [String] = []
     private var lastAppliedSiteBlockActive = false
 
+    // Debounces relaunch attempts per app so a slow-starting process (which won't show up in a
+    // process scan for a second or two) doesn't get `open`'d again on every tick before it's had
+    // a chance to appear.
+    private var lastRelaunchAttempt: [String: Date] = [:]
+    private let relaunchCooldown: TimeInterval = 6
+
     func start(stateStore: StateStore, interval: TimeInterval = 3) {
         self.stateStore = stateStore
         reapplyNow()
@@ -51,6 +57,22 @@ final class EnforcementLoop {
                 FileHandle.standardError.write(
                     "[enforcement] killed: \(killed.joined(separator: ", "))\n".data(using: .utf8)!
                 )
+            }
+
+            for app in state.protectedApps {
+                if !AppProtector.isLocked(bundlePath: app.bundlePath) {
+                    AppProtector.lock(bundlePath: app.bundlePath)
+                }
+
+                if let last = self.lastRelaunchAttempt[app.executableName], Date().timeIntervalSince(last) < self.relaunchCooldown {
+                    continue
+                }
+                if AppProtector.relaunchIfNeeded(app) {
+                    self.lastRelaunchAttempt[app.executableName] = Date()
+                    FileHandle.standardError.write(
+                        "[enforcement] relaunched protected app: \(app.displayName)\n".data(using: .utf8)!
+                    )
+                }
             }
         }
     }

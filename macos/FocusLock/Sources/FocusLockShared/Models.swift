@@ -16,19 +16,43 @@ public struct BlockedApp: Codable, Hashable, Identifiable, Sendable {
     }
 }
 
+/// An app that must stay running and installed, e.g. an accountability app whose reporting you
+/// want to be unable to circumvent. Enforcement is the mirror of `BlockedApp`: instead of killing
+/// it on sight, the daemon relaunches it if it's not running, and locks its bundle with the
+/// filesystem-level `schg` (system-immutable) flag so it can't be deleted or moved -- a flag only
+/// root can set or clear, so a Standard account can't touch it even with `sudo` (no admin
+/// password to give sudo in the first place).
+public struct ProtectedApp: Codable, Hashable, Identifiable, Sendable {
+    public var id: String { executableName }
+    public let displayName: String
+    public let executableName: String
+    /// Full path to the .app bundle, e.g. "/Applications/Accountable2You.app". Used both to
+    /// apply the immutable flag and to relaunch it via `open`.
+    public let bundlePath: String
+
+    public init(displayName: String, executableName: String, bundlePath: String) {
+        self.displayName = displayName
+        self.executableName = executableName
+        self.bundlePath = bundlePath
+    }
+}
+
 /// The full state the daemon owns and persists to a root-owned file. The GUI app only ever
 /// sees a copy of this via `getStatus`; it can never write it directly.
 ///
 /// Blocking is unconditional and permanent: anything in `blockedApps`/`blockedDomains` is
 /// enforced 24/7, with no timer or session to wait out. The only way off the list is removal,
-/// which the daemon restricts to the Guardian admin account.
+/// which the daemon restricts to the Guardian admin account. `protectedApps` are the inverse:
+/// kept alive and undeletable rather than blocked.
 public struct FocusLockState: Codable, Sendable {
     public var blockedApps: [BlockedApp]
     public var blockedDomains: [String]
+    public var protectedApps: [ProtectedApp]
 
-    public init(blockedApps: [BlockedApp] = [], blockedDomains: [String] = []) {
+    public init(blockedApps: [BlockedApp] = [], blockedDomains: [String] = [], protectedApps: [ProtectedApp] = []) {
         self.blockedApps = blockedApps
         self.blockedDomains = blockedDomains
+        self.protectedApps = protectedApps
     }
 }
 

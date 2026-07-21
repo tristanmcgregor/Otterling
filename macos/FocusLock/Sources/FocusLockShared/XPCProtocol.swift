@@ -21,6 +21,13 @@ import Foundation
     func removeBlockedApp(executableName: String, reply: @escaping (Data) -> Void)
     /// Requires the calling account to be in the `admin` group (i.e. the Guardian account).
     func removeBlockedDomain(_ domain: String, reply: @escaping (Data) -> Void)
+
+    /// Always allowed, from any account. Locks the bundle immediately (best-effort) and adds it
+    /// to the enforcement loop's relaunch-if-not-running list.
+    func addProtectedApp(_ appJSON: Data, reply: @escaping (Data) -> Void)
+    /// Requires the calling account to be in the `admin` group (i.e. the Guardian account).
+    /// Unlocks the bundle (clears the immutable flag) before removing it from the list.
+    func removeProtectedApp(executableName: String, reply: @escaping (Data) -> Void)
 }
 
 public enum FocusLockCodec {
