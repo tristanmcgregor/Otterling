@@ -17,7 +17,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -42,12 +41,8 @@ import au.com.tbmcgregor.bwparker.familyguard.content.AppSuspensionManager
 import au.com.tbmcgregor.bwparker.familyguard.content.PrivateDnsFilterManager
 import au.com.tbmcgregor.bwparker.familyguard.data.BlockedApp
 import au.com.tbmcgregor.bwparker.familyguard.knox.KnoxLicenseManager
-import au.com.tbmcgregor.bwparker.familyguard.monitoring.AppUsageStat
-import au.com.tbmcgregor.bwparker.familyguard.monitoring.UsageAccessManager
-import au.com.tbmcgregor.bwparker.familyguard.monitoring.UsageStatsCollector
-import au.com.tbmcgregor.bwparker.familyguard.monitoring.UsageTrackingService
+import au.com.tbmcgregor.bwparker.familyguard.monitoring.ProtectionEnforcementService
 import au.com.tbmcgregor.bwparker.familyguard.pin.PinAuthManager
-import au.com.tbmcgregor.bwparker.familyguard.reporting.DailySummaryWorker
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.DeviceRestrictionsManager
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.Restriction
 import au.com.tbmcgregor.bwparker.familyguard.tamper.TamperEvent
@@ -69,8 +64,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         requestNotificationPermissionIfNeeded()
-        DailySummaryWorker.enqueuePeriodic(applicationContext)
-        UsageTrackingService.start(applicationContext)
+        ProtectionEnforcementService.start(applicationContext)
         setContent {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
@@ -96,8 +90,6 @@ class MainActivity : ComponentActivity() {
                             RestrictionsSection()
                             HorizontalDivider()
                             ContentFilterSection()
-                            HorizontalDivider()
-                            UsageSection()
                             HorizontalDivider()
                             KnoxSetupSection()
                             HorizontalDivider()
@@ -411,83 +403,6 @@ class MainActivity : ComponentActivity() {
         PrivateDnsFilterManager.Result.Success -> "Applied"
         PrivateDnsFilterManager.Result.UnsupportedApiLevel -> "Requires Android 10+"
         is PrivateDnsFilterManager.Result.Failed -> "Failed: ${result.message}"
-    }
-
-    @Composable
-    private fun UsageSection() {
-        val coroutineScope = rememberCoroutineScope()
-        val usageAccessManager = remember { UsageAccessManager(applicationContext) }
-        val collector = remember { UsageStatsCollector(applicationContext) }
-
-        var refreshTrigger by remember { mutableIntStateOf(0) }
-        var isAccessGranted by remember { mutableStateOf(false) }
-        var topApps by remember { mutableStateOf<List<AppUsageStat>>(emptyList()) }
-        var statusMessage by remember { mutableStateOf("") }
-
-        LaunchedEffect(refreshTrigger) {
-            isAccessGranted = usageAccessManager.isGranted()
-            if (isAccessGranted) {
-                withContext(Dispatchers.IO) { collector.collectToday() }
-                topApps = collector.today()
-            }
-        }
-
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Phase 5 — Usage & reporting", style = MaterialTheme.typography.titleMedium)
-
-            if (!isAccessGranted) {
-                Text(
-                    "Requires the one-time \"Usage access\" grant (Settings → Special app " +
-                        "access → Usage access).",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                Button(onClick = { startActivity(usageAccessManager.settingsIntent()) }) {
-                    Text("Open Usage Access settings")
-                }
-            } else {
-                Text("Today's app usage", style = MaterialTheme.typography.bodyMedium)
-                if (topApps.isEmpty()) {
-                    Text("No usage recorded yet today.", style = MaterialTheme.typography.bodySmall)
-                } else {
-                    val maximumUsage = topApps.maxOf { it.totalForegroundMillis }.coerceAtLeast(1)
-                    topApps.forEach { stat ->
-                        Text(
-                            "${stat.packageName}: ${formatUsageDuration(stat.totalForegroundMillis)}",
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                        LinearProgressIndicator(
-                            progress = {
-                                stat.totalForegroundMillis.toFloat() / maximumUsage.toFloat()
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                    }
-                }
-            }
-
-            if (statusMessage.isNotEmpty()) {
-                Text(statusMessage, style = MaterialTheme.typography.bodySmall)
-            }
-
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = { refreshTrigger++ }) {
-                    Text("Refresh")
-                }
-                OutlinedButton(onClick = {
-                    DailySummaryWorker.runOnce(applicationContext)
-                    statusMessage = "Summary notification requested"
-                }) {
-                    Text("Send test summary now")
-                }
-            }
-        }
-    }
-
-    private fun formatUsageDuration(millis: Long): String {
-        val totalMinutes = millis / 60_000
-        val hours = totalMinutes / 60
-        val minutes = totalMinutes % 60
-        return if (hours > 0) "${hours}h ${minutes}m" else "${minutes}m"
     }
 
     @Composable

@@ -84,29 +84,13 @@ section:
 Note: Scheduled access windows (time-based allow/block rules) were removed —
 not needed for this app.
 
-## Phase 5 — Usage logging & reporting
-
-Also stock Android, no Knox required. In the "Phase 5 — Usage & reporting"
-section:
-
-- **One-time onboarding step**: `PACKAGE_USAGE_STATS` is a "special access"
-  permission that can't be requested at runtime like a normal permission. Tap
-  **Open Usage Access settings** and enable access for Family Device Guard
-  under Settings → Special app access → Usage access. Until granted, the
-  section just shows this prompt.
-- **`UsageTrackingService`**: a foreground service (declared
-  `foregroundServiceType="specialUse"` per Android 14+ requirements, with a
-  low-importance "Monitoring is active" notification) that polls
-  `UsageStatsManager` every 5 minutes, persists today's per-app foreground
-  totals to Room, and re-asserts the Phase 3 restrictions each cycle as a
-  drift check. Started on app open, Device Owner enable, and
-  `BOOT_COMPLETED` (via `BootCompletedReceiver`).
-- **Today's usage list**: shows persisted per-app totals; **Refresh**
-  re-queries immediately instead of waiting for the next poll.
-- **`DailySummaryWorker`**: a daily `WorkManager` job that posts a local
-  notification digest of the top 5 apps by usage today. Notification-only by
-  design — no email/SMTP backend, so nothing leaves the device. Tap **Send
-  test summary now** to trigger it on demand instead of waiting a full day.
+Note: Phase 5 (usage logging & reporting — usage stats collection, the
+"Today's usage" list, and the daily summary notification) was removed —
+not needed for this app. `ProtectionEnforcementService` (formerly
+`UsageTrackingService`) still runs as a foreground service to reapply the
+Phase 3 restrictions and Phase 4 blocked-app list if anything clears them;
+it just no longer collects usage stats. Started on app open, Device Owner
+enable, and `BOOT_COMPLETED` (via `BootCompletedReceiver`).
 
 ## Phase 6 — PIN lock & consolidated settings
 
@@ -116,9 +100,9 @@ The home screen is now a minimal status view (Device Owner state + an
 - **First time**: you're walked through creating a PIN (enter + confirm, 4-8
   digits).
 - **After that**: entering the correct PIN unlocks the Settings screen, which
-  hosts every control from Phases 1-5 (Device Owner, tamper resistance,
-  content filtering, scheduling, usage & reporting, Knox setup). Leaving
-  Settings via **Back** re-locks it — the PIN is required again next time.
+  hosts every remaining control (Device Owner, tamper resistance, content
+  filtering, Knox setup). Leaving Settings via **Back** re-locks it — the
+  PIN is required again next time.
 - **Change PIN**: at the bottom of Settings; clears the current PIN and
   immediately prompts you to set a new one.
 

@@ -20,11 +20,11 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /**
- * Long-running foreground service that keeps usage stats fresh and re-asserts Phase 3
- * restrictions in case anything cleared them (e.g. a factory OEM reset of user restrictions).
- * Declared as `foregroundServiceType="specialUse"` per Android 14+ requirements.
+ * Long-running foreground service that periodically re-asserts Phase 3 restrictions and the
+ * Phase 4 blocked-app list in case anything cleared them (e.g. a factory OEM reset of user
+ * restrictions). Declared as `foregroundServiceType="specialUse"` per Android 14+ requirements.
  */
-class UsageTrackingService : Service() {
+class ProtectionEnforcementService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var loopJob: Job? = null
 
@@ -35,7 +35,6 @@ class UsageTrackingService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (loopJob == null) {
-            val collector = UsageStatsCollector(applicationContext)
             val restrictionsManager = DeviceRestrictionsManager(applicationContext)
             val tamperLogger = TamperEventLogger(applicationContext)
             val suspensionManager = AppSuspensionManager(applicationContext)
@@ -43,8 +42,6 @@ class UsageTrackingService : Service() {
                 runCatching { suspensionManager.reapplyAll() }
                     .onFailure { Log.w(TAG, "Blocked-app reapply failed", it) }
                 while (isActive) {
-                    runCatching { collector.collectToday() }
-                        .onFailure { Log.w(TAG, "Usage stats poll failed", it) }
                     runCatching { restrictionsManager.detectDriftAndReapply(tamperLogger) }
                         .onFailure { Log.w(TAG, "Restriction drift check failed", it) }
                     delay(POLL_INTERVAL_MS)
@@ -69,20 +66,20 @@ class UsageTrackingService : Service() {
         )
         return Notification.Builder(this, CHANNEL_ID)
             .setContentTitle("Family Device Guard")
-            .setContentText("Monitoring and protections are active")
+            .setContentText("Protections are active")
             .setSmallIcon(android.R.drawable.ic_lock_lock)
             .setOngoing(true)
             .build()
     }
 
     companion object {
-        private const val TAG = "UsageTrackingService"
-        private const val CHANNEL_ID = "usage_tracking"
+        private const val TAG = "ProtectionEnforcementService"
+        private const val CHANNEL_ID = "protection_enforcement"
         private const val NOTIFICATION_ID = 1001
         private const val POLL_INTERVAL_MS = 5 * 60 * 1000L
 
         fun start(context: Context) {
-            context.startForegroundService(Intent(context, UsageTrackingService::class.java))
+            context.startForegroundService(Intent(context, ProtectionEnforcementService::class.java))
         }
     }
 }
