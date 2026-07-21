@@ -8,3 +8,8 @@ local.properties
 app/build/
 app/libs/*.jar
 !app/libs/README.md
+
+# macOS FocusLock (Swift Package Manager)
+macos/FocusLock/.build/
+macos/FocusLock/.swiftpm/
+
