@@ -26,6 +26,33 @@ class PinAuthManager(context: Context) {
         EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
     )
 
+    init {
+        migrateLegacyPlaintextPinIfNeeded(context)
+    }
+
+    /**
+     * An earlier build stored the PIN hash in a plain (unencrypted) `SharedPreferences` file
+     * under this same name. `EncryptedSharedPreferences` encrypts key names as well as values, so
+     * it can't see those old plaintext entries -- [hasPin] looks empty and users get dropped back
+     * into the "create a PIN" flow even though their PIN is still sitting on disk. Copy it over
+     * once, then scrub the plaintext copy so it doesn't linger unencrypted.
+     */
+    private fun migrateLegacyPlaintextPinIfNeeded(context: Context) {
+        if (hasPin()) return
+        val legacyPrefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val legacySalt = legacyPrefs.getString(KEY_SALT, null)
+        val legacyHash = legacyPrefs.getString(KEY_HASH, null)
+        if (legacySalt != null && legacyHash != null) {
+            prefs.edit()
+                .putString(KEY_SALT, legacySalt)
+                .putString(KEY_HASH, legacyHash)
+                .apply()
+        }
+        if (legacyPrefs.contains(KEY_SALT) || legacyPrefs.contains(KEY_HASH)) {
+            legacyPrefs.edit().remove(KEY_SALT).remove(KEY_HASH).apply()
+        }
+    }
+
     fun hasPin(): Boolean = prefs.contains(KEY_HASH)
 
     fun setPin(pin: String) {
