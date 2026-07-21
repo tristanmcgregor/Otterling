@@ -9,6 +9,7 @@ import android.content.Intent
 import android.os.IBinder
 import android.util.Log
 import au.com.tbmcgregor.bwparker.familyguard.content.AppSuspensionManager
+import au.com.tbmcgregor.bwparker.familyguard.restrictions.AppUninstallGuard
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.DeviceRestrictionsManager
 import au.com.tbmcgregor.bwparker.familyguard.tamper.TamperEventLogger
 import kotlinx.coroutines.CoroutineScope
@@ -20,9 +21,10 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /**
- * Long-running foreground service that periodically re-asserts Phase 3 restrictions and the
- * Phase 4 blocked-app list in case anything cleared them (e.g. a factory OEM reset of user
- * restrictions). Declared as `foregroundServiceType="specialUse"` per Android 14+ requirements.
+ * Long-running foreground service that periodically re-asserts Phase 3 restrictions, the
+ * Phase 4 blocked-app list, and the protected-from-uninstall app list in case anything cleared
+ * them (e.g. a factory OEM reset of user restrictions). Declared as
+ * `foregroundServiceType="specialUse"` per Android 14+ requirements.
  */
 class ProtectionEnforcementService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -38,9 +40,12 @@ class ProtectionEnforcementService : Service() {
             val restrictionsManager = DeviceRestrictionsManager(applicationContext)
             val tamperLogger = TamperEventLogger(applicationContext)
             val suspensionManager = AppSuspensionManager(applicationContext)
+            val uninstallGuard = AppUninstallGuard(applicationContext)
             loopJob = scope.launch {
                 runCatching { suspensionManager.reapplyAll() }
                     .onFailure { Log.w(TAG, "Blocked-app reapply failed", it) }
+                runCatching { uninstallGuard.reapplyAll() }
+                    .onFailure { Log.w(TAG, "Uninstall-protection reapply failed", it) }
                 while (isActive) {
                     runCatching { restrictionsManager.detectDriftAndReapply(tamperLogger) }
                         .onFailure { Log.w(TAG, "Restriction drift check failed", it) }

@@ -52,10 +52,15 @@ license required:
 
 - Block Safe Mode boot, factory reset, USB debugging, guest mode/additional
   users (`UserManager` restrictions).
-- Block app uninstall (`setUninstallBlocked`).
+- Block app uninstall for Family Device Guard itself (`setUninstallBlocked`).
+- **Protect apps from uninstall**: enter any other app's package name (e.g.
+  `com.facebook.katana`) and tap **Protect** to block it too, via the same
+  `setUninstallBlocked` call — it works for any package when called by the
+  Device Owner, not just this app. Tap **Remove** to unprotect. The list is
+  persisted in Room and re-applied by `ProtectionEnforcementService` after a
+  reboot or if anything clears it.
 - Record Device Admin disable attempts and periodic restriction drift in Room.
-  Recent tamper events appear in Settings and the daily summary includes the
-  day's tamper-event count.
+  Recent tamper events appear in Settings.
 
 **Physical Samsung test results**:
 

@@ -40,9 +40,11 @@ import au.com.tbmcgregor.bwparker.familyguard.admin.DeviceOwnerManager
 import au.com.tbmcgregor.bwparker.familyguard.content.AppSuspensionManager
 import au.com.tbmcgregor.bwparker.familyguard.content.PrivateDnsFilterManager
 import au.com.tbmcgregor.bwparker.familyguard.data.BlockedApp
+import au.com.tbmcgregor.bwparker.familyguard.data.ProtectedApp
 import au.com.tbmcgregor.bwparker.familyguard.knox.KnoxLicenseManager
 import au.com.tbmcgregor.bwparker.familyguard.monitoring.ProtectionEnforcementService
 import au.com.tbmcgregor.bwparker.familyguard.pin.PinAuthManager
+import au.com.tbmcgregor.bwparker.familyguard.restrictions.AppUninstallGuard
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.DeviceRestrictionsManager
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.Restriction
 import au.com.tbmcgregor.bwparker.familyguard.tamper.TamperEvent
@@ -218,16 +220,21 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun RestrictionsSection() {
+        val coroutineScope = rememberCoroutineScope()
         val restrictionsManager = remember { DeviceRestrictionsManager(applicationContext) }
         val tamperLogger = remember { TamperEventLogger(applicationContext) }
+        val uninstallGuard = remember { AppUninstallGuard(applicationContext) }
         var refreshTrigger by remember { mutableIntStateOf(0) }
         var recentEvents by remember { mutableStateOf<List<TamperEvent>>(emptyList()) }
+        var protectedApps by remember { mutableStateOf<List<ProtectedApp>>(emptyList()) }
+        var newProtectedPackageName by remember { mutableStateOf("") }
         val states = remember(refreshTrigger) {
             Restriction.entries.associateWith { restrictionsManager.isEnabled(it) }
         }
         val uninstallBlocked = remember(refreshTrigger) { restrictionsManager.isUninstallBlocked() }
         LaunchedEffect(refreshTrigger) {
             recentEvents = tamperLogger.recent()
+            protectedApps = uninstallGuard.protectedApps()
         }
 
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -275,6 +282,60 @@ class MainActivity : ComponentActivity() {
                 refreshTrigger++
             }) {
                 Text("Enable all recommended protections")
+            }
+
+            HorizontalDivider()
+
+            Text("Protect apps from uninstall", style = MaterialTheme.typography.bodyMedium)
+            Text(
+                "These apps can't be uninstalled while device owner is active, even from " +
+                    "Settings → Apps.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                OutlinedTextField(
+                    value = newProtectedPackageName,
+                    onValueChange = { newProtectedPackageName = it },
+                    label = { Text("Package name") },
+                    singleLine = true,
+                    modifier = Modifier.weight(1f),
+                )
+                Button(onClick = {
+                    val packageName = newProtectedPackageName.trim()
+                    if (packageName.isNotEmpty()) {
+                        coroutineScope.launch {
+                            uninstallGuard.protect(packageName)
+                            newProtectedPackageName = ""
+                            refreshTrigger++
+                        }
+                    }
+                }) {
+                    Text("Protect")
+                }
+            }
+            if (protectedApps.isEmpty()) {
+                Text("No apps protected yet.", style = MaterialTheme.typography.bodySmall)
+            } else {
+                protectedApps.forEach { app ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(app.packageName, modifier = Modifier.weight(1f))
+                        TextButton(onClick = {
+                            coroutineScope.launch {
+                                uninstallGuard.unprotect(app.packageName)
+                                refreshTrigger++
+                            }
+                        }) {
+                            Text("Remove")
+                        }
+                    }
+                }
             }
 
             Text("Recent tamper events", style = MaterialTheme.typography.bodyMedium)

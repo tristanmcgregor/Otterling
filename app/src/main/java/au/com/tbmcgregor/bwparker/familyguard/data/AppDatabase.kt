@@ -13,14 +13,17 @@ import au.com.tbmcgregor.bwparker.familyguard.tamper.TamperEventDao
     entities = [
         BlockedApp::class,
         TamperEvent::class,
+        ProtectedApp::class,
     ],
-    version = 7,
+    version = 8,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun blockedAppDao(): BlockedAppDao
 
     abstract fun tamperEventDao(): TamperEventDao
+
+    abstract fun protectedAppDao(): ProtectedAppDao
 
     companion object {
         @Volatile
@@ -40,6 +43,7 @@ abstract class AppDatabase : RoomDatabase() {
                         MIGRATION_4_5,
                         MIGRATION_5_6,
                         MIGRATION_6_7,
+                        MIGRATION_7_8,
                     )
                     .build()
                     .also { instance = it }
@@ -120,6 +124,19 @@ abstract class AppDatabase : RoomDatabase() {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("DROP TABLE IF EXISTS app_usage_stats")
                 db.execSQL("DROP TABLE IF EXISTS app_usage_sessions")
+            }
+        }
+
+        private val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS protected_apps (
+                        packageName TEXT NOT NULL,
+                        PRIMARY KEY(packageName)
+                    )
+                    """.trimIndent(),
+                )
             }
         }
     }
