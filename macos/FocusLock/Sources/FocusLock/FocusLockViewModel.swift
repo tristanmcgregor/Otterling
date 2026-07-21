@@ -59,6 +59,14 @@ final class FocusLockViewModel: ObservableObject {
         Task { await handle(await client.removeProtectedApp(executableName: executableName)) }
     }
 
+    func enableDNSEnforcement() {
+        Task { await handle(await client.enableDNSEnforcement()) }
+    }
+
+    func disableDNSEnforcement() {
+        Task { await handle(await client.disableDNSEnforcement()) }
+    }
+
     private func handle(_ result: FocusLockResult) async {
         if !result.success {
             errorMessage = result.message ?? "Action denied."

@@ -78,4 +78,20 @@ public final class FocusLockXPCClient {
             }
         }
     }
+
+    public func enableDNSEnforcement() async -> FocusLockResult {
+        await withCheckedContinuation { continuation in
+            proxy().enableDNSEnforcement { data in
+                continuation.resume(returning: FocusLockCodec.decode(FocusLockResult.self, from: data) ?? .denied("Malformed reply"))
+            }
+        }
+    }
+
+    public func disableDNSEnforcement() async -> FocusLockResult {
+        await withCheckedContinuation { continuation in
+            proxy().disableDNSEnforcement { data in
+                continuation.resume(returning: FocusLockCodec.decode(FocusLockResult.self, from: data) ?? .denied("Malformed reply"))
+            }
+        }
+    }
 }

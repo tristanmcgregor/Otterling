@@ -1,9 +1,11 @@
 import Foundation
 import FocusLockShared
 
-/// Periodically re-asserts the current block state: kills matching processes and (re)applies
-/// site/content blocking. Runs independently of XPC calls so a reboot or a killed GUI app
-/// doesn't lift anything -- this loop reads persisted state straight off disk via `stateStore`.
+/// Periodically re-asserts the current block state: kills matching processes, (re)applies
+/// site/content blocking, keeps protected apps alive and locked, and (re)points DNS at
+/// Cloudflare's filtered resolver when enabled. Runs independently of XPC calls so a reboot or a
+/// killed GUI app doesn't lift anything -- this loop reads persisted state straight off disk via
+/// `stateStore`.
 ///
 /// Blocking is unconditional: anything in blockedApps/blockedDomains is enforced 24/7 as soon as
 /// it's added, with no session/timer to wait out. It only stops once the Guardian removes it.
@@ -17,13 +19,19 @@ final class EnforcementLoop {
     // Tracks what's currently applied to /etc/hosts and pf so reapplyNow() (called on every XPC
     // mutation plus every timer tick) only touches the filesystem/pf when something changed.
     private var lastAppliedDomains: [String] = []
-    private var lastAppliedSiteBlockActive = false
+    private var lastAppliedPFActive = false
 
     // Debounces relaunch attempts per app so a slow-starting process (which won't show up in a
     // process scan for a second or two) doesn't get `open`'d again on every tick before it's had
     // a chance to appear.
     private var lastRelaunchAttempt: [String: Date] = [:]
     private let relaunchCooldown: TimeInterval = 6
+
+    // DNSEnforcer shells out to networksetup a few times per network service; that's cheap
+    // enough occasionally but wasteful on every 3s tick, so it's checked on its own slower
+    // cadence instead.
+    private var lastDNSCheckAt: Date?
+    private let dnsCheckInterval: TimeInterval = 15
 
     func start(stateStore: StateStore, interval: TimeInterval = 3) {
         self.stateStore = stateStore
@@ -47,9 +55,20 @@ final class EnforcementLoop {
             }
 
             let siteBlockActive = !domainsToBlock.isEmpty
-            if siteBlockActive != self.lastAppliedSiteBlockActive {
-                PFBlocker.apply(active: siteBlockActive)
-                self.lastAppliedSiteBlockActive = siteBlockActive
+            let pfActive = siteBlockActive || state.dnsEnforcementEnabled
+            if pfActive != self.lastAppliedPFActive {
+                PFBlocker.apply(active: pfActive)
+                self.lastAppliedPFActive = pfActive
+            }
+
+            if state.dnsEnforcementEnabled {
+                let now = Date()
+                if self.lastDNSCheckAt == nil || now.timeIntervalSince(self.lastDNSCheckAt!) >= self.dnsCheckInterval {
+                    DNSEnforcer.apply()
+                    self.lastDNSCheckAt = now
+                }
+            } else {
+                self.lastDNSCheckAt = nil
             }
 
             let killed = AppBlockEnforcer.enforce(blockedApps: state.blockedApps)

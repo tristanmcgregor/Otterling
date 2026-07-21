@@ -22,9 +22,16 @@ func printUsage() {
       focuslockctl add-protected-app <displayName> <executableName> <bundlePath>
       focuslockctl remove-protected-app <executableName>  (Guardian admin account only)
 
+      focuslockctl enable-dns
+      focuslockctl disable-dns                     (Guardian admin account only)
+
     Protected apps (e.g. an accountability app) can't be quit -- the daemon relaunches them
     within seconds -- or deleted -- their bundle is locked with the filesystem-level immutable
     flag, which only root can clear, so a Standard account can't touch it even with sudo.
+
+    DNS enforcement points every network service at Cloudflare's content-filtering resolver
+    (1.1.1.3 / 1.0.0.3) and blocks alternate/DoH resolvers so it can't be sidestepped by just
+    picking a different one.
     """)
 }
 
@@ -42,6 +49,7 @@ func formatState(_ state: FocusLockState) -> String {
     for app in state.protectedApps {
         lines.append("  - \(app.displayName) [\(app.executableName)] @ \(app.bundlePath)")
     }
+    lines.append("DNS enforcement: \(state.dnsEnforcementEnabled ? "ON (Cloudflare-filtered)" : "off")")
     return lines.joined(separator: "\n")
 }
 
@@ -97,6 +105,12 @@ Task {
     case "remove-protected-app":
         guard arguments.count >= 3 else { printUsage(); semaphore.signal(); exit(1) }
         printResult(await client.removeProtectedApp(executableName: arguments[2]))
+
+    case "enable-dns":
+        printResult(await client.enableDNSEnforcement())
+
+    case "disable-dns":
+        printResult(await client.disableDNSEnforcement())
 
     default:
         printUsage()

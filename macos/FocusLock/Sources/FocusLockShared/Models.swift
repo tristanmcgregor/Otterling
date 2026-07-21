@@ -43,16 +43,36 @@ public struct ProtectedApp: Codable, Hashable, Identifiable, Sendable {
 /// Blocking is unconditional and permanent: anything in `blockedApps`/`blockedDomains` is
 /// enforced 24/7, with no timer or session to wait out. The only way off the list is removal,
 /// which the daemon restricts to the Guardian admin account. `protectedApps` are the inverse:
-/// kept alive and undeletable rather than blocked.
+/// kept alive and undeletable rather than blocked. `dnsEnforcementEnabled` mandates Cloudflare's
+/// content-filtering DNS system-wide and blocks alternate resolvers, same asymmetry: anyone can
+/// turn it on, only the Guardian can turn it off.
 public struct FocusLockState: Codable, Sendable {
     public var blockedApps: [BlockedApp]
     public var blockedDomains: [String]
     public var protectedApps: [ProtectedApp]
+    public var dnsEnforcementEnabled: Bool
 
-    public init(blockedApps: [BlockedApp] = [], blockedDomains: [String] = [], protectedApps: [ProtectedApp] = []) {
+    public init(
+        blockedApps: [BlockedApp] = [],
+        blockedDomains: [String] = [],
+        protectedApps: [ProtectedApp] = [],
+        dnsEnforcementEnabled: Bool = false
+    ) {
         self.blockedApps = blockedApps
         self.blockedDomains = blockedDomains
         self.protectedApps = protectedApps
+        self.dnsEnforcementEnabled = dnsEnforcementEnabled
+    }
+
+    // Custom decode so a state.json written before `dnsEnforcementEnabled` existed doesn't fail
+    // to decode wholesale and get silently replaced with a blank state (losing every existing
+    // blocked/protected entry) -- missing keys just default instead.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        blockedApps = try container.decodeIfPresent([BlockedApp].self, forKey: .blockedApps) ?? []
+        blockedDomains = try container.decodeIfPresent([String].self, forKey: .blockedDomains) ?? []
+        protectedApps = try container.decodeIfPresent([ProtectedApp].self, forKey: .protectedApps) ?? []
+        dnsEnforcementEnabled = try container.decodeIfPresent(Bool.self, forKey: .dnsEnforcementEnabled) ?? false
     }
 }
 

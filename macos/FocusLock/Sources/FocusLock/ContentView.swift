@@ -16,11 +16,13 @@ struct ContentView: View {
                     domainsSection
                     Divider()
                     protectedAppsSection
+                    Divider()
+                    dnsSection
                 }
             }
         }
         .padding(20)
-        .frame(width: 440, height: 700)
+        .frame(width: 440, height: 780)
         .onAppear { viewModel.startPolling() }
         .alert(
             "Action denied",
@@ -43,14 +45,18 @@ struct ContentView: View {
         !viewModel.state.protectedApps.isEmpty
     }
 
+    private var isEnforcingDNS: Bool {
+        viewModel.state.dnsEnforcementEnabled
+    }
+
     private var header: some View {
         HStack(spacing: 12) {
             Image(systemName: "lock.shield.fill")
                 .font(.system(size: 28))
-                .foregroundStyle((isBlocking || isProtecting) ? .red : .green)
+                .foregroundStyle((isBlocking || isProtecting || isEnforcingDNS) ? .red : .green)
             VStack(alignment: .leading, spacing: 2) {
                 Text("FocusLock").font(.title3).bold()
-                if isBlocking || isProtecting {
+                if isBlocking || isProtecting || isEnforcingDNS {
                     Text("Active 24/7 - only the Guardian can undo this")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
@@ -148,6 +154,29 @@ struct ContentView: View {
                     }
                 }
                 .frame(height: 130)
+            }
+        }
+    }
+
+    private var dnsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("DNS Enforcement").font(.headline)
+            Text("Points every network connection at Cloudflare's content-filtering DNS (blocks malware and adult content) and blocks alternate/DoH resolvers so it can't be sidestepped by switching DNS providers.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            HStack {
+                if viewModel.state.dnsEnforcementEnabled {
+                    Label("Enforced (Cloudflare-filtered)", systemImage: "checkmark.shield.fill")
+                        .foregroundStyle(.green)
+                    Spacer()
+                    Button("Disable...") { viewModel.disableDNSEnforcement() }
+                        .foregroundStyle(.red)
+                } else {
+                    Label("Not enforced", systemImage: "shield.slash")
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Enable") { viewModel.enableDNSEnforcement() }
+                }
             }
         }
     }
