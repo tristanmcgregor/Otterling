@@ -49,6 +49,7 @@ import au.com.tbmcgregor.bwparker.familyguard.knox.KnoxLicenseManager
 import au.com.tbmcgregor.bwparker.familyguard.monitoring.ProtectionEnforcementService
 import au.com.tbmcgregor.bwparker.familyguard.pin.PinAuthManager
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.AppUninstallGuard
+import au.com.tbmcgregor.bwparker.familyguard.restrictions.BatteryOptimizationManager
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.DeviceRestrictionsManager
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.Restriction
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.RestrictionEnforcementWorker
@@ -73,10 +74,13 @@ class MainActivity : ComponentActivity() {
 
     private val notificationPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    private val batteryOptimizationLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         requestNotificationPermissionIfNeeded()
+        requestBatteryOptimizationExemptionIfNeeded()
         ProtectionEnforcementService.start(applicationContext)
         RestrictionEnforcementWorker.enqueuePeriodic(applicationContext)
         setContent {
@@ -196,6 +200,13 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun requestBatteryOptimizationExemptionIfNeeded() {
+        val batteryManager = BatteryOptimizationManager(applicationContext)
+        if (!batteryManager.isExempt()) {
+            batteryOptimizationLauncher.launch(batteryManager.exemptionRequestIntent())
+        }
+    }
+
     @Composable
     private fun DeviceOwnerSection() {
         val ownerManager = remember { DeviceOwnerManager(applicationContext) }
@@ -263,12 +274,14 @@ class MainActivity : ComponentActivity() {
     private fun RestrictionsSection() {
         val restrictionsManager = remember { DeviceRestrictionsManager(applicationContext) }
         val tamperLogger = remember { TamperEventLogger(applicationContext) }
+        val batteryManager = remember { BatteryOptimizationManager(applicationContext) }
         var refreshTrigger by remember { mutableIntStateOf(0) }
         var recentEvents by remember { mutableStateOf<List<TamperEvent>>(emptyList()) }
         val states = remember(refreshTrigger) {
             Restriction.entries.associateWith { restrictionsManager.isEnabled(it) }
         }
         val uninstallBlocked = remember(refreshTrigger) { restrictionsManager.isUninstallBlocked() }
+        val batteryExempt = remember(refreshTrigger) { batteryManager.isExempt() }
         LaunchedEffect(refreshTrigger) {
             recentEvents = tamperLogger.recent()
         }
@@ -279,6 +292,32 @@ class MainActivity : ComponentActivity() {
             subtitle = "Requires Device Owner (see above). Samsung's bootloader recovery-menu " +
                 "factory reset may need Knox on top of this — verify physically.",
         ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Battery optimization exemption", style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        "Keeps enforcement running in the background without Samsung freezing it.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                if (batteryExempt) {
+                    StatusText("Exempt", isGood = true)
+                } else {
+                    Button(onClick = {
+                        batteryOptimizationLauncher.launch(batteryManager.exemptionRequestIntent())
+                        refreshTrigger++
+                    }) {
+                        Text("Grant")
+                    }
+                }
+            }
+
+            HorizontalDivider()
+
             SwitchRow(
                 label = "Block app uninstall",
                 checked = uninstallBlocked,
