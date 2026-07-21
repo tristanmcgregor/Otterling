@@ -13,11 +13,19 @@ class DeviceRestrictionsManager(private val context: Context) {
 
     private val adminComponent = ComponentName(context, DeviceAdminReceiverImpl::class.java)
 
+    private val preferences = RestrictionPreferences(context)
+
     fun isEnabled(restriction: Restriction): Boolean =
         devicePolicyManager?.getUserRestrictions(adminComponent)
             ?.getBoolean(restriction.userManagerKey) == true
 
+    /** Applies the change and remembers it as the parent's intended state for drift checks. */
     fun setEnabled(restriction: Restriction, enabled: Boolean) {
+        preferences.setDesired(restriction, enabled)
+        applyToSystem(restriction, enabled)
+    }
+
+    private fun applyToSystem(restriction: Restriction, enabled: Boolean) {
         val dpm = devicePolicyManager ?: return
         try {
             if (enabled) {
@@ -34,7 +42,13 @@ class DeviceRestrictionsManager(private val context: Context) {
     fun isUninstallBlocked(): Boolean =
         devicePolicyManager?.isUninstallBlocked(adminComponent, context.packageName) == true
 
+    /** Applies the change and remembers it as the parent's intended state for drift checks. */
     fun setUninstallBlocked(blocked: Boolean) {
+        preferences.setUninstallBlockDesired(blocked)
+        applyUninstallBlockedToSystem(blocked)
+    }
+
+    private fun applyUninstallBlockedToSystem(blocked: Boolean) {
         try {
             devicePolicyManager?.setUninstallBlocked(adminComponent, context.packageName, blocked)
         } catch (error: SecurityException) {
@@ -49,16 +63,35 @@ class DeviceRestrictionsManager(private val context: Context) {
         Log.i(TAG, "Applied default tamper-resistance restrictions")
     }
 
+    /**
+     * Reapplies whatever the parent last chose (via [setEnabled]/[setUninstallBlocked]), not a
+     * hardcoded "always on" default. Only a live restriction that disagrees with that chosen
+     * state is treated as drift/tampering and logged -- so intentionally disabling something
+     * (e.g. USB debugging, temporarily, to install an update over ADB) doesn't get silently
+     * reverted a few minutes later.
+     */
     suspend fun detectDriftAndReapply(logger: TamperEventLogger) {
-        val missing = Restriction.entries.filterNot(::isEnabled).map { it.displayName }.toMutableList()
-        if (!isUninstallBlocked()) missing += "Block app uninstall"
-        if (missing.isEmpty()) return
+        val drifted = mutableListOf<String>()
 
+        Restriction.entries.forEach { restriction ->
+            val desired = preferences.isDesired(restriction)
+            if (isEnabled(restriction) != desired) {
+                drifted += restriction.displayName
+                applyToSystem(restriction, desired)
+            }
+        }
+
+        val desiredUninstallBlocked = preferences.isUninstallBlockDesired()
+        if (isUninstallBlocked() != desiredUninstallBlocked) {
+            drifted += "Block app uninstall"
+            applyUninstallBlockedToSystem(desiredUninstallBlocked)
+        }
+
+        if (drifted.isEmpty()) return
         logger.log(
             type = "RESTRICTION_DRIFT",
-            details = "Protection disabled or missing: ${missing.joinToString()}",
+            details = "Protection changed unexpectedly, restored: ${drifted.joinToString()}",
         )
-        applyDefaults()
     }
 
     private companion object {
