@@ -5,6 +5,8 @@ import android.content.Context
 import android.content.Intent
 import android.util.Log
 import au.com.tbmcgregor.bwparker.familyguard.R
+import au.com.tbmcgregor.bwparker.familyguard.monitoring.UsageTrackingService
+import au.com.tbmcgregor.bwparker.familyguard.reporting.DailySummaryWorker
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.DeviceRestrictionsManager
 import au.com.tbmcgregor.bwparker.familyguard.schedule.ScheduleEnforcementWorker
 
@@ -14,6 +16,8 @@ class DeviceAdminReceiverImpl : DeviceAdminReceiver() {
         Log.i(TAG, "Device admin enabled")
         DeviceRestrictionsManager(context).applyDefaults()
         ScheduleEnforcementWorker.enqueuePeriodic(context)
+        DailySummaryWorker.enqueuePeriodic(context)
+        UsageTrackingService.start(context)
     }
 
     override fun onDisabled(context: Context, intent: Intent) {

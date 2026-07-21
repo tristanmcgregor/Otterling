@@ -86,6 +86,30 @@ section:
   package stays suspended if it's permanently blocked, even outside any
   schedule window.
 
+## Phase 5 — Usage logging & reporting
+
+Also stock Android, no Knox required. In the "Phase 5 — Usage & reporting"
+section:
+
+- **One-time onboarding step**: `PACKAGE_USAGE_STATS` is a "special access"
+  permission that can't be requested at runtime like a normal permission. Tap
+  **Open Usage Access settings** and enable access for Family Device Guard
+  under Settings → Special app access → Usage access. Until granted, the
+  section just shows this prompt.
+- **`UsageTrackingService`**: a foreground service (declared
+  `foregroundServiceType="specialUse"` per Android 14+ requirements, with a
+  low-importance "Monitoring is active" notification) that polls
+  `UsageStatsManager` every 5 minutes, persists today's per-app foreground
+  totals to Room, and re-asserts the Phase 3 restrictions each cycle as a
+  drift check. Started on app open, Device Owner enable, and
+  `BOOT_COMPLETED` (via `BootCompletedReceiver`).
+- **Today's usage list**: shows persisted per-app totals; **Refresh**
+  re-queries immediately instead of waiting for the next poll.
+- **`DailySummaryWorker`**: a daily `WorkManager` job that posts a local
+  notification digest of the top 5 apps by usage today. Notification-only by
+  design — no email/SMTP backend, so nothing leaves the device. Tap **Send
+  test summary now** to trigger it on demand instead of waiting a full day.
+
 ## Secret handling
 
 `local.properties` and `app/libs/*.jar` are ignored. Never commit Knox license
