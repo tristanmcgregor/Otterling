@@ -17,4 +17,9 @@ public enum FocusLockConstants {
     /// Marker comment so the daemon can find/replace only the lines it owns in /etc/hosts.
     public static let hostsMarkerBegin = "# FocusLock BEGIN - do not edit, managed by FocusLockHelperd"
     public static let hostsMarkerEnd = "# FocusLock END"
+
+    /// Marker comments so the daemon can find/replace only the anchor reference it owns in
+    /// /etc/pf.conf, without touching Apple's or any other tool's rules.
+    public static let pfConfMarkerBegin = "# FocusLock BEGIN - do not edit, managed by FocusLockHelperd"
+    public static let pfConfMarkerEnd = "# FocusLock END"
 }
