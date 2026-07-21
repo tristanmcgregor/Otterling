@@ -1,6 +1,7 @@
 package au.com.tbmcgregor.bwparker.familyguard.ui
 
 import android.content.Context
+import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
@@ -29,14 +30,27 @@ data class InstalledAppInfo(
     val label: String,
 )
 
-/** Returns launchable apps (excluding this app), sorted by display name. Call this off the main thread. */
+/**
+ * Returns installed apps (excluding this app), sorted by display name. Call this off the main
+ * thread. Deliberately does NOT require a launcher icon/intent -- apps like Accountable2You
+ * commonly hide their icon so kids can't easily find and remove them, so filtering by
+ * [PackageManager.getLaunchIntentForPackage] would hide exactly the apps a parent most wants to
+ * find here. As device owner this app can see all installed packages regardless of Android's
+ * normal package-visibility filtering. Pure factory system apps (no user-visible purpose, never
+ * updated) are excluded to keep the list manageable; pre-installed apps that have since been
+ * updated (Chrome, Play Store, etc.) are kept.
+ */
 fun loadInstalledApps(context: Context): List<InstalledAppInfo> {
     val packageManager = context.packageManager
     val ownPackage = context.packageName
     return packageManager.getInstalledApplications(PackageManager.GET_META_DATA)
         .asSequence()
         .filter { it.packageName != ownPackage }
-        .filter { packageManager.getLaunchIntentForPackage(it.packageName) != null }
+        .filter { app ->
+            val isSystemApp = (app.flags and ApplicationInfo.FLAG_SYSTEM) != 0
+            val wasUpdated = (app.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0
+            !isSystemApp || wasUpdated
+        }
         .map { InstalledAppInfo(it.packageName, it.loadLabel(packageManager).toString()) }
         .distinctBy { it.packageName }
         .sortedBy { it.label.lowercase() }
