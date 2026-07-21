@@ -72,5 +72,7 @@ dependencies {
     implementation("androidx.work:work-runtime-ktx:2.11.2")
     implementation("androidx.security:security-crypto:1.1.0")
 
+    testImplementation("junit:junit:4.13.2")
+
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

@@ -32,6 +32,8 @@ class UsageStatsCollector(private val context: Context) {
                 dao.upsert(AppUsageStat(stat.packageName, today.toEpochDay(), stat.totalTimeInForeground))
             }
         collectSessions(usm, startOfDayMillis, nowMillis)
+        dao.deleteOlderThan(today.minusDays(30).toEpochDay())
+        sessionDao.deleteOlderThan(today.minusDays(30).atStartOfDay(zone).toInstant().toEpochMilli())
     }
 
     suspend fun today(): List<AppUsageStat> = dao.getForDate(LocalDate.now().toEpochDay())

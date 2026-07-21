@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.IBinder
 import android.util.Log
+import au.com.tbmcgregor.bwparker.familyguard.content.AppSuspensionManager
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.DeviceRestrictionsManager
 import au.com.tbmcgregor.bwparker.familyguard.tamper.TamperEventLogger
 import kotlinx.coroutines.CoroutineScope
@@ -37,7 +38,10 @@ class UsageTrackingService : Service() {
             val collector = UsageStatsCollector(applicationContext)
             val restrictionsManager = DeviceRestrictionsManager(applicationContext)
             val tamperLogger = TamperEventLogger(applicationContext)
+            val suspensionManager = AppSuspensionManager(applicationContext)
             loopJob = scope.launch {
+                runCatching { suspensionManager.reapplyAll() }
+                    .onFailure { Log.w(TAG, "Blocked-app reapply failed", it) }
                 while (isActive) {
                     runCatching { collector.collectToday() }
                         .onFailure { Log.w(TAG, "Usage stats poll failed", it) }

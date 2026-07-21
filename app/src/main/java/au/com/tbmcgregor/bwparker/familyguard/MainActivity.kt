@@ -517,6 +517,16 @@ class MainActivity : ComponentActivity() {
                             style = MaterialTheme.typography.bodySmall,
                         )
                     }
+                    Switch(
+                        checked = rule.enabled,
+                        onCheckedChange = { enabled ->
+                            coroutineScope.launch {
+                                scheduleEngine.upsert(rule.copy(enabled = enabled))
+                                withContext(Dispatchers.IO) { scheduleEngine.applyNow() }
+                                refreshTrigger++
+                            }
+                        },
+                    )
                     TextButton(onClick = {
                         coroutineScope.launch {
                             scheduleEngine.delete(rule.id)
