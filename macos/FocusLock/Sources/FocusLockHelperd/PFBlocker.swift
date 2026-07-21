@@ -68,11 +68,13 @@ enum PFBlocker {
         var lines = ["# Managed by FocusLockHelperd -- forces DNS through the system resolver"]
         lines.append("block drop quick proto udp from any to any port 853")
         lines.append("block drop quick proto tcp from any to any port 853")
+        // Port 53 only (plus global 853 DoT above). Do NOT block 443 on these IPs -- Chrome
+        // Secure-DNS / DoH in "secure" mode talks to 8.8.8.8:443 / 1.1.1.1:443 and will show
+        // DNS_PROBE_STARTED with no fallback if those are dropped. Browser DoH is disabled
+        // separately via managed policy so traffic uses system DNS (1.1.1.3) instead.
         for ip in knownDoHResolverIPs {
             lines.append("block drop quick proto udp from any to \(ip) port 53")
             lines.append("block drop quick proto tcp from any to \(ip) port 53")
-            lines.append("block drop quick proto tcp from any to \(ip) port 443")
-            lines.append("block drop quick proto udp from any to \(ip) port 443")
         }
         let content = lines.joined(separator: "\n") + "\n"
         try? content.write(toFile: FocusLockConstants.pfAnchorFilePath, atomically: true, encoding: .utf8)
