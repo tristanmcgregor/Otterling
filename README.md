@@ -110,6 +110,26 @@ section:
   design — no email/SMTP backend, so nothing leaves the device. Tap **Send
   test summary now** to trigger it on demand instead of waiting a full day.
 
+## Phase 6 — PIN lock & consolidated settings
+
+The home screen is now a minimal status view (Device Owner state + an
+**Open Settings** button). Tapping it always requires a PIN:
+
+- **First time**: you're walked through creating a PIN (enter + confirm, 4-8
+  digits).
+- **After that**: entering the correct PIN unlocks the Settings screen, which
+  hosts every control from Phases 1-5 (Device Owner, tamper resistance,
+  content filtering, scheduling, usage & reporting, Knox setup). Leaving
+  Settings via **Back** re-locks it — the PIN is required again next time.
+- **Change PIN**: at the bottom of Settings; clears the current PIN and
+  immediately prompts you to set a new one.
+
+The PIN itself is never stored — only a salted PBKDF2 (120k iterations,
+SHA-256) hash, in plain `SharedPreferences`. `androidx.security:security-crypto`
+(`EncryptedSharedPreferences`) was deliberately skipped: it's being phased out
+upstream (keyset-corruption crashes on some OEMs) and buys nothing here since
+only a one-way hash is stored, never anything reversible.
+
 ## Secret handling
 
 `local.properties` and `app/libs/*.jar` are ignored. Never commit Knox license

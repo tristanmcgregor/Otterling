@@ -45,17 +45,21 @@ import au.com.tbmcgregor.bwparker.familyguard.monitoring.AppUsageStat
 import au.com.tbmcgregor.bwparker.familyguard.monitoring.UsageAccessManager
 import au.com.tbmcgregor.bwparker.familyguard.monitoring.UsageStatsCollector
 import au.com.tbmcgregor.bwparker.familyguard.monitoring.UsageTrackingService
+import au.com.tbmcgregor.bwparker.familyguard.pin.PinAuthManager
 import au.com.tbmcgregor.bwparker.familyguard.reporting.DailySummaryWorker
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.DeviceRestrictionsManager
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.Restriction
 import au.com.tbmcgregor.bwparker.familyguard.schedule.ScheduleEnforcementWorker
 import au.com.tbmcgregor.bwparker.familyguard.schedule.ScheduleEngine
 import au.com.tbmcgregor.bwparker.familyguard.schedule.ScheduleRule
+import au.com.tbmcgregor.bwparker.familyguard.ui.PinLockScreen
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
+    private enum class Screen { Home, PinEntry, Settings }
+
     private val notificationPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
@@ -68,27 +72,88 @@ class MainActivity : ComponentActivity() {
         setContent {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .verticalScroll(rememberScrollState())
-                            .padding(24.dp),
-                        verticalArrangement = Arrangement.spacedBy(24.dp),
-                    ) {
-                        Text("Family Device Guard", style = MaterialTheme.typography.headlineMedium)
-                        DeviceOwnerSection()
-                        HorizontalDivider()
-                        RestrictionsSection()
-                        HorizontalDivider()
-                        ContentFilterSection()
-                        HorizontalDivider()
-                        ScheduleSection()
-                        HorizontalDivider()
-                        UsageSection()
-                        HorizontalDivider()
-                        KnoxSetupSection()
+                    var screen by remember { mutableStateOf(Screen.Home) }
+                    val pinAuthManager = remember { PinAuthManager(applicationContext) }
+
+                    when (screen) {
+                        Screen.Home -> HomeScreen(onOpenSettings = { screen = Screen.PinEntry })
+                        Screen.PinEntry -> PinLockScreen(
+                            pinAuthManager = pinAuthManager,
+                            onUnlocked = { screen = Screen.Settings },
+                            onCancel = { screen = Screen.Home },
+                        )
+                        Screen.Settings -> SettingsScreen(
+                            onBack = { screen = Screen.Home },
+                            onChangePin = {
+                                pinAuthManager.clearPin()
+                                screen = Screen.PinEntry
+                            },
+                        )
                     }
                 }
+            }
+        }
+    }
+
+    @Composable
+    private fun HomeScreen(onOpenSettings: () -> Unit) {
+        val ownerManager = remember { DeviceOwnerManager(applicationContext) }
+        val status = remember { ownerManager.currentStatus() }
+
+        Column(
+            modifier = Modifier.fillMaxSize().padding(24.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Text("Family Device Guard", style = MaterialTheme.typography.headlineMedium)
+            Text(
+                if (status.isDeviceOwner) "Protections: Active" else "Protections: Not set up yet",
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(
+                if (status.isDeviceOwner) {
+                    "This device is under Device Owner control."
+                } else {
+                    "Open Settings to finish setup (Device Admin / Device Owner section)."
+                },
+                style = MaterialTheme.typography.bodySmall,
+            )
+            Button(onClick = onOpenSettings) {
+                Text("Open Settings")
+            }
+        }
+    }
+
+    @Composable
+    private fun SettingsScreen(onBack: () -> Unit, onChangePin: () -> Unit) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(24.dp),
+            verticalArrangement = Arrangement.spacedBy(24.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("Settings", style = MaterialTheme.typography.headlineMedium)
+                TextButton(onClick = onBack) { Text("Back") }
+            }
+            DeviceOwnerSection()
+            HorizontalDivider()
+            RestrictionsSection()
+            HorizontalDivider()
+            ContentFilterSection()
+            HorizontalDivider()
+            ScheduleSection()
+            HorizontalDivider()
+            UsageSection()
+            HorizontalDivider()
+            KnoxSetupSection()
+            HorizontalDivider()
+            OutlinedButton(onClick = onChangePin) {
+                Text("Change PIN")
             }
         }
     }
