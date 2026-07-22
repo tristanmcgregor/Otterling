@@ -55,7 +55,9 @@ fun VpnFilterSection(context: Context) {
             "adult-content domain list. Doesn't decrypt or read any web page content -- see chat " +
             "for why. Once enabled, Android won't let this be turned off from Settings -- but " +
             "unlike a full lockdown VPN, if the filter service itself is killed, traffic falls " +
-            "back to normal (unfiltered) rather than cutting off the internet entirely.",
+            "back to normal (unfiltered) rather than cutting off the internet entirely. Enabling " +
+            "this temporarily falls the separate Private DNS filter back to opportunistic (and " +
+            "restores it when disabled) so the two don't conflict.",
     ) {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text("Status", style = MaterialTheme.typography.bodyLarge)
@@ -74,7 +76,8 @@ fun VpnFilterSection(context: Context) {
                         coroutineScope.launch {
                             statusMessage = "Downloading blocklist..."
                             withContext(Dispatchers.IO) { blocklistManager.refresh() }
-                            statusMessage = if (vpnManager.enable()) "Enabled." else "Failed -- is Device Owner active?"
+                            val didEnable = withContext(Dispatchers.IO) { vpnManager.enable() }
+                            statusMessage = if (didEnable) "Enabled." else "Failed -- is Device Owner active?"
                             busy = false
                             refreshTrigger++
                         }
@@ -88,7 +91,8 @@ fun VpnFilterSection(context: Context) {
                     onClick = {
                         busy = true
                         coroutineScope.launch {
-                            statusMessage = if (vpnManager.disable()) "Disabled." else "Failed to disable."
+                            val didDisable = withContext(Dispatchers.IO) { vpnManager.disable() }
+                            statusMessage = if (didDisable) "Disabled." else "Failed to disable."
                             busy = false
                             refreshTrigger++
                         }
