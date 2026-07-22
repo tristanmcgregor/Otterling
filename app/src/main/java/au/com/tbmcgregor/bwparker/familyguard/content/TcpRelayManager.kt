@@ -10,6 +10,7 @@ import kotlin.random.Random
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -48,6 +49,17 @@ class TcpRelayManager(
         @Volatile var clientNextSeq: Long = 0
 
         @Volatile var serverSeq: Long = 0
+
+        // Flow control for the socket -> tun direction: how far the client's own kernel TCP
+        // stack has acknowledged our stream, and how much more buffer space it's currently
+        // advertising beyond that point. Without honoring this, a fast real-socket read (e.g. a
+        // burst of audio data) gets blasted onto the tun regardless of whether the client can
+        // buffer it; since there's no retransmission here, anything sent past its window is just
+        // silently dropped by the client's own kernel and never recovered -- from the app's point
+        // of view the stream just stalls forever. Starts at WINDOW_SIZE (this class's own
+        // optimistic default) since the real value only arrives once the first client ACK does.
+        @Volatile var clientAcked: Long = 0
+        @Volatile var clientWindow: Int = WINDOW_SIZE
     }
 
     private val connections = ConcurrentHashMap<FlowKey, Connection>()
@@ -117,6 +129,10 @@ class TcpRelayManager(
         connection.clientNextSeq = (synPacket.tcpSeq + 1) and SEQ_MASK
         val isn = Random.nextInt().toLong() and SEQ_MASK
         connection.serverSeq = (isn + 1) and SEQ_MASK
+        // Anchor the "acked" edge to the same point so the first waitForWindow() check (which
+        // may run before the client's handshake-completing ACK has been processed) doesn't see a
+        // bogus multi-gigabyte "in-flight" gap between a real serverSeq and a zeroed clientAcked.
+        connection.clientAcked = connection.serverSeq
         writeToTun(synPacket.buildTcpSegment(isn, connection.clientNextSeq, IpPacket.TCP_SYN or IpPacket.TCP_ACK, WINDOW_SIZE))
 
         scope.launch { consumeInbox(connection) }
@@ -131,6 +147,15 @@ class TcpRelayManager(
 
     private suspend fun handleEstablished(connection: Connection, packet: IpPacket) {
         val socket = connection.socket ?: return
+        if (packet.isAck) {
+            // Sequence numbers wrap at 2^32; only move the "acked" edge forward using a signed-diff
+            // comparison, so a stale/out-of-order ACK can't look like the window jumped backwards.
+            val delta = (packet.tcpAck - connection.clientAcked) and SEQ_MASK
+            if (delta in 1 until WRAP_THRESHOLD) {
+                connection.clientAcked = packet.tcpAck
+            }
+            connection.clientWindow = packet.tcpWindow
+        }
         if (packet.payload.isNotEmpty() && packet.tcpSeq == connection.clientNextSeq) {
             try {
                 withContext(Dispatchers.IO) { socket.getOutputStream().write(packet.payload) }
@@ -151,6 +176,22 @@ class TcpRelayManager(
         }
     }
 
+    /**
+     * Blocks (without holding up any other connection -- each runs in its own coroutine) until
+     * the client's advertised window has room for [neededBytes] more unacknowledged bytes, per
+     * its most recent ACK. Polls rather than using a signal, since a window update is just an
+     * ordinary incoming ACK processed on a different coroutine ([consumeInbox]) with no natural
+     * place to hang a callback; the poll interval is short enough not to add noticeable latency.
+     */
+    private suspend fun waitForWindow(connection: Connection, neededBytes: Int) {
+        while (true) {
+            val inFlight = (connection.serverSeq - connection.clientAcked) and SEQ_MASK
+            val available = connection.clientWindow.toLong() - inFlight
+            if (available >= neededBytes) return
+            delay(WINDOW_POLL_DELAY_MS)
+        }
+    }
+
     private suspend fun relayFromSocket(connection: Connection) {
         val socket = connection.socket ?: return
         val buffer = ByteArray(MAX_SEGMENT_SIZE)
@@ -159,6 +200,7 @@ class TcpRelayManager(
             while (true) {
                 val read = withContext(Dispatchers.IO) { input.read(buffer) }
                 if (read < 0) break
+                waitForWindow(connection, read)
                 writeToTun(
                     connection.templatePacket.buildTcpSegment(
                         connection.serverSeq,
@@ -215,5 +257,7 @@ class TcpRelayManager(
         const val MAX_SEGMENT_SIZE = 1400
         const val CONNECT_TIMEOUT_MS = 8_000
         const val SEQ_MASK = 0xFFFFFFFFL
+        const val WRAP_THRESHOLD = 0x80000000L
+        const val WINDOW_POLL_DELAY_MS = 10L
     }
 }
