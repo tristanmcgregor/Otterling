@@ -52,11 +52,17 @@ class VpnFilterManager(private val context: Context) {
      * the main thread.
      */
     fun enable(): Boolean {
-        VpnFilterService.start(context)
+        prefs.edit().putBoolean(KEY_ENABLED, true).apply()
         val dpm = devicePolicyManager ?: return false
-        return try {
+        // Register the always-on VPN FIRST: this is what actually makes the system bring the
+        // tunnel back up on its own after a reboot (it binds the service itself, which isn't
+        // subject to the background foreground-service-start throttling that a BOOT_COMPLETED
+        // receiver is). The manual start below is only a best-effort fast-path for the "just
+        // toggled it on while the app is open" case -- if it throws (e.g. started from the boot
+        // receiver on Android 12+), we must NOT let that abort the always-on registration, or the
+        // VPN silently never comes back after a restart.
+        val registered = try {
             dpm.setAlwaysOnVpnPackage(adminComponent, context.packageName, false)
-            prefs.edit().putBoolean(KEY_ENABLED, true).apply()
             suppressConflictingPrivateDns()
             true
         } catch (error: SecurityException) {
@@ -66,6 +72,9 @@ class VpnFilterManager(private val context: Context) {
             Log.e(TAG, "Device doesn't support always-on VPN lockdown", error)
             false
         }
+        runCatching { VpnFilterService.start(context) }
+            .onFailure { Log.w(TAG, "Direct VPN start failed (always-on will bring it up)", it) }
+        return registered
     }
 
     /**
