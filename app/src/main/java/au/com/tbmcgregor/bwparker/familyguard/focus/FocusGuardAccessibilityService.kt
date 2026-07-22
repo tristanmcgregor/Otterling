@@ -63,7 +63,9 @@ class FocusGuardAccessibilityService : AccessibilityService() {
     private fun onForegroundChanged(packageName: String) {
         tickJob?.cancel()
         scope.launch {
-            triggerPackages = habitRuleManager.rules().map { it.triggerPackageName }.toSet()
+            // HabitShare is always scanned for habit rows (so detection/tuning works even before
+            // any rule references it as a trigger), in addition to whatever other apps rules use.
+            triggerPackages = habitRuleManager.rules().map { it.triggerPackageName }.toSet() + HABITSHARE_PACKAGE_NAME
 
             val mindfulApp = mindfulAppManager.apps().find { it.packageName == packageName }
             if (mindfulApp != null && !mindfulAppManager.isWithinGracePeriod(packageName)) {
@@ -185,6 +187,7 @@ class FocusGuardAccessibilityService : AccessibilityService() {
     private companion object {
         const val TICK_MILLIS = 5_000L
         const val TICK_SECONDS = 5
+        const val HABITSHARE_PACKAGE_NAME = "com.habitshareapp"
         val SUB_FEATURE_HINTS = listOf("shorts", "reel")
     }
 }
