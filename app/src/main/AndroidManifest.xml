@@ -85,6 +85,14 @@
             android:taskAffinity=""
             android:theme="@style/Theme.FamilyDeviceGuard" />
 
+        <activity
+            android:name=".tamper.AccessibilityGuardActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:lockTaskMode="if_whitelisted"
+            android:theme="@style/Theme.FamilyDeviceGuard" />
+
         <service
             android:name=".content.VpnFilterService"
             android:exported="true"

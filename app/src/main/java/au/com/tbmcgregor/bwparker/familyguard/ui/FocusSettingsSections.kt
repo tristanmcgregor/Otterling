@@ -1,6 +1,5 @@
 package au.com.tbmcgregor.bwparker.familyguard.ui
 
-import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.provider.Settings
@@ -47,35 +46,32 @@ import au.com.tbmcgregor.bwparker.familyguard.focus.AppTimeBudget
 import au.com.tbmcgregor.bwparker.familyguard.focus.AppTimeBudgetManager
 import au.com.tbmcgregor.bwparker.familyguard.focus.DetectedHabit
 import au.com.tbmcgregor.bwparker.familyguard.focus.DetectedHabitManager
-import au.com.tbmcgregor.bwparker.familyguard.focus.FocusGuardAccessibilityService
 import au.com.tbmcgregor.bwparker.familyguard.focus.HabitRule
 import au.com.tbmcgregor.bwparker.familyguard.focus.HabitRuleManager
 import au.com.tbmcgregor.bwparker.familyguard.focus.HabitTrackerScanner
 import au.com.tbmcgregor.bwparker.familyguard.focus.MindfulApp
 import au.com.tbmcgregor.bwparker.familyguard.focus.MindfulAppManager
 import au.com.tbmcgregor.bwparker.familyguard.focus.requiredHabitNames
+import au.com.tbmcgregor.bwparker.familyguard.restrictions.AccessibilityGuard
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-private fun isAccessibilityServiceEnabled(context: Context): Boolean {
-    val expected = ComponentName(context, FocusGuardAccessibilityService::class.java).flattenToString()
-    val enabled = Settings.Secure.getString(context.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
-        ?: return false
-    return enabled.split(':').any { it.equals(expected, ignoreCase = true) }
-}
-
-/** Prerequisite for every feature below: friction screens, time budgets, and habit detection. */
+/** Prerequisite for every feature below: friction screens, time budgets, and habit detection. If
+ * this ever gets turned off, [au.com.tbmcgregor.bwparker.familyguard.tamper.AccessibilityGuardActivity]
+ * takes over the screen until it's back on -- see [AccessibilityGuard] for why that's a nag rather
+ * than a true block (Android has no Device Owner API to prevent disabling it outright). */
 @Composable
 fun AccessibilityServiceSection(context: Context) {
     var refreshTrigger by remember { mutableIntStateOf(0) }
-    val enabled = remember(refreshTrigger) { isAccessibilityServiceEnabled(context) }
+    val enabled = remember(refreshTrigger) { AccessibilityGuard.isEnabled(context) }
 
     SectionCard(
         title = "Self-Improvement Engine",
         icon = Icons.Default.Accessibility,
-        subtitle = "Powers the friction screens, time budgets, and habit check-ins below. " +
-            "Must be turned on manually in Android's Accessibility settings.",
+        subtitle = "Powers the friction screens, time budgets, and habit check-ins below. Must " +
+            "be turned on manually in Android's Accessibility settings -- if it's turned back " +
+            "off, a full-screen reminder takes over the device until it's re-enabled.",
     ) {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text("Accessibility service", style = MaterialTheme.typography.bodyLarge)

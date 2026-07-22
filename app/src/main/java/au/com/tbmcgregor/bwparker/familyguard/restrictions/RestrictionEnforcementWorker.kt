@@ -8,6 +8,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import au.com.tbmcgregor.bwparker.familyguard.content.AppSuspensionManager
+import au.com.tbmcgregor.bwparker.familyguard.tamper.AccessibilityGuardActivity
 import au.com.tbmcgregor.bwparker.familyguard.tamper.TamperEventLogger
 import java.util.concurrent.TimeUnit
 
@@ -32,6 +33,16 @@ class RestrictionEnforcementWorker(context: Context, params: WorkerParameters) :
             .onFailure { Log.w(TAG, "Blocked-app reapply failed", it) }
         runCatching { AppUninstallGuard(applicationContext).reapplyAll() }
             .onFailure { Log.w(TAG, "Uninstall-protection reapply failed", it) }
+        runCatching {
+            AccessibilityGuard.reapplyAllowlist(applicationContext)
+            if (!AccessibilityGuard.isEnabled(applicationContext)) {
+                tamperLogger.log(
+                    type = "ACCESSIBILITY_DISABLED",
+                    details = "Accessibility service found off during background check; showing lock screen",
+                )
+                AccessibilityGuardActivity.launch(applicationContext)
+            }
+        }.onFailure { Log.w(TAG, "Accessibility guard check failed", it) }
         return Result.success()
     }
 

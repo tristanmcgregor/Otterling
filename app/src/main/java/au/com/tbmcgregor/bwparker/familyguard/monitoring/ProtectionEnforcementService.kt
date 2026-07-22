@@ -6,15 +6,21 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.database.ContentObserver
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
+import android.provider.Settings
 import android.util.Log
 import au.com.tbmcgregor.bwparker.familyguard.content.AppSuspensionManager
 import au.com.tbmcgregor.bwparker.familyguard.focus.AppTimeBudgetManager
 import au.com.tbmcgregor.bwparker.familyguard.focus.BudgetEnforcer
 import au.com.tbmcgregor.bwparker.familyguard.focus.HabitRuleManager
 import au.com.tbmcgregor.bwparker.familyguard.focus.RewardLedgerManager
+import au.com.tbmcgregor.bwparker.familyguard.restrictions.AccessibilityGuard
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.AppUninstallGuard
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.DeviceRestrictionsManager
+import au.com.tbmcgregor.bwparker.familyguard.tamper.AccessibilityGuardActivity
 import au.com.tbmcgregor.bwparker.familyguard.tamper.TamperEventLogger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -33,10 +39,12 @@ import kotlinx.coroutines.launch
 class ProtectionEnforcementService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var loopJob: Job? = null
+    private var accessibilityObserver: ContentObserver? = null
 
     override fun onCreate() {
         super.onCreate()
         startForeground(NOTIFICATION_ID, buildNotification())
+        registerAccessibilityObserver()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -57,6 +65,8 @@ class ProtectionEnforcementService : Service() {
                 while (isActive) {
                     runCatching { restrictionsManager.detectDriftAndReapply(tamperLogger) }
                         .onFailure { Log.w(TAG, "Restriction drift check failed", it) }
+                    runCatching { checkAccessibilityGuard(tamperLogger) }
+                        .onFailure { Log.w(TAG, "Accessibility guard check failed", it) }
                     runCatching { budgetEnforcer.reapplyAll() }
                         .onFailure { Log.w(TAG, "Time budget reapply failed", it) }
                     runCatching { rewardLedgerManager.reapply() }
@@ -72,7 +82,41 @@ class ProtectionEnforcementService : Service() {
         return START_STICKY
     }
 
+    /** Near-instant reaction to the accessibility toggle, on top of the ~5-minute poll above --
+     * fires within a fraction of a second of the user flipping it in Settings. */
+    private fun registerAccessibilityObserver() {
+        val observer = object : ContentObserver(Handler(Looper.getMainLooper())) {
+            override fun onChange(selfChange: Boolean) {
+                scope.launch {
+                    runCatching { checkAccessibilityGuard(TamperEventLogger(applicationContext)) }
+                        .onFailure { Log.w(TAG, "Accessibility guard check failed", it) }
+                }
+            }
+        }
+        accessibilityObserver = observer
+        contentResolver.registerContentObserver(
+            Settings.Secure.getUriFor(Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES),
+            false,
+            observer,
+        )
+    }
+
+    private fun checkAccessibilityGuard(tamperLogger: TamperEventLogger) {
+        AccessibilityGuard.reapplyAllowlist(applicationContext)
+        if (!AccessibilityGuard.isEnabled(applicationContext)) {
+            scope.launch {
+                tamperLogger.log(
+                    type = "ACCESSIBILITY_DISABLED",
+                    details = "Accessibility service was turned off; showing lock screen until it's re-enabled",
+                )
+            }
+            AccessibilityGuardActivity.launch(applicationContext)
+        }
+    }
+
     override fun onDestroy() {
+        accessibilityObserver?.let { contentResolver.unregisterContentObserver(it) }
+        accessibilityObserver = null
         loopJob?.cancel()
         loopJob = null
         super.onDestroy()
