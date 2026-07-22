@@ -6,6 +6,20 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
+import au.com.tbmcgregor.bwparker.familyguard.focus.AppTimeBudget
+import au.com.tbmcgregor.bwparker.familyguard.focus.AppTimeBudgetDao
+import au.com.tbmcgregor.bwparker.familyguard.focus.AppUsageCounter
+import au.com.tbmcgregor.bwparker.familyguard.focus.AppUsageCounterDao
+import au.com.tbmcgregor.bwparker.familyguard.focus.FocusSession
+import au.com.tbmcgregor.bwparker.familyguard.focus.FocusSessionDao
+import au.com.tbmcgregor.bwparker.familyguard.focus.HabitGateState
+import au.com.tbmcgregor.bwparker.familyguard.focus.HabitGateStateDao
+import au.com.tbmcgregor.bwparker.familyguard.focus.MindfulApp
+import au.com.tbmcgregor.bwparker.familyguard.focus.MindfulAppDao
+import au.com.tbmcgregor.bwparker.familyguard.focus.RewardApp
+import au.com.tbmcgregor.bwparker.familyguard.focus.RewardAppDao
+import au.com.tbmcgregor.bwparker.familyguard.focus.RewardLedger
+import au.com.tbmcgregor.bwparker.familyguard.focus.RewardLedgerDao
 import au.com.tbmcgregor.bwparker.familyguard.tamper.TamperEvent
 import au.com.tbmcgregor.bwparker.familyguard.tamper.TamperEventDao
 
@@ -14,8 +28,15 @@ import au.com.tbmcgregor.bwparker.familyguard.tamper.TamperEventDao
         BlockedApp::class,
         TamperEvent::class,
         ProtectedApp::class,
+        RewardApp::class,
+        MindfulApp::class,
+        AppTimeBudget::class,
+        AppUsageCounter::class,
+        FocusSession::class,
+        HabitGateState::class,
+        RewardLedger::class,
     ],
-    version = 8,
+    version = 9,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -24,6 +45,20 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun tamperEventDao(): TamperEventDao
 
     abstract fun protectedAppDao(): ProtectedAppDao
+
+    abstract fun rewardAppDao(): RewardAppDao
+
+    abstract fun mindfulAppDao(): MindfulAppDao
+
+    abstract fun appTimeBudgetDao(): AppTimeBudgetDao
+
+    abstract fun appUsageCounterDao(): AppUsageCounterDao
+
+    abstract fun focusSessionDao(): FocusSessionDao
+
+    abstract fun habitGateStateDao(): HabitGateStateDao
+
+    abstract fun rewardLedgerDao(): RewardLedgerDao
 
     companion object {
         @Volatile
@@ -44,6 +79,7 @@ abstract class AppDatabase : RoomDatabase() {
                         MIGRATION_5_6,
                         MIGRATION_6_7,
                         MIGRATION_7_8,
+                        MIGRATION_8_9,
                     )
                     .build()
                     .also { instance = it }
@@ -134,6 +170,82 @@ abstract class AppDatabase : RoomDatabase() {
                     CREATE TABLE IF NOT EXISTS protected_apps (
                         packageName TEXT NOT NULL,
                         PRIMARY KEY(packageName)
+                    )
+                    """.trimIndent(),
+                )
+            }
+        }
+
+        // Self-improvement features: reward-gated apps, friction/"mindful" apps, per-app time
+        // budgets (with an optional stricter sub-limit for a heuristically-detected in-app
+        // feature, e.g. YouTube Shorts), focus sessions, and the habit-tracker reward gate.
+        private val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS reward_apps (
+                        packageName TEXT NOT NULL,
+                        PRIMARY KEY(packageName)
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS mindful_apps (
+                        packageName TEXT NOT NULL,
+                        delaySeconds INTEGER NOT NULL,
+                        PRIMARY KEY(packageName)
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS app_time_budgets (
+                        packageName TEXT NOT NULL,
+                        dailyLimitMinutes INTEGER NOT NULL,
+                        subLimitMinutes INTEGER,
+                        subLimitLabel TEXT,
+                        PRIMARY KEY(packageName)
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS app_usage_counters (
+                        packageName TEXT NOT NULL,
+                        dateEpochDay INTEGER NOT NULL,
+                        totalSeconds INTEGER NOT NULL,
+                        subSeconds INTEGER NOT NULL,
+                        PRIMARY KEY(packageName, dateEpochDay)
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS focus_sessions (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        startedAtMillis INTEGER NOT NULL,
+                        plannedMinutes INTEGER NOT NULL,
+                        endedAtMillis INTEGER,
+                        completed INTEGER NOT NULL
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS habit_gate_state (
+                        dateEpochDay INTEGER NOT NULL,
+                        rewardGranted INTEGER NOT NULL,
+                        PRIMARY KEY(dateEpochDay)
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS reward_ledger (
+                        id INTEGER NOT NULL,
+                        earnedMinutesRemaining INTEGER NOT NULL,
+                        PRIMARY KEY(id)
                     )
                     """.trimIndent(),
                 )

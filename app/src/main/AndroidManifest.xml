@@ -65,6 +65,25 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Parental control tamper-protection enforcement for family device management" />
         </service>
+
+        <service
+            android:name=".focus.FocusGuardAccessibilityService"
+            android:exported="true"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/focus_guard_accessibility_service" />
+        </service>
+
+        <activity
+            android:name=".focus.FrictionActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:theme="@style/Theme.FamilyDeviceGuard" />
     </application>
 
 </manifest>

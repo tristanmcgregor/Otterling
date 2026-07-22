@@ -55,11 +55,17 @@ import au.com.tbmcgregor.bwparker.familyguard.restrictions.Restriction
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.RestrictionEnforcementWorker
 import au.com.tbmcgregor.bwparker.familyguard.tamper.TamperEvent
 import au.com.tbmcgregor.bwparker.familyguard.tamper.TamperEventLogger
+import au.com.tbmcgregor.bwparker.familyguard.ui.AccessibilityServiceSection
 import au.com.tbmcgregor.bwparker.familyguard.ui.AppPickerDialog
+import au.com.tbmcgregor.bwparker.familyguard.ui.FocusRewardsSection
+import au.com.tbmcgregor.bwparker.familyguard.ui.HabitGateSection
 import au.com.tbmcgregor.bwparker.familyguard.ui.InstalledAppInfo
+import au.com.tbmcgregor.bwparker.familyguard.ui.MindfulAppsSection
 import au.com.tbmcgregor.bwparker.familyguard.ui.PinLockScreen
+import au.com.tbmcgregor.bwparker.familyguard.ui.RewardAppsSection
 import au.com.tbmcgregor.bwparker.familyguard.ui.SectionCard
 import au.com.tbmcgregor.bwparker.familyguard.ui.SettingsScreen
+import au.com.tbmcgregor.bwparker.familyguard.ui.TimeBudgetsSection
 import au.com.tbmcgregor.bwparker.familyguard.ui.loadInstalledApps
 import au.com.tbmcgregor.bwparker.familyguard.ui.StatusText
 import au.com.tbmcgregor.bwparker.familyguard.ui.SwitchRow
@@ -107,6 +113,12 @@ class MainActivity : ComponentActivity() {
                             RestrictionsSection()
                             UninstallProtectionSection()
                             ContentFilterSection()
+                            AccessibilityServiceSection(applicationContext)
+                            FocusRewardsSection(applicationContext)
+                            RewardAppsSection(applicationContext)
+                            MindfulAppsSection(applicationContext)
+                            TimeBudgetsSection(applicationContext)
+                            HabitGateSection(applicationContext)
                             KnoxSetupSection()
                         }
                     }

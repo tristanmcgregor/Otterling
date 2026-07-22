@@ -9,6 +9,9 @@ import android.content.Intent
 import android.os.IBinder
 import android.util.Log
 import au.com.tbmcgregor.bwparker.familyguard.content.AppSuspensionManager
+import au.com.tbmcgregor.bwparker.familyguard.focus.AppTimeBudgetManager
+import au.com.tbmcgregor.bwparker.familyguard.focus.BudgetEnforcer
+import au.com.tbmcgregor.bwparker.familyguard.focus.RewardLedgerManager
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.AppUninstallGuard
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.DeviceRestrictionsManager
 import au.com.tbmcgregor.bwparker.familyguard.tamper.TamperEventLogger
@@ -41,6 +44,9 @@ class ProtectionEnforcementService : Service() {
             val tamperLogger = TamperEventLogger(applicationContext)
             val suspensionManager = AppSuspensionManager(applicationContext)
             val uninstallGuard = AppUninstallGuard(applicationContext)
+            val budgetEnforcer = BudgetEnforcer(applicationContext)
+            val budgetManager = AppTimeBudgetManager(applicationContext)
+            val rewardLedgerManager = RewardLedgerManager(applicationContext)
             loopJob = scope.launch {
                 runCatching { suspensionManager.reapplyAll() }
                     .onFailure { Log.w(TAG, "Blocked-app reapply failed", it) }
@@ -49,6 +55,12 @@ class ProtectionEnforcementService : Service() {
                 while (isActive) {
                     runCatching { restrictionsManager.detectDriftAndReapply(tamperLogger) }
                         .onFailure { Log.w(TAG, "Restriction drift check failed", it) }
+                    runCatching { budgetEnforcer.reapplyAll() }
+                        .onFailure { Log.w(TAG, "Time budget reapply failed", it) }
+                    runCatching { rewardLedgerManager.reapply() }
+                        .onFailure { Log.w(TAG, "Reward ledger reapply failed", it) }
+                    runCatching { budgetManager.pruneOldCounters() }
+                        .onFailure { Log.w(TAG, "Usage counter prune failed", it) }
                     delay(POLL_INTERVAL_MS)
                 }
             }
