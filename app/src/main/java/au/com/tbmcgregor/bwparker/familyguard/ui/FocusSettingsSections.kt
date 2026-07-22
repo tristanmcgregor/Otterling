@@ -21,6 +21,7 @@ import androidx.compose.material.icons.filled.Timelapse
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -51,8 +52,11 @@ import au.com.tbmcgregor.bwparker.familyguard.focus.HabitRuleManager
 import au.com.tbmcgregor.bwparker.familyguard.focus.HabitTrackerScanner
 import au.com.tbmcgregor.bwparker.familyguard.focus.MindfulApp
 import au.com.tbmcgregor.bwparker.familyguard.focus.MindfulAppManager
+import au.com.tbmcgregor.bwparker.familyguard.focus.daysOfWeekSet
+import au.com.tbmcgregor.bwparker.familyguard.focus.decodeDaysOfWeek
 import au.com.tbmcgregor.bwparker.familyguard.focus.requiredHabitNames
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.AccessibilityGuard
+import java.time.DayOfWeek
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -332,6 +336,7 @@ private data class HabitRuleEditContext(
     val initialHabitNames: List<String>,
     val initialWindowStart: Int?,
     val initialWindowEnd: Int?,
+    val initialDaysOfWeekMask: Int,
     val initialTargetPackageName: String,
     val initialUnlockMinutes: Int,
 )
@@ -356,6 +361,7 @@ private sealed class HabitRuleWizardStep {
         val habitNames: List<String>,
         val windowStartMinute: Int?,
         val windowEndMinute: Int?,
+        val daysOfWeek: Set<DayOfWeek>,
     ) : HabitRuleWizardStep()
     data class Confirm(
         val edit: HabitRuleEditContext?,
@@ -363,6 +369,7 @@ private sealed class HabitRuleWizardStep {
         val habitNames: List<String>,
         val windowStartMinute: Int?,
         val windowEndMinute: Int?,
+        val daysOfWeek: Set<DayOfWeek>,
         val target: InstalledAppInfo,
     ) : HabitRuleWizardStep()
 }
@@ -400,7 +407,7 @@ fun HabitRulesSection(context: Context) {
                 // Time windows only make sense (and are only checkable outside a live scan) when
                 // gating on specific habit(s), not the "any/all habits" whole-tracker pattern.
                 wizardStep = if (habitNames.isEmpty()) {
-                    HabitRuleWizardStep.PickTarget(step.edit, step.trigger, habitNames, null, null)
+                    HabitRuleWizardStep.PickTarget(step.edit, step.trigger, habitNames, null, null, DayOfWeek.entries.toSet())
                 } else {
                     HabitRuleWizardStep.PickWindow(step.edit, step.trigger, habitNames)
                 }
@@ -417,9 +424,10 @@ fun HabitRulesSection(context: Context) {
             habitNames = step.habitNames,
             initialWindowStart = step.edit?.initialWindowStart,
             initialWindowEnd = step.edit?.initialWindowEnd,
+            initialDaysOfWeek = step.edit?.initialDaysOfWeekMask?.let(::decodeDaysOfWeek),
             onDismiss = { wizardStep = null },
-            onSelect = { start, end ->
-                wizardStep = HabitRuleWizardStep.PickTarget(step.edit, step.trigger, step.habitNames, start, end)
+            onSelect = { start, end, daysOfWeek ->
+                wizardStep = HabitRuleWizardStep.PickTarget(step.edit, step.trigger, step.habitNames, start, end, daysOfWeek)
             },
         )
         is HabitRuleWizardStep.PickTarget -> AppPickerDialog(
@@ -433,6 +441,7 @@ fun HabitRulesSection(context: Context) {
                     step.habitNames,
                     step.windowStartMinute,
                     step.windowEndMinute,
+                    step.daysOfWeek,
                     app,
                 )
             },
@@ -447,6 +456,7 @@ fun HabitRulesSection(context: Context) {
                     habitNames = step.habitNames,
                     windowStartMinute = windowStart,
                     windowEndMinute = windowEnd,
+                    daysOfWeek = step.daysOfWeek,
                     targetLabel = step.target.label,
                     isEditing = editingId != null,
                     onDismiss = { wizardStep = null },
@@ -461,6 +471,7 @@ fun HabitRulesSection(context: Context) {
                                     requiredHabitNames = step.habitNames,
                                     windowStartMinute = windowStart,
                                     windowEndMinute = windowEnd,
+                                    daysOfWeek = step.daysOfWeek,
                                 )
                             } else {
                                 habitRuleManager.addRule(
@@ -470,6 +481,7 @@ fun HabitRulesSection(context: Context) {
                                     requiredHabitNames = step.habitNames,
                                     windowStartMinute = windowStart,
                                     windowEndMinute = windowEnd,
+                                    daysOfWeek = step.daysOfWeek,
                                 )
                             }
                             refreshTrigger++
@@ -557,6 +569,7 @@ fun HabitRulesSection(context: Context) {
                                         initialHabitNames = rule.requiredHabitNames(),
                                         initialWindowStart = rule.windowStartMinute,
                                         initialWindowEnd = rule.windowEndMinute,
+                                        initialDaysOfWeekMask = rule.daysOfWeekMask,
                                         initialTargetPackageName = rule.targetPackageName,
                                         initialUnlockMinutes = rule.unlockMinutes.takeIf { it > 0 } ?: 30,
                                     ),
@@ -630,6 +643,7 @@ private fun HabitRuleRow(
             val required = rule.requiredHabitNames()
             val windowStart = rule.windowStartMinute
             val windowEnd = rule.windowEndMinute
+            val daysOfWeek = rule.daysOfWeekSet()
             // Empty required-habits means different things depending on whether it's windowed --
             // see HabitRule's doc.
             val timeOnly = windowStart != null && windowEnd != null && required.isEmpty()
@@ -641,13 +655,13 @@ private fun HabitRuleRow(
             if (windowStart != null && windowEnd != null) {
                 Text(
                     if (timeOnly) {
-                        "-> every day ${formatMinuteOfDay(windowStart)}-${formatMinuteOfDay(windowEnd)}, no habit needed"
+                        "-> ${formatDaysOfWeek(daysOfWeek)} ${formatMinuteOfDay(windowStart)}-${formatMinuteOfDay(windowEnd)}, no habit needed"
                     } else {
-                        "-> only enforced ${formatMinuteOfDay(windowStart)}-${formatMinuteOfDay(windowEnd)}"
+                        "-> only enforced ${formatDaysOfWeek(daysOfWeek)} ${formatMinuteOfDay(windowStart)}-${formatMinuteOfDay(windowEnd)}"
                     },
                     style = MaterialTheme.typography.bodySmall,
                 )
-                val unlocked = !isRuleCurrentlyWindowed(windowStart, windowEnd)
+                val unlocked = !isRuleCurrentlyWindowed(windowStart, windowEnd, daysOfWeek)
                 StatusText(
                     if (unlocked) "Outside its window right now" else if (timeOnly) "Inside its window -- blocked" else "Inside its window -- blocked until done",
                     isGood = unlocked,
@@ -798,8 +812,9 @@ private fun HabitWindowPickerDialog(
     habitNames: List<String>,
     initialWindowStart: Int? = null,
     initialWindowEnd: Int? = null,
+    initialDaysOfWeek: Set<DayOfWeek>? = null,
     onDismiss: () -> Unit,
-    onSelect: (windowStartMinute: Int?, windowEndMinute: Int?) -> Unit,
+    onSelect: (windowStartMinute: Int?, windowEndMinute: Int?, daysOfWeek: Set<DayOfWeek>) -> Unit,
 ) {
     // A "time only" rule (no habit condition) has no "Always" option -- an unwindowed rule with no
     // condition to ever satisfy would just be a permanent, un-liftable block -- so it always shows
@@ -808,9 +823,17 @@ private fun HabitWindowPickerDialog(
     var showCustom by remember { mutableStateOf(timeOnly || (initialWindowStart != null && initialWindowEnd != null)) }
     var startText by remember { mutableStateOf(initialWindowStart?.let { formatMinuteOfDay(it) } ?: "00:00") }
     var endText by remember { mutableStateOf(initialWindowEnd?.let { formatMinuteOfDay(it) } ?: if (timeOnly) "09:00" else "21:00") }
+    var selectedDays by remember { mutableStateOf(initialDaysOfWeek ?: DayOfWeek.entries.toSet()) }
     val conditionLabel = habitNames.joinToString(" AND ")
     val start = parseTimeToMinuteOfDay(startText)
     val end = parseTimeToMinuteOfDay(endText)
+
+    fun toggleDay(day: DayOfWeek) {
+        val updated = if (day in selectedDays) selectedDays - day else selectedDays + day
+        // Don't allow deselecting down to zero days -- that's not a meaningful "never" choice,
+        // and matches encodeDaysOfWeek() treating an empty set as "every day" anyway.
+        if (updated.isNotEmpty()) selectedDays = updated
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -818,7 +841,7 @@ private fun HabitWindowPickerDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (!timeOnly) {
-                    OutlinedButton(onClick = { onSelect(null, null) }, modifier = Modifier.fillMaxWidth()) {
+                    OutlinedButton(onClick = { onSelect(null, null, selectedDays) }, modifier = Modifier.fillMaxWidth()) {
                         Text("Always (no time restriction)")
                     }
                     OutlinedButton(onClick = { showCustom = true }, modifier = Modifier.fillMaxWidth()) {
@@ -856,8 +879,10 @@ private fun HabitWindowPickerDialog(
                     if (start == null || end == null) {
                         Text("Enter times as HH:mm, e.g. 21:00", style = MaterialTheme.typography.bodySmall)
                     }
+                    Text("Which days?", style = MaterialTheme.typography.bodySmall)
+                    DayOfWeekPicker(selectedDays = selectedDays, onToggle = ::toggleDay)
                     Button(
-                        onClick = { if (start != null && end != null) onSelect(start, end) },
+                        onClick = { if (start != null && end != null) onSelect(start, end, selectedDays) },
                         enabled = start != null && end != null,
                         modifier = Modifier.fillMaxWidth(),
                     ) {
@@ -873,31 +898,57 @@ private fun HabitWindowPickerDialog(
     )
 }
 
+/** Compact Mon-Sun toggle row for restricting a windowed rule to specific days -- at least one
+ * day must stay selected (see [HabitWindowPickerDialog.toggleDay]). */
+@Composable
+private fun DayOfWeekPicker(selectedDays: Set<DayOfWeek>, onToggle: (DayOfWeek) -> Unit) {
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        DayOfWeek.entries.forEach { day ->
+            val selected = day in selectedDays
+            FilterChip(
+                selected = selected,
+                onClick = { onToggle(day) },
+                label = { Text(day.name.take(1) + day.name.drop(1).take(1).lowercase()) },
+                modifier = Modifier.weight(1f),
+            )
+        }
+    }
+}
+
+/** "Every day" if all 7 are selected, otherwise a short comma-joined list, e.g. "Mon, Wed, Fri". */
+private fun formatDaysOfWeek(days: Set<DayOfWeek>): String {
+    if (days.size == DayOfWeek.entries.size) return "every day"
+    return DayOfWeek.entries.filter { it in days }
+        .joinToString(", ") { it.name.take(1) + it.name.drop(1).take(2).lowercase() }
+}
+
 @Composable
 private fun HabitRuleWindowConfirmDialog(
     triggerLabel: String,
     habitNames: List<String>,
     windowStartMinute: Int,
     windowEndMinute: Int,
+    daysOfWeek: Set<DayOfWeek>,
     targetLabel: String,
     isEditing: Boolean = false,
     onDismiss: () -> Unit,
     onConfirm: () -> Unit,
 ) {
     val conditionLabel = habitNames.joinToString(" AND ")
+    val daysLabel = formatDaysOfWeek(daysOfWeek)
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(if (isEditing) "Confirm changes" else "Confirm rule") },
         text = {
             Text(
                 if (habitNames.isEmpty()) {
-                    "$targetLabel will be blocked every day from ${formatMinuteOfDay(windowStartMinute)} " +
+                    "$targetLabel will be blocked $daysLabel from ${formatMinuteOfDay(windowStartMinute)} " +
                         "to ${formatMinuteOfDay(windowEndMinute)}, unconditionally -- no habit needed. " +
-                        "No time restriction outside that window."
+                        "No time restriction outside that window (or on other days)."
                 } else {
-                    "$targetLabel will be blocked from ${formatMinuteOfDay(windowStartMinute)} to " +
+                    "$targetLabel will be blocked $daysLabel from ${formatMinuteOfDay(windowStartMinute)} to " +
                         "${formatMinuteOfDay(windowEndMinute)} unless \"$conditionLabel\" is done in " +
-                        "$triggerLabel that day. No time restriction outside that window."
+                        "$triggerLabel that day. No time restriction outside that window (or on other days)."
                 },
                 style = MaterialTheme.typography.bodyMedium,
             )
@@ -926,7 +977,8 @@ private fun formatMinuteOfDay(minuteOfDay: Int): String {
 
 /** UI-only display hint: whether the current time falls inside [start, end) (wrapping at
  * midnight if end <= start), independent of whether the required habit(s) are done. */
-private fun isRuleCurrentlyWindowed(start: Int, end: Int): Boolean {
+private fun isRuleCurrentlyWindowed(start: Int, end: Int, daysOfWeek: Set<DayOfWeek> = DayOfWeek.entries.toSet()): Boolean {
+    if (java.time.LocalDate.now().dayOfWeek !in daysOfWeek) return false
     val now = java.time.LocalTime.now()
     val minuteOfDay = now.hour * 60 + now.minute
     return if (start <= end) minuteOfDay in start until end else minuteOfDay >= start || minuteOfDay < end

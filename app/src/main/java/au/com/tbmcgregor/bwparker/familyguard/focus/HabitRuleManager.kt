@@ -6,6 +6,7 @@ import android.content.Context
 import android.util.Log
 import au.com.tbmcgregor.bwparker.familyguard.admin.DeviceAdminReceiverImpl
 import au.com.tbmcgregor.bwparker.familyguard.data.AppDatabase
+import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.LocalTime
 
@@ -47,6 +48,9 @@ class HabitRuleManager(context: Context) {
      * model -- see [HabitRule] for exact semantics. Unlike a non-windowed rule, "all habits done"
      * has no persisted signal [reapplyAll] can check outside of a live scan, so a windowed rule's
      * [requiredHabitNames] must either be empty (pure time block) or name specific habits.
+     *
+     * [daysOfWeek] restricts a windowed rule to only those days (defaults to every day); ignored
+     * for non-windowed rules.
      */
     suspend fun addRule(
         triggerPackageName: String,
@@ -55,6 +59,7 @@ class HabitRuleManager(context: Context) {
         requiredHabitNames: List<String> = emptyList(),
         windowStartMinute: Int? = null,
         windowEndMinute: Int? = null,
+        daysOfWeek: Set<DayOfWeek> = DayOfWeek.entries.toSet(),
     ) {
         dao.insert(
             HabitRule(
@@ -64,6 +69,7 @@ class HabitRuleManager(context: Context) {
                 habitName = encodeRequiredHabitNames(requiredHabitNames),
                 windowStartMinute = windowStartMinute,
                 windowEndMinute = windowEndMinute,
+                daysOfWeekMask = encodeDaysOfWeek(daysOfWeek),
             ),
         )
         reapplyAll()
@@ -89,6 +95,7 @@ class HabitRuleManager(context: Context) {
         requiredHabitNames: List<String> = emptyList(),
         windowStartMinute: Int? = null,
         windowEndMinute: Int? = null,
+        daysOfWeek: Set<DayOfWeek> = DayOfWeek.entries.toSet(),
     ) {
         val existing = dao.getAll().find { it.id == id } ?: return
         dao.update(
@@ -99,6 +106,7 @@ class HabitRuleManager(context: Context) {
                 habitName = encodeRequiredHabitNames(requiredHabitNames),
                 windowStartMinute = windowStartMinute,
                 windowEndMinute = windowEndMinute,
+                daysOfWeekMask = encodeDaysOfWeek(daysOfWeek),
                 lastGrantedEpochDay = -1,
                 unlockUntilMillis = 0,
             ),
@@ -172,6 +180,7 @@ class HabitRuleManager(context: Context) {
     suspend fun reapplyAll() {
         val now = System.currentTimeMillis()
         val nowMinuteOfDay = currentMinuteOfDay()
+        val nowDayOfWeek = LocalDate.now().dayOfWeek
         val today = LocalDate.now().toEpochDay()
         val doneHabitNamesToday = detectedHabitDao.getAll()
             .filter { it.dateEpochDay == today && it.doneToday }
@@ -181,15 +190,23 @@ class HabitRuleManager(context: Context) {
         dao.getAll().groupBy { it.targetPackageName }.forEach { (packageName, allRulesForTarget) ->
             val activeRules = allRulesForTarget.filter { it.enabled }
             val unlocked = activeRules.isEmpty() ||
-                activeRules.any { isRuleUnlocked(it, now, nowMinuteOfDay, doneHabitNamesToday) }
+                activeRules.any { isRuleUnlocked(it, now, nowMinuteOfDay, nowDayOfWeek, doneHabitNamesToday) }
             setSuspended(packageName, suspended = !unlocked)
         }
     }
 
-    private fun isRuleUnlocked(rule: HabitRule, now: Long, nowMinuteOfDay: Int, doneHabitNamesToday: Set<String>): Boolean {
+    private fun isRuleUnlocked(
+        rule: HabitRule,
+        now: Long,
+        nowMinuteOfDay: Int,
+        nowDayOfWeek: DayOfWeek,
+        doneHabitNamesToday: Set<String>,
+    ): Boolean {
         val start = rule.windowStartMinute
         val end = rule.windowEndMinute
         if (start != null && end != null) {
+            // A day this rule's window doesn't apply to behaves as if the window never started.
+            if (nowDayOfWeek !in rule.daysOfWeekSet()) return true
             if (!isWithinWindow(nowMinuteOfDay, start, end)) return true
             val required = rule.requiredHabitNames()
             // Empty here means "no habit condition at all" for a windowed rule (see HabitRule) --

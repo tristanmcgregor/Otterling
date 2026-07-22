@@ -39,7 +39,7 @@ import au.com.tbmcgregor.bwparker.familyguard.tamper.TamperEventDao
         HabitRule::class,
         DetectedHabit::class,
     ],
-    version = 13,
+    version = 14,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -87,9 +87,10 @@ abstract class AppDatabase : RoomDatabase() {
                         MIGRATION_8_9,
                         MIGRATION_9_10,
                         MIGRATION_10_11,
-                        MIGRATION_11_12,
-                        MIGRATION_12_13,
-                    )
+                    MIGRATION_11_12,
+                    MIGRATION_12_13,
+                    MIGRATION_13_14,
+                )
                     .build()
                     .also { instance = it }
             }
@@ -311,6 +312,14 @@ abstract class AppDatabase : RoomDatabase() {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE habit_rules ADD COLUMN windowStartMinute INTEGER")
                 db.execSQL("ALTER TABLE habit_rules ADD COLUMN windowEndMinute INTEGER")
+            }
+        }
+
+        // Restricts a windowed habit rule to specific days of the week (default: every day, i.e.
+        // every bit set -- see ALL_DAYS_OF_WEEK_MASK).
+        private val MIGRATION_13_14 = object : Migration(13, 14) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE habit_rules ADD COLUMN daysOfWeekMask INTEGER NOT NULL DEFAULT 127")
             }
         }
     }

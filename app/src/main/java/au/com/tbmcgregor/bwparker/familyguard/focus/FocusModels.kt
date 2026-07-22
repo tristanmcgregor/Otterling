@@ -2,6 +2,7 @@ package au.com.tbmcgregor.bwparker.familyguard.focus
 
 import androidx.room.Entity
 import androidx.room.PrimaryKey
+import java.time.DayOfWeek
 
 /** An app that's suspended by default and only opens while reward minutes are being spent. */
 @Entity(tableName = "reward_apps")
@@ -79,6 +80,11 @@ data class RewardLedger(
  * of a live scan. A windowed rule with *empty* [requiredHabitNames] has no habit condition at all --
  * it's simply blocked, unconditionally, for the entire window every day (e.g. "no phone before
  * 9am"), and unblocked the rest of the time.
+ *
+ * [daysOfWeekMask] restricts a *windowed* rule to only apply on certain days (a bitmask over
+ * [DayOfWeek], see [daysOfWeekSet]/[encodeDaysOfWeek]) -- on any day not in the mask, the rule
+ * behaves as if it were outside its time window (i.e. unblocked) all day. Defaults to every day.
+ * Ignored for non-windowed rules.
  */
 @Entity(tableName = "habit_rules")
 data class HabitRule(
@@ -92,7 +98,23 @@ data class HabitRule(
     val habitName: String? = null,
     val windowStartMinute: Int? = null,
     val windowEndMinute: Int? = null,
+    val daysOfWeekMask: Int = ALL_DAYS_OF_WEEK_MASK,
 )
+
+/** Bitmask with every [DayOfWeek] set -- the default, meaning "every day". */
+const val ALL_DAYS_OF_WEEK_MASK: Int = 0b1111111
+
+/** Decodes a [HabitRule.daysOfWeekMask] value into the set of days it represents. */
+fun decodeDaysOfWeek(mask: Int): Set<DayOfWeek> =
+    DayOfWeek.entries.filterTo(mutableSetOf()) { mask and (1 shl (it.value - 1)) != 0 }
+
+/** Decodes [HabitRule.daysOfWeekMask] into the set of days this rule's time window applies on. */
+fun HabitRule.daysOfWeekSet(): Set<DayOfWeek> = decodeDaysOfWeek(daysOfWeekMask)
+
+/** Encodes a set of days for storage in [HabitRule.daysOfWeekMask]. An empty set is treated the
+ * same as "every day" -- a rule that can never apply on any day isn't a meaningful choice to offer. */
+fun encodeDaysOfWeek(days: Set<DayOfWeek>): Int =
+    days.fold(0) { mask, day -> mask or (1 shl (day.value - 1)) }.takeIf { it != 0 } ?: ALL_DAYS_OF_WEEK_MASK
 
 /** Non-printable separator, so it can't collide with a real habit name typed by the user. */
 private const val HABIT_NAME_DELIMITER = "\u001F"

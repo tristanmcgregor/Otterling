@@ -6,6 +6,7 @@ import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.Rect
 import android.os.Build
+import android.util.Log
 import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
@@ -121,17 +122,23 @@ class FocusGuardAccessibilityService : AccessibilityService() {
     }
 
     private suspend fun scanHabitTracker(packageName: String) {
-        val root = rootInActiveWindow ?: return
+        val root = rootInActiveWindow ?: run {
+            Log.d(TAG, "scanHabitTracker: no rootInActiveWindow")
+            return
+        }
         val texts = mutableListOf<String>()
         collectNodeInfo(root, texts = texts, resourceIds = mutableListOf(), maxNodes = 400)
 
         val habitEntries = mutableListOf<HabitTrackerScanner.Entry>()
         collectHabitEntries(root, habitEntries, maxNodes = 400)
         var detectedRows = HabitTrackerScanner.extractRows(habitEntries)
+        Log.d(TAG, "scanHabitTracker: rows=${detectedRows.map { it.first }}")
 
         val todayCells = mutableMapOf<String, Rect>()
         collectHabitTodayCells(root, currentHabitName = null, out = todayCells)
+        Log.d(TAG, "scanHabitTracker: todayCells=${todayCells.keys}")
         val doneByColor = detectDoneViaScreenshot(todayCells)
+        Log.d(TAG, "scanHabitTracker: doneByColor=$doneByColor")
         if (doneByColor.isNotEmpty()) {
             detectedRows = detectedRows.map { (name, fallback) -> name to (doneByColor[name] ?: fallback) }
         }
@@ -208,10 +215,24 @@ class FocusGuardAccessibilityService : AccessibilityService() {
      * the canTakeScreenshot capability; returns an empty map (leaving the caller's fallback in
      * place) if either is unavailable or the screenshot fails. */
     private suspend fun detectDoneViaScreenshot(cells: Map<String, Rect>): Map<String, Boolean> {
-        if (cells.isEmpty() || Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return emptyMap()
-        val bitmap = captureScreenshot() ?: return emptyMap()
+        if (cells.isEmpty()) {
+            Log.d(TAG, "detectDoneViaScreenshot: no today-cells found")
+            return emptyMap()
+        }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            Log.d(TAG, "detectDoneViaScreenshot: SDK ${Build.VERSION.SDK_INT} < R, screenshot unsupported")
+            return emptyMap()
+        }
+        val bitmap = captureScreenshot() ?: run {
+            Log.d(TAG, "detectDoneViaScreenshot: captureScreenshot() returned null")
+            return emptyMap()
+        }
         return try {
-            cells.mapValues { (_, bounds) -> isCellGreen(bitmap, bounds) }
+            cells.mapValues { (name, bounds) ->
+                val result = isCellGreenDebug(bitmap, bounds)
+                Log.d(TAG, "detectDoneViaScreenshot: $name bounds=$bounds rgb=(${result.r},${result.g},${result.b}) green=${result.isGreen}")
+                result.isGreen
+            }
         } finally {
             bitmap.recycle()
         }
@@ -245,8 +266,9 @@ class FocusGuardAccessibilityService : AccessibilityService() {
     }
 
     /** Samples a grid of points across [bounds] and averages them, since a single pixel could land
-     * on the day-letter glyph rather than the cell's fill colour. */
-    private fun isCellGreen(bitmap: Bitmap, bounds: Rect): Boolean {
+     * on the day-letter glyph rather than the cell's fill colour. Returns the averaged RGB
+     * alongside the green/not-green verdict purely for debug logging. */
+    private fun isCellGreenDebug(bitmap: Bitmap, bounds: Rect): CellColorResult {
         var rSum = 0L
         var gSum = 0L
         var bSum = 0L
@@ -264,12 +286,15 @@ class FocusGuardAccessibilityService : AccessibilityService() {
                 count++
             }
         }
-        if (count == 0) return false
-        val r = rSum / count
-        val g = gSum / count
-        val b = bSum / count
-        return g > r + GREEN_DOMINANCE_THRESHOLD && g > b + GREEN_DOMINANCE_THRESHOLD
+        if (count == 0) return CellColorResult(false, 0, 0, 0)
+        val r = (rSum / count).toInt()
+        val g = (gSum / count).toInt()
+        val b = (bSum / count).toInt()
+        val isGreen = g > r + GREEN_DOMINANCE_THRESHOLD && g > b + GREEN_DOMINANCE_THRESHOLD
+        return CellColorResult(isGreen, r, g, b)
     }
+
+    private data class CellColorResult(val isGreen: Boolean, val r: Int, val g: Int, val b: Int)
 
     private fun collectNodeInfo(
         node: AccessibilityNodeInfo,
@@ -309,6 +334,7 @@ class FocusGuardAccessibilityService : AccessibilityService() {
     }
 
     private companion object {
+        const val TAG = "FocusGuardAccessibility"
         const val TICK_MILLIS = 5_000L
         const val TICK_SECONDS = 5
         const val MAX_HABIT_ROWS = 60

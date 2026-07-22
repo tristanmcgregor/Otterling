@@ -82,8 +82,16 @@ class VpnFilterService : VpnService() {
         val builder = Builder()
             .setSession("Family Device Guard Filter")
             .setMtu(MTU)
-            .addAddress(VIRTUAL_IP, 32)
-            .addDnsServer(VIRTUAL_IP)
+            // A /32 tun address with the DNS server pointed at that *same* address was the bug:
+            // the kernel treats traffic to an interface's own local address as local delivery, so
+            // it never actually traverses the tun device -- our packet-read loop never sees it.
+            // Queries to any *other* address (even one nothing else owns, like .2 here) genuinely
+            // get routed out over tun0 by the 0.0.0.0/0 route below and hit our relay correctly.
+            // This is why apps with a hardcoded fallback resolver (e.g. Chrome/WhatsApp querying
+            // 8.8.8.8/8.8.4.4 directly) worked while everything using the network's *configured*
+            // DNS server (i.e. nearly everything else, including Spotify) silently got NODATA.
+            .addAddress(VIRTUAL_IP, 24)
+            .addDnsServer(DNS_SERVER_IP)
             .addRoute("0.0.0.0", 0)
             // VpnService treats the tunnel as metered by default. Left unset, apps that respect
             // Data Saver / "restrict background data" (e.g. Spotify) get silently network-blocked
@@ -151,7 +159,11 @@ class VpnFilterService : VpnService() {
             }
             if (length <= 0) continue
 
-            val packet = IpPacket.parse(buffer, length) ?: continue
+            val packet = IpPacket.parse(buffer, length)
+            if (packet == null) {
+                Log.d(TAG, "tun: unparseable packet, $length bytes, first byte 0x${"%02x".format(buffer[0])}")
+                continue
+            }
             when (packet.protocol) {
                 IpPacket.PROTOCOL_UDP -> {
                     if (packet.destinationPort == DNS_PORT) {
@@ -176,12 +188,22 @@ class VpnFilterService : VpnService() {
         writeToTun: suspend (ByteArray) -> Unit,
         blocklist: DomainBlocklistManager,
     ) {
-        val query = DnsMessage.parseQuery(packet.payload) ?: return
-        val response = if (blocklist.isBlocked(query.questionName)) {
+        val query = DnsMessage.parseQuery(packet.payload)
+        if (query == null) {
+            Log.d(TAG, "DNS: unparseable query (${packet.payload.size} bytes) from ${packet.sourceAddress}:${packet.sourcePort}")
+            return
+        }
+        val blocked = blocklist.isBlocked(query.questionName)
+        val response = if (blocked) {
             DnsMessage.buildBlockedResponse(packet.payload)
         } else {
             forwardToUpstream(packet.payload)
-        } ?: return
+        }
+        if (response == null) {
+            Log.d(TAG, "DNS: '${query.questionName}' upstream lookup failed/timed out -- no reply sent")
+            return
+        }
+        Log.d(TAG, "DNS: '${query.questionName}' blocked=$blocked -> replying with ${response.size} bytes")
 
         try {
             writeToTun(packet.buildUdpReply(response))
@@ -240,6 +262,7 @@ class VpnFilterService : VpnService() {
         private const val CHANNEL_ID = "vpn_content_filter"
         private const val NOTIFICATION_ID = 1002
         private const val VIRTUAL_IP = "10.111.222.1"
+        private const val DNS_SERVER_IP = "10.111.222.2"
         private const val DNS_PORT = 53
         private const val UPSTREAM_DNS = "1.1.1.1"
         private const val UPSTREAM_TIMEOUT_MS = 5_000
