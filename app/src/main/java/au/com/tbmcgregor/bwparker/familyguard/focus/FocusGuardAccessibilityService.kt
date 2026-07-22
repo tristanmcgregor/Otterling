@@ -2,9 +2,15 @@ package au.com.tbmcgregor.bwparker.familyguard.focus
 
 import android.accessibilityservice.AccessibilityService
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.Color
+import android.graphics.Rect
+import android.os.Build
+import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.Toast
+import kotlin.coroutines.resume
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -13,6 +19,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 
 /**
@@ -118,7 +125,15 @@ class FocusGuardAccessibilityService : AccessibilityService() {
 
         val habitEntries = mutableListOf<HabitTrackerScanner.Entry>()
         collectHabitEntries(root, habitEntries, maxNodes = 400)
-        val detectedRows = HabitTrackerScanner.extractRows(habitEntries)
+        var detectedRows = HabitTrackerScanner.extractRows(habitEntries)
+
+        val todayCells = mutableMapOf<String, Rect>()
+        collectHabitTodayCells(root, currentHabitName = null, out = todayCells)
+        val doneByColor = detectDoneViaScreenshot(todayCells)
+        if (doneByColor.isNotEmpty()) {
+            detectedRows = detectedRows.map { (name, fallback) -> name to (doneByColor[name] ?: fallback) }
+        }
+
         detectedHabitManager.recordScan(detectedRows)
 
         val grantedCount = habitRuleManager.evaluateTrigger(packageName, texts, detectedRows)
@@ -130,8 +145,8 @@ class FocusGuardAccessibilityService : AccessibilityService() {
         }
     }
 
-    /** Flattens the tree in traversal order, recording every node's text + checkable/checked state
-     * -- input for [HabitTrackerScanner], which pairs checkboxes with their nearby label. */
+    /** Flattens the tree in traversal order, recording every node's text, content description, and
+     * checkable/checked state -- input for [HabitTrackerScanner]. */
     @Suppress("DEPRECATION")
     private fun collectHabitEntries(
         node: AccessibilityNodeInfo,
@@ -140,11 +155,118 @@ class FocusGuardAccessibilityService : AccessibilityService() {
     ) {
         if (out.size >= maxNodes) return
         val text = node.text?.toString()?.takeIf { it.isNotBlank() }
-        out.add(HabitTrackerScanner.Entry(text = text, checkable = node.isCheckable, checked = node.isChecked))
+        val contentDescription = node.contentDescription?.toString()?.takeIf { it.isNotBlank() }
+        out.add(
+            HabitTrackerScanner.Entry(
+                text = text,
+                contentDescription = contentDescription,
+                checkable = node.isCheckable,
+                checked = node.isChecked,
+            ),
+        )
         for (i in 0 until node.childCount) {
             val child = node.getChild(i) ?: continue
             collectHabitEntries(child, out, maxNodes)
         }
+    }
+
+    /**
+     * Walks the tree tracking the nearest ancestor "streak summary" row (see
+     * [HabitTrackerScanner]) as the current habit name, and records the screen bounds of that
+     * row's "today" day cell (content description containing "TODAY") the first time it's seen.
+     * This is how completion is actually read for trackers like HabitShare that only convey
+     * done/not-done via cell colour, never via accessibility-visible checked state.
+     */
+    private fun collectHabitTodayCells(
+        node: AccessibilityNodeInfo,
+        currentHabitName: String?,
+        out: MutableMap<String, Rect>,
+    ) {
+        if (out.size >= MAX_HABIT_ROWS) return
+        var habitName = currentHabitName
+        val desc = node.contentDescription?.toString()
+        if (desc != null) {
+            val rowMatch = HABIT_ROW_NAME_PATTERN.find(desc)
+            if (rowMatch != null) {
+                habitName = rowMatch.groupValues[1].trim()
+            } else if (habitName != null && !out.containsKey(habitName) && desc.contains("TODAY", ignoreCase = true)) {
+                val bounds = Rect()
+                node.getBoundsInScreen(bounds)
+                if (!bounds.isEmpty) out[habitName] = bounds
+            }
+        }
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            collectHabitTodayCells(child, habitName, out)
+        }
+    }
+
+    /** Takes a screenshot and classifies each cell's centre-ish region as "done" if it's green,
+     * which is how completed habits are shown in trackers like HabitShare. Requires API 30+ and
+     * the canTakeScreenshot capability; returns an empty map (leaving the caller's fallback in
+     * place) if either is unavailable or the screenshot fails. */
+    private suspend fun detectDoneViaScreenshot(cells: Map<String, Rect>): Map<String, Boolean> {
+        if (cells.isEmpty() || Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return emptyMap()
+        val bitmap = captureScreenshot() ?: return emptyMap()
+        return try {
+            cells.mapValues { (_, bounds) -> isCellGreen(bitmap, bounds) }
+        } finally {
+            bitmap.recycle()
+        }
+    }
+
+    private suspend fun captureScreenshot(): Bitmap? = suspendCancellableCoroutine { cont ->
+        try {
+            takeScreenshot(
+                Display.DEFAULT_DISPLAY,
+                mainExecutor,
+                object : TakeScreenshotCallback {
+                    override fun onSuccess(result: ScreenshotResult) {
+                        val hardwareBuffer = result.hardwareBuffer
+                        val hardwareBitmap = Bitmap.wrapHardwareBuffer(hardwareBuffer, result.colorSpace)
+                        hardwareBuffer.close()
+                        val softwareBitmap = hardwareBitmap?.copy(Bitmap.Config.ARGB_8888, false)
+                        hardwareBitmap?.recycle()
+                        if (cont.isActive) cont.resume(softwareBitmap)
+                    }
+
+                    override fun onFailure(errorCode: Int) {
+                        if (cont.isActive) cont.resume(null)
+                    }
+                },
+            )
+        } catch (error: SecurityException) {
+            if (cont.isActive) cont.resume(null)
+        } catch (error: IllegalStateException) {
+            if (cont.isActive) cont.resume(null)
+        }
+    }
+
+    /** Samples a grid of points across [bounds] and averages them, since a single pixel could land
+     * on the day-letter glyph rather than the cell's fill colour. */
+    private fun isCellGreen(bitmap: Bitmap, bounds: Rect): Boolean {
+        var rSum = 0L
+        var gSum = 0L
+        var bSum = 0L
+        var count = 0
+        for (ix in 0 until COLOR_SAMPLE_GRID) {
+            for (iy in 0 until COLOR_SAMPLE_GRID) {
+                val x = (bounds.left + bounds.width() * (ix + 0.5) / COLOR_SAMPLE_GRID)
+                    .toInt().coerceIn(0, bitmap.width - 1)
+                val y = (bounds.top + bounds.height() * (iy + 0.5) / COLOR_SAMPLE_GRID)
+                    .toInt().coerceIn(0, bitmap.height - 1)
+                val pixel = bitmap.getPixel(x, y)
+                rSum += Color.red(pixel)
+                gSum += Color.green(pixel)
+                bSum += Color.blue(pixel)
+                count++
+            }
+        }
+        if (count == 0) return false
+        val r = rSum / count
+        val g = gSum / count
+        val b = bSum / count
+        return g > r + GREEN_DOMINANCE_THRESHOLD && g > b + GREEN_DOMINANCE_THRESHOLD
     }
 
     private fun collectNodeInfo(
@@ -188,6 +310,10 @@ class FocusGuardAccessibilityService : AccessibilityService() {
         const val TICK_MILLIS = 5_000L
         const val TICK_SECONDS = 5
         const val HABITSHARE_PACKAGE_NAME = "com.habitshareapp"
+        const val MAX_HABIT_ROWS = 60
+        const val COLOR_SAMPLE_GRID = 5
+        const val GREEN_DOMINANCE_THRESHOLD = 15
         val SUB_FEATURE_HINTS = listOf("shorts", "reel")
+        val HABIT_ROW_NAME_PATTERN = Regex("""^(.+?),\s*Streak:""")
     }
 }
