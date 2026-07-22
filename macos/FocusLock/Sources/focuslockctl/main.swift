@@ -82,7 +82,14 @@ guard arguments.count >= 2 else {
 let client = FocusLockXPCClient()
 let command = arguments[1]
 
-let semaphore = DispatchSemaphore(value: 0)
+// NSXPCConnection delivers its reply blocks on the main dispatch queue by default. A plain
+// `DispatchSemaphore.wait()` on the main thread blocks that thread outright -- it does NOT drain
+// the main queue while waiting -- so any XPC reply scheduled there would never run and this
+// process would hang forever (this was previously observed: dozens of `focuslockctl` processes
+// stuck in uninterruptible sleep). Polling `RunLoop.main.run(...)` in short slices instead keeps
+// the main queue/run loop pumping between checks, so queued XPC callbacks actually get to fire.
+var finished = false
+let hardTimeout = Date().addingTimeInterval(20)
 Task {
     switch command {
     case "status":
@@ -93,29 +100,29 @@ Task {
         }
 
     case "add-domain":
-        guard arguments.count >= 3 else { printUsage(); semaphore.signal(); exit(1) }
+        guard arguments.count >= 3 else { printUsage(); finished = true; exit(1) }
         printResult(await client.addBlockedDomain(arguments[2]))
 
     case "remove-domain":
-        guard arguments.count >= 3 else { printUsage(); semaphore.signal(); exit(1) }
+        guard arguments.count >= 3 else { printUsage(); finished = true; exit(1) }
         printResult(await client.removeBlockedDomain(arguments[2]))
 
     case "add-app":
-        guard arguments.count >= 4 else { printUsage(); semaphore.signal(); exit(1) }
+        guard arguments.count >= 4 else { printUsage(); finished = true; exit(1) }
         let app = BlockedApp(displayName: arguments[2], executableName: arguments[3])
         printResult(await client.addBlockedApp(app))
 
     case "remove-app":
-        guard arguments.count >= 3 else { printUsage(); semaphore.signal(); exit(1) }
+        guard arguments.count >= 3 else { printUsage(); finished = true; exit(1) }
         printResult(await client.removeBlockedApp(executableName: arguments[2]))
 
     case "add-protected-app":
-        guard arguments.count >= 5 else { printUsage(); semaphore.signal(); exit(1) }
+        guard arguments.count >= 5 else { printUsage(); finished = true; exit(1) }
         let app = ProtectedApp(displayName: arguments[2], executableName: arguments[3], bundlePath: arguments[4])
         printResult(await client.addProtectedApp(app))
 
     case "remove-protected-app":
-        guard arguments.count >= 3 else { printUsage(); semaphore.signal(); exit(1) }
+        guard arguments.count >= 3 else { printUsage(); finished = true; exit(1) }
         printResult(await client.removeProtectedApp(executableName: arguments[2]))
 
     case "enable-dns":
@@ -132,12 +139,12 @@ Task {
         }
 
     case "guardian-link":
-        guard arguments.count >= 4 else { printUsage(); semaphore.signal(); exit(1) }
+        guard arguments.count >= 4 else { printUsage(); finished = true; exit(1) }
         let serverBase = arguments[2].hasSuffix("/") ? String(arguments[2].dropLast()) : arguments[2]
         let phonePubKey = arguments[3]
         guard let macPubKey = await client.getGuardianSetupPublicKey() else {
             print("Could not read/create this Mac's Guardian setup keypair.")
-            semaphore.signal()
+            finished = true
             exit(1)
         }
         let token = randomURLSafeToken()
@@ -157,19 +164,19 @@ Task {
         }
 
     case "guardian-claim":
-        guard arguments.count >= 4 else { printUsage(); semaphore.signal(); exit(1) }
+        guard arguments.count >= 4 else { printUsage(); finished = true; exit(1) }
         let serverBase = arguments[2].hasSuffix("/") ? String(arguments[2].dropLast()) : arguments[2]
         let token = arguments[3]
         guard let url = URL(string: "\(serverBase)/drop/\(token)/mac") else {
             print("Invalid server URL.")
-            semaphore.signal()
+            finished = true
             exit(1)
         }
         do {
             let (data, response) = try await URLSession.shared.data(from: url)
             guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
                 print("Nothing to claim yet -- has the Guardian submitted the link?")
-                semaphore.signal()
+                finished = true
                 exit(1)
             }
             guard
@@ -177,7 +184,7 @@ Task {
                 let ciphertext = json["ciphertext"]
             else {
                 print("Malformed response from relay server.")
-                semaphore.signal()
+                finished = true
                 exit(1)
             }
             printResult(await client.applyGuardianSetupCiphertext(ciphertext))
@@ -188,9 +195,15 @@ Task {
     default:
         printUsage()
     }
-    semaphore.signal()
+    finished = true
 }
-semaphore.wait()
+while !finished {
+    if Date() > hardTimeout {
+        print("Timed out waiting for FocusLockHelperd to reply. Is the daemon registered and running?")
+        exit(1)
+    }
+    RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.05))
+}
 
 func randomURLSafeToken() -> String {
     var bytes = [UInt8](repeating: 0, count: 32)
