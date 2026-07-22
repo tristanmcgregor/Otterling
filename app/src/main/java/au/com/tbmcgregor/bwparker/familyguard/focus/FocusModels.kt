@@ -147,3 +147,27 @@ data class DetectedHabit(
     val doneToday: Boolean,
     val dateEpochDay: Long,
 )
+
+/**
+ * Marks one [DetectedHabit] name as requiring photo proof before its daily tick counts towards any
+ * [HabitRule] -- ticking the box in HabitShare is trivial to fake to yourself, so for habits where
+ * that matters, [HabitRuleManager] additionally requires a same-day [HabitProofLog] to exist before
+ * treating that habit as "done" for rule-evaluation purposes. Doesn't affect HabitShare itself (we
+ * can't touch its own state), only whether *this app's* unlocks are granted.
+ */
+@Entity(tableName = "habit_proof_requirements")
+data class HabitProofRequirement(
+    @PrimaryKey val habitName: String,
+    val required: Boolean = true,
+)
+
+/** One submitted proof for [habitName] on [dateEpochDay]: a photo plus a short note (e.g. which
+ * chapter was read). At most one per habit per day -- resubmitting overwrites the same day's row. */
+@Entity(tableName = "habit_proof_logs", primaryKeys = ["habitName", "dateEpochDay"])
+data class HabitProofLog(
+    val habitName: String,
+    val dateEpochDay: Long,
+    val photoPath: String,
+    val note: String,
+    val submittedAtMillis: Long,
+)

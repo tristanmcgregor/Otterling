@@ -2,12 +2,15 @@ package au.com.tbmcgregor.bwparker.familyguard.ui
 
 import android.content.Context
 import android.content.Intent
+import android.graphics.BitmapFactory
 import android.provider.Settings
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
@@ -42,11 +45,15 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.unit.dp
 import au.com.tbmcgregor.bwparker.familyguard.focus.AppTimeBudget
 import au.com.tbmcgregor.bwparker.familyguard.focus.AppTimeBudgetManager
 import au.com.tbmcgregor.bwparker.familyguard.focus.DetectedHabit
 import au.com.tbmcgregor.bwparker.familyguard.focus.DetectedHabitManager
+import au.com.tbmcgregor.bwparker.familyguard.focus.HabitProofLog
+import au.com.tbmcgregor.bwparker.familyguard.focus.HabitProofManager
+import au.com.tbmcgregor.bwparker.familyguard.focus.HabitProofRequirement
 import au.com.tbmcgregor.bwparker.familyguard.focus.HabitRule
 import au.com.tbmcgregor.bwparker.familyguard.focus.HabitRuleManager
 import au.com.tbmcgregor.bwparker.familyguard.focus.HabitTrackerScanner
@@ -379,16 +386,21 @@ fun HabitRulesSection(context: Context) {
     val coroutineScope = rememberCoroutineScope()
     val habitRuleManager = remember { HabitRuleManager(context) }
     val detectedHabitManager = remember { DetectedHabitManager(context) }
+    val habitProofManager = remember { HabitProofManager(context) }
     var refreshTrigger by remember { mutableIntStateOf(0) }
     var rules by remember { mutableStateOf<List<HabitRule>>(emptyList()) }
     var installedApps by remember { mutableStateOf<List<InstalledAppInfo>>(emptyList()) }
     var detectedHabits by remember { mutableStateOf<List<DetectedHabit>>(emptyList()) }
+    var proofRequirements by remember { mutableStateOf<List<HabitProofRequirement>>(emptyList()) }
+    var proofLogs by remember { mutableStateOf<List<HabitProofLog>>(emptyList()) }
     var wizardStep by remember { mutableStateOf<HabitRuleWizardStep?>(null) }
     var showDetected by remember { mutableStateOf(false) }
+    var showProofLog by remember { mutableStateOf(false) }
 
     LaunchedEffect(refreshTrigger) {
         rules = habitRuleManager.rules()
         detectedHabits = detectedHabitManager.latest()
+        proofRequirements = habitProofManager.requirements()
         if (installedApps.isEmpty()) {
             installedApps = withContext(Dispatchers.IO) { loadInstalledApps(context) }
         }
@@ -603,21 +615,96 @@ fun HabitRulesSection(context: Context) {
             Text(
                 "Every habit row the scanner has found so far, and whether it looked checked off " +
                     "the last time its screen was open. Open the tracker app, then come back here " +
-                    "and refresh if a habit you expect isn't listed.",
+                    "and refresh if a habit you expect isn't listed. \"Require photo proof\" means " +
+                    "ticking that habit in HabitShare alone won't satisfy any rule -- you'll also " +
+                    "have to submit a photo + note here in this app before it counts for today.",
                 style = MaterialTheme.typography.bodySmall,
             )
             if (detectedHabits.isEmpty()) {
                 Text("Nothing detected yet -- open the habit tracker app first.", style = MaterialTheme.typography.bodySmall)
             } else {
                 detectedHabits.forEach { habit ->
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text(habit.name, style = MaterialTheme.typography.bodySmall)
-                        StatusText(if (habit.doneToday) "Done" else "Not done", isGood = habit.doneToday)
+                    val required = proofRequirements.find { it.habitName.equals(habit.name, ignoreCase = true) }?.required == true
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text(habit.name, style = MaterialTheme.typography.bodySmall)
+                            StatusText(if (habit.doneToday) "Done" else "Not done", isGood = habit.doneToday)
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth().clickable {
+                                coroutineScope.launch {
+                                    habitProofManager.setRequired(habit.name, !required)
+                                    proofRequirements = habitProofManager.requirements()
+                                }
+                            },
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Checkbox(
+                                checked = required,
+                                onCheckedChange = { checked ->
+                                    coroutineScope.launch {
+                                        habitProofManager.setRequired(habit.name, checked)
+                                        proofRequirements = habitProofManager.requirements()
+                                    }
+                                },
+                            )
+                            Text("Require photo proof", style = MaterialTheme.typography.bodySmall)
+                        }
                     }
                 }
             }
             OutlinedButton(onClick = { refreshTrigger++ }) {
                 Text("Refresh")
+            }
+        }
+
+        HorizontalDivider()
+
+        TextButton(onClick = {
+            showProofLog = !showProofLog
+            if (showProofLog) {
+                coroutineScope.launch { proofLogs = habitProofManager.recentLogs() }
+            }
+        }) {
+            Text(if (showProofLog) "Hide proof log" else "Show submitted proof log")
+        }
+        if (showProofLog) {
+            if (proofLogs.isEmpty()) {
+                Text("No proof submitted yet.", style = MaterialTheme.typography.bodySmall)
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    proofLogs.forEach { log -> HabitProofLogRow(log) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HabitProofLogRow(log: HabitProofLog) {
+    val bitmap = remember(log.photoPath) {
+        runCatching {
+            BitmapFactory.Options().apply { inSampleSize = 4 }
+                .let { opts -> BitmapFactory.decodeFile(log.photoPath, opts) }
+        }.getOrNull()
+    }
+    OutlinedCard(modifier = Modifier.fillMaxWidth().padding(4.dp)) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Text(log.habitName, style = MaterialTheme.typography.bodyMedium)
+            Text(
+                java.time.LocalDate.ofEpochDay(log.dateEpochDay).toString(),
+                style = MaterialTheme.typography.bodySmall,
+            )
+            if (log.note.isNotBlank()) {
+                Text(log.note, style = MaterialTheme.typography.bodySmall)
+            }
+            if (bitmap != null) {
+                androidx.compose.foundation.layout.Spacer(Modifier.height(8.dp))
+                Image(
+                    bitmap = bitmap.asImageBitmap(),
+                    contentDescription = "Proof photo for ${log.habitName}",
+                    modifier = Modifier.fillMaxWidth().height(160.dp),
+                )
             }
         }
     }

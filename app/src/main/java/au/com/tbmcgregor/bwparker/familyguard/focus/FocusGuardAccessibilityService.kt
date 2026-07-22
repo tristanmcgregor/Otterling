@@ -41,6 +41,7 @@ class FocusGuardAccessibilityService : AccessibilityService() {
     private lateinit var budgetManager: AppTimeBudgetManager
     private lateinit var habitRuleManager: HabitRuleManager
     private lateinit var detectedHabitManager: DetectedHabitManager
+    private lateinit var habitProofManager: HabitProofManager
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -48,6 +49,7 @@ class FocusGuardAccessibilityService : AccessibilityService() {
         budgetManager = AppTimeBudgetManager(applicationContext)
         habitRuleManager = HabitRuleManager(applicationContext)
         detectedHabitManager = DetectedHabitManager(applicationContext)
+        habitProofManager = HabitProofManager(applicationContext)
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -144,6 +146,12 @@ class FocusGuardAccessibilityService : AccessibilityService() {
         }
 
         detectedHabitManager.recordScan(detectedRows)
+
+        val doneNamesRaw = detectedRows.filter { it.second }.map { it.first }
+        val needsProof = habitProofManager.namesNeedingProof(doneNamesRaw)
+        if (needsProof.isNotEmpty()) {
+            withContext(Dispatchers.Main) { HabitProofActivity.launch(applicationContext, needsProof.first()) }
+        }
 
         val grantedCount = habitRuleManager.evaluateTrigger(packageName, texts, detectedRows)
         if (grantedCount > 0) {

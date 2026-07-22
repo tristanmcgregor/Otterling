@@ -103,3 +103,27 @@ interface DetectedHabitDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(habit: DetectedHabit)
 }
+
+@Dao
+interface HabitProofDao {
+    @Query("SELECT * FROM habit_proof_requirements ORDER BY habitName")
+    suspend fun getAllRequirements(): List<HabitProofRequirement>
+
+    @Query("SELECT * FROM habit_proof_requirements WHERE habitName = :habitName")
+    suspend fun getRequirement(habitName: String): HabitProofRequirement?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertRequirement(requirement: HabitProofRequirement)
+
+    @Query("SELECT * FROM habit_proof_logs WHERE habitName = :habitName AND dateEpochDay = :dateEpochDay")
+    suspend fun getLog(habitName: String, dateEpochDay: Long): HabitProofLog?
+
+    @Query("SELECT * FROM habit_proof_logs WHERE dateEpochDay = :dateEpochDay")
+    suspend fun logsForDate(dateEpochDay: Long): List<HabitProofLog>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertLog(log: HabitProofLog)
+
+    @Query("SELECT * FROM habit_proof_logs ORDER BY dateEpochDay DESC, submittedAtMillis DESC LIMIT :limit")
+    suspend fun recentLogs(limit: Int): List<HabitProofLog>
+}

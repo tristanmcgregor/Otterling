@@ -94,6 +94,23 @@
             android:lockTaskMode="if_whitelisted"
             android:theme="@style/Theme.FamilyDeviceGuard" />
 
+        <activity
+            android:name=".focus.HabitProofActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:theme="@style/Theme.FamilyDeviceGuard" />
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
         <service
             android:name=".content.VpnFilterService"
             android:exported="true"

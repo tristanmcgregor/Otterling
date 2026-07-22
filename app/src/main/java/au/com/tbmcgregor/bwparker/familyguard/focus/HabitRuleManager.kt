@@ -19,7 +19,9 @@ import java.time.LocalTime
  * midnight to 9pm" alongside a second rule for "Bible PM" covering 9pm to midnight. Detection
  * itself is still the same on-screen heuristic [FocusGuardAccessibilityService] already uses --
  * this class just lets that trigger fan out to many trigger-app/target-app/duration/window
- * combinations instead of one hardcoded one.
+ * combinations instead of one hardcoded one. Any habit name marked in [HabitProofManager] as
+ * requiring proof only counts as "done" here once a same-day [HabitProofLog] also exists --
+ * see [HabitProofManager.filterSatisfied].
  *
  * Every [targetPackageName] referenced by a rule is treated like a [RewardApp]: suspended by
  * default, and only unsuspended while at least one of its *enabled* rules is currently satisfied.
@@ -31,6 +33,7 @@ import java.time.LocalTime
 class HabitRuleManager(context: Context) {
     private val dao = AppDatabase.getInstance(context).habitRuleDao()
     private val detectedHabitDao = AppDatabase.getInstance(context).detectedHabitDao()
+    private val proofManager = HabitProofManager(context)
     private val devicePolicyManager: DevicePolicyManager? =
         context.getSystemService(DevicePolicyManager::class.java)
     private val adminComponent = ComponentName(context, DeviceAdminReceiverImpl::class.java)
@@ -152,7 +155,8 @@ class HabitRuleManager(context: Context) {
         if (candidates.isEmpty()) return 0
 
         val allComplete = looksLikeAllComplete(texts)
-        val doneHabitNames = detectedHabitRows.filter { it.second }.map { it.first.lowercase() }
+        val rawDoneNames = detectedHabitRows.filter { it.second }.map { it.first.lowercase() }.toSet()
+        val doneHabitNames = proofManager.filterSatisfied(rawDoneNames)
 
         val now = System.currentTimeMillis()
         var grantedCount = 0
@@ -182,10 +186,11 @@ class HabitRuleManager(context: Context) {
         val nowMinuteOfDay = currentMinuteOfDay()
         val nowDayOfWeek = LocalDate.now().dayOfWeek
         val today = LocalDate.now().toEpochDay()
-        val doneHabitNamesToday = detectedHabitDao.getAll()
+        val rawDoneHabitNamesToday = detectedHabitDao.getAll()
             .filter { it.dateEpochDay == today && it.doneToday }
             .map { it.name.lowercase() }
             .toSet()
+        val doneHabitNamesToday = proofManager.filterSatisfied(rawDoneHabitNamesToday)
 
         dao.getAll().groupBy { it.targetPackageName }.forEach { (packageName, allRulesForTarget) ->
             val activeRules = allRulesForTarget.filter { it.enabled }

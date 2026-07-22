@@ -14,6 +14,9 @@ import au.com.tbmcgregor.bwparker.familyguard.focus.DetectedHabit
 import au.com.tbmcgregor.bwparker.familyguard.focus.DetectedHabitDao
 import au.com.tbmcgregor.bwparker.familyguard.focus.FocusSession
 import au.com.tbmcgregor.bwparker.familyguard.focus.FocusSessionDao
+import au.com.tbmcgregor.bwparker.familyguard.focus.HabitProofDao
+import au.com.tbmcgregor.bwparker.familyguard.focus.HabitProofLog
+import au.com.tbmcgregor.bwparker.familyguard.focus.HabitProofRequirement
 import au.com.tbmcgregor.bwparker.familyguard.focus.HabitRule
 import au.com.tbmcgregor.bwparker.familyguard.focus.HabitRuleDao
 import au.com.tbmcgregor.bwparker.familyguard.focus.MindfulApp
@@ -38,8 +41,10 @@ import au.com.tbmcgregor.bwparker.familyguard.tamper.TamperEventDao
         RewardLedger::class,
         HabitRule::class,
         DetectedHabit::class,
+        HabitProofRequirement::class,
+        HabitProofLog::class,
     ],
-    version = 14,
+    version = 15,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -64,6 +69,8 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun habitRuleDao(): HabitRuleDao
 
     abstract fun detectedHabitDao(): DetectedHabitDao
+
+    abstract fun habitProofDao(): HabitProofDao
 
     companion object {
         @Volatile
@@ -90,6 +97,7 @@ abstract class AppDatabase : RoomDatabase() {
                     MIGRATION_11_12,
                     MIGRATION_12_13,
                     MIGRATION_13_14,
+                    MIGRATION_14_15,
                 )
                     .build()
                     .also { instance = it }
@@ -320,6 +328,34 @@ abstract class AppDatabase : RoomDatabase() {
         private val MIGRATION_13_14 = object : Migration(13, 14) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE habit_rules ADD COLUMN daysOfWeekMask INTEGER NOT NULL DEFAULT 127")
+            }
+        }
+
+        // Photo-proof anti-cheat: a habit can require a same-day photo + note before its tick
+        // counts towards any HabitRule, instead of only trusting the HabitShare checkbox.
+        private val MIGRATION_14_15 = object : Migration(14, 15) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS habit_proof_requirements (
+                        habitName TEXT NOT NULL,
+                        required INTEGER NOT NULL,
+                        PRIMARY KEY(habitName)
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS habit_proof_logs (
+                        habitName TEXT NOT NULL,
+                        dateEpochDay INTEGER NOT NULL,
+                        photoPath TEXT NOT NULL,
+                        note TEXT NOT NULL,
+                        submittedAtMillis INTEGER NOT NULL,
+                        PRIMARY KEY(habitName, dateEpochDay)
+                    )
+                    """.trimIndent(),
+                )
             }
         }
     }
