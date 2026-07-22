@@ -11,9 +11,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Accessibility
 import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.HourglassTop
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.SelfImprovement
 import androidx.compose.material.icons.filled.Timelapse
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
@@ -39,17 +37,12 @@ import au.com.tbmcgregor.bwparker.familyguard.focus.AppTimeBudgetManager
 import au.com.tbmcgregor.bwparker.familyguard.focus.DetectedHabit
 import au.com.tbmcgregor.bwparker.familyguard.focus.DetectedHabitManager
 import au.com.tbmcgregor.bwparker.familyguard.focus.FocusGuardAccessibilityService
-import au.com.tbmcgregor.bwparker.familyguard.focus.FocusSessionManager
 import au.com.tbmcgregor.bwparker.familyguard.focus.HabitGateManager
 import au.com.tbmcgregor.bwparker.familyguard.focus.HabitRule
 import au.com.tbmcgregor.bwparker.familyguard.focus.HabitRuleManager
 import au.com.tbmcgregor.bwparker.familyguard.focus.MindfulApp
 import au.com.tbmcgregor.bwparker.familyguard.focus.MindfulAppManager
-import au.com.tbmcgregor.bwparker.familyguard.focus.RewardApp
-import au.com.tbmcgregor.bwparker.familyguard.focus.RewardAppManager
-import au.com.tbmcgregor.bwparker.familyguard.focus.RewardLedgerManager
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -83,167 +76,6 @@ fun AccessibilityServiceSection(context: Context) {
         }
         OutlinedButton(onClick = { refreshTrigger++ }) {
             Text("Refresh status")
-        }
-    }
-}
-
-@Composable
-fun FocusRewardsSection(context: Context) {
-    val coroutineScope = rememberCoroutineScope()
-    val sessionManager = remember { FocusSessionManager(context) }
-    val ledgerManager = remember { RewardLedgerManager(context) }
-
-    var refreshTrigger by remember { mutableIntStateOf(0) }
-    var earnedMinutes by remember { mutableIntStateOf(0) }
-    var active by remember { mutableStateOf(sessionManager.activeSession()) }
-    var remainingSeconds by remember { mutableIntStateOf(0) }
-
-    LaunchedEffect(refreshTrigger) {
-        earnedMinutes = ledgerManager.earnedMinutes()
-        active = sessionManager.activeSession()
-    }
-
-    LaunchedEffect(active) {
-        val current = active ?: return@LaunchedEffect
-        while (true) {
-            val remainingMillis = current.endsAtMillis() - System.currentTimeMillis()
-            remainingSeconds = (remainingMillis / 1000).coerceAtLeast(0).toInt()
-            if (remainingMillis <= 0) {
-                sessionManager.complete()
-                refreshTrigger++
-                break
-            }
-            delay(1000)
-        }
-    }
-
-    SectionCard(
-        title = "Focus Sessions & Rewards",
-        icon = Icons.Default.SelfImprovement,
-        subtitle = "Finish a focus session or today's habits to earn minutes, then spend them " +
-            "to unlock your \"Reward apps\" below (e.g. YouTube, Instagram).",
-    ) {
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("Reward minutes banked", style = MaterialTheme.typography.bodyLarge)
-            Text("$earnedMinutes min", style = MaterialTheme.typography.bodyLarge)
-        }
-
-        val currentSession = active
-        if (currentSession != null) {
-            val minutes = remainingSeconds / 60
-            val seconds = remainingSeconds % 60
-            Text(
-                "Focus session running: %d:%02d remaining".format(minutes, seconds),
-                style = MaterialTheme.typography.titleMedium,
-            )
-            OutlinedButton(onClick = {
-                coroutineScope.launch {
-                    sessionManager.cancelActive()
-                    refreshTrigger++
-                }
-            }) {
-                Text("Cancel (forfeit reward)")
-            }
-        } else {
-            Text("Start a focus session:", style = MaterialTheme.typography.bodyMedium)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf(15, 25, 45).forEach { minutes ->
-                    OutlinedButton(onClick = {
-                        coroutineScope.launch {
-                            sessionManager.start(minutes)
-                            refreshTrigger++
-                        }
-                    }) {
-                        Text("$minutes min")
-                    }
-                }
-            }
-        }
-
-        HorizontalDivider()
-
-        Text("Spend banked minutes now:", style = MaterialTheme.typography.bodyMedium)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            listOf(10, 20, 30, 60).forEach { minutes ->
-                OutlinedButton(
-                    enabled = earnedMinutes >= minutes,
-                    onClick = {
-                        coroutineScope.launch {
-                            ledgerManager.spend(minutes)
-                            refreshTrigger++
-                        }
-                    },
-                ) {
-                    Text("$minutes min")
-                }
-            }
-        }
-        if (ledgerManager.isCurrentlyUnlocked()) {
-            val remainingMin = ((ledgerManager.activeUnlockUntilMillis() - System.currentTimeMillis()) / 60_000L)
-                .coerceAtLeast(0)
-            Text("Reward apps unlocked for about $remainingMin more min.", style = MaterialTheme.typography.bodySmall)
-        }
-    }
-}
-
-@Composable
-fun RewardAppsSection(context: Context) {
-    val coroutineScope = rememberCoroutineScope()
-    val rewardAppManager = remember { RewardAppManager(context) }
-    var refreshTrigger by remember { mutableIntStateOf(0) }
-    var apps by remember { mutableStateOf<List<RewardApp>>(emptyList()) }
-    var installedApps by remember { mutableStateOf<List<InstalledAppInfo>>(emptyList()) }
-    var showAppPicker by remember { mutableStateOf(false) }
-
-    LaunchedEffect(refreshTrigger) { apps = rewardAppManager.rewardApps() }
-
-    if (showAppPicker) {
-        AppPickerDialog(
-            apps = installedApps,
-            onDismiss = { showAppPicker = false },
-            onSelect = { app ->
-                coroutineScope.launch {
-                    rewardAppManager.add(app.packageName)
-                    refreshTrigger++
-                }
-                showAppPicker = false
-            },
-        )
-    }
-
-    SectionCard(
-        title = "Reward Apps",
-        icon = Icons.Default.HourglassTop,
-        subtitle = "Suspended by default. Only open while you're spending banked reward minutes above.",
-    ) {
-        Button(onClick = {
-            coroutineScope.launch {
-                installedApps = withContext(Dispatchers.IO) { loadInstalledApps(context) }
-                showAppPicker = true
-            }
-        }) {
-            Text("Choose app to gate behind rewards")
-        }
-        if (apps.isEmpty()) {
-            Text("No reward apps configured yet.", style = MaterialTheme.typography.bodySmall)
-        } else {
-            apps.forEach { app ->
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(app.packageName, modifier = Modifier.weight(1f))
-                    TextButton(onClick = {
-                        coroutineScope.launch {
-                            rewardAppManager.remove(app.packageName)
-                            refreshTrigger++
-                        }
-                    }) {
-                        Text("Remove")
-                    }
-                }
-            }
         }
     }
 }
@@ -359,27 +191,33 @@ fun TimeBudgetsSection(context: Context) {
             "be enabled for this to work. The app is suspended for the rest of the day once a " +
             "limit is hit.",
     ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = {
-                coroutineScope.launch {
-                    budgetManager.setBudget(
-                        packageName = "com.google.android.youtube",
-                        dailyLimitMinutes = 120,
-                        subLimitMinutes = 60,
-                        subLimitLabel = "Shorts",
-                    )
-                    refreshTrigger++
-                }
-            }) {
-                Text("Quick add: YouTube (2h / 1h Shorts)")
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(
+                onClick = {
+                    coroutineScope.launch {
+                        installedApps = withContext(Dispatchers.IO) { loadInstalledApps(context) }
+                        showAppPicker = true
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("Choose app + set limits")
             }
-            Button(onClick = {
-                coroutineScope.launch {
-                    installedApps = withContext(Dispatchers.IO) { loadInstalledApps(context) }
-                    showAppPicker = true
-                }
-            }) {
-                Text("Choose app + custom limits")
+            OutlinedButton(
+                onClick = {
+                    coroutineScope.launch {
+                        budgetManager.setBudget(
+                            packageName = "com.google.android.youtube",
+                            dailyLimitMinutes = 120,
+                            subLimitMinutes = 60,
+                            subLimitLabel = "Shorts",
+                        )
+                        refreshTrigger++
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("Quick add: YouTube (2h / 1h Shorts)")
             }
         }
 

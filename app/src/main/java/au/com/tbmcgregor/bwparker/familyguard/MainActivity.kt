@@ -58,13 +58,11 @@ import au.com.tbmcgregor.bwparker.familyguard.tamper.TamperEvent
 import au.com.tbmcgregor.bwparker.familyguard.tamper.TamperEventLogger
 import au.com.tbmcgregor.bwparker.familyguard.ui.AccessibilityServiceSection
 import au.com.tbmcgregor.bwparker.familyguard.ui.AppPickerDialog
-import au.com.tbmcgregor.bwparker.familyguard.ui.FocusRewardsSection
 import au.com.tbmcgregor.bwparker.familyguard.ui.HabitGateSection
 import au.com.tbmcgregor.bwparker.familyguard.ui.HabitRulesSection
 import au.com.tbmcgregor.bwparker.familyguard.ui.InstalledAppInfo
 import au.com.tbmcgregor.bwparker.familyguard.ui.MindfulAppsSection
 import au.com.tbmcgregor.bwparker.familyguard.ui.PinLockScreen
-import au.com.tbmcgregor.bwparker.familyguard.ui.RewardAppsSection
 import au.com.tbmcgregor.bwparker.familyguard.ui.SectionCard
 import au.com.tbmcgregor.bwparker.familyguard.ui.SettingsScreen
 import au.com.tbmcgregor.bwparker.familyguard.ui.TimeBudgetsSection
@@ -119,8 +117,6 @@ class MainActivity : ComponentActivity() {
                             ContentFilterSection()
                             VpnFilterSection(applicationContext)
                             AccessibilityServiceSection(applicationContext)
-                            FocusRewardsSection(applicationContext)
-                            RewardAppsSection(applicationContext)
                             MindfulAppsSection(applicationContext)
                             TimeBudgetsSection(applicationContext)
                             HabitGateSection(applicationContext)
