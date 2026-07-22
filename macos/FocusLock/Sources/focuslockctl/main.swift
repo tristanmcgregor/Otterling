@@ -148,20 +148,18 @@ Task {
             exit(1)
         }
         let token = randomURLSafeToken()
-        var components = URLComponents(string: "\(serverBase)/setup/\(token)")!
-        components.queryItems = [
-            URLQueryItem(name: "mac_pub", value: macPubKey),
-            URLQueryItem(name: "phone_pub", value: phonePubKey),
-        ]
-        if let url = components.url {
-            print("Send this link to your Guardian (expires in 30 minutes, single use):")
-            print(url.absoluteString)
-            print("")
-            print("Once they've submitted it, run:")
-            print("  focuslockctl guardian-claim \(serverBase) \(token)")
-        } else {
-            print("Failed to build setup URL.")
-        }
+        // NOT using URLComponents.queryItems here: it leaves `+` and `/` unescaped in query
+        // values (they're technically legal raw query characters per RFC 3986), but Flask/
+        // Werkzeug -- like most form-decoders -- treats a literal `+` in a query string as an
+        // encoded space. Standard base64 (used for both keys) is full of `+`/`/`, so that silently
+        // corrupted the public keys before they ever reached the browser, breaking `atob()` there.
+        // Percent-encoding every non-alphanumeric byte sidesteps that ambiguity entirely.
+        let url = "\(serverBase)/setup/\(token)?mac_pub=\(percentEncodeQueryValue(macPubKey))&phone_pub=\(percentEncodeQueryValue(phonePubKey))"
+        print("Send this link to your Guardian (expires in 30 minutes, single use):")
+        print(url)
+        print("")
+        print("Once they've submitted it, run:")
+        print("  focuslockctl guardian-claim \(serverBase) \(token)")
 
     case "guardian-claim":
         guard arguments.count >= 4 else { printUsage(); finished = true; exit(1) }
@@ -203,6 +201,16 @@ while !finished {
         exit(1)
     }
     RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.05))
+}
+
+/// Percent-encodes every byte outside RFC 3986's unreserved set (letters, digits, `-._~`). Unlike
+/// `URLComponents`/`addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)`, this also
+/// escapes `+` and `/` -- both legal in a raw query string but ambiguous once a form-decoder on
+/// the other end (e.g. Flask) is involved, since `+` conventionally means "space" there.
+func percentEncodeQueryValue(_ value: String) -> String {
+    var allowed = CharacterSet.alphanumerics
+    allowed.insert(charactersIn: "-._~")
+    return value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
 }
 
 func randomURLSafeToken() -> String {
