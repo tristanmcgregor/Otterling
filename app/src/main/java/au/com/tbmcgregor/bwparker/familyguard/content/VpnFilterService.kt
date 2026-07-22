@@ -15,12 +15,13 @@ import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.InetSocketAddress
+import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -60,7 +61,15 @@ class VpnFilterService : VpnService() {
     // many, one+ per TCP/UDP flow) crashes this whole process by default -- taking down every
     // other in-flight connection and the VPN itself, not just the one that hit a bug.
     private val exceptionHandler = CoroutineExceptionHandler { _, error -> Log.e(TAG, "Unhandled relay error", error) }
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO + exceptionHandler)
+    // Dispatchers.IO is capped at ~64 concurrent threads (tuned for short-lived I/O bursts), but
+    // this relay needs one thread *per open connection* for as long as a blocking socket.connect()/
+    // read()/write() call is in flight -- with anything beyond ~64 simultaneous flows (trivially
+    // reached by e.g. a speed-test site opening dozens of parallel probe connections), the excess
+    // ones queue behind whichever 64 happen to be running, adding multi-second delays that read to
+    // the client as a stalled/failed TLS handshake or an outright connect timeout, even though nothing
+    // was actually wrong with the connection itself. An unbounded cached pool removes that ceiling.
+    private val relayExecutor = Executors.newCachedThreadPool()
+    private val scope = CoroutineScope(SupervisorJob() + relayExecutor.asCoroutineDispatcher() + exceptionHandler)
     private var tunInterface: ParcelFileDescriptor? = null
     private var workerJob: Job? = null
     private val running = AtomicBoolean(false)
@@ -150,7 +159,7 @@ class VpnFilterService : VpnService() {
         while (running.get()) {
             // A fresh buffer per read -- the previous one may still be in flight on a background
             // coroutine, since DNS/TCP/UDP handling all happen off this loop.
-            val buffer = ByteArray(32767)
+            val buffer = ByteArray(MTU + 100) // headroom over MTU for IP/TCP headers on inbound client segments
             val length = try {
                 input.read(buffer)
             } catch (error: IOException) {
@@ -234,6 +243,7 @@ class VpnFilterService : VpnService() {
     override fun onDestroy() {
         running.set(false)
         scope.cancel() // tears down every in-flight TCP/UDP relay connection too, not just the read loop
+        relayExecutor.shutdownNow()
         tunInterface?.let { runCatching { it.close() } }
         tunInterface = null
         super.onDestroy()
@@ -266,7 +276,16 @@ class VpnFilterService : VpnService() {
         private const val DNS_PORT = 53
         private const val UPSTREAM_DNS = "1.1.1.1"
         private const val UPSTREAM_TIMEOUT_MS = 5_000
-        private const val MTU = 1500
+        // Real Ethernet/Wi-Fi framing never sees this value: these "packets" only ever travel
+        // between our relay code and the local kernel over the virtual tun device, since real
+        // segmentation onto the actual network happens transparently inside the OS's own TCP/IP
+        // stack when we call socket.write() on a real Socket/DatagramSocket. A too-small MTU here
+        // (this used to be the standard Ethernet 1500) forces every relayed byte through many more
+        // 1400-ish-byte packets than necessary, and each one pays a fixed per-packet cost (mutex
+        // acquisition, a tun write() syscall, a coroutine dispatch) -- that fixed cost, multiplied
+        // by many more packets, was capping real download throughput to a small fraction of the
+        // underlying link's actual speed even once flow control/window scaling were fixed.
+        private const val MTU = 16384
 
         /** Public DoH/DoT resolver IPs -- refused (RST/dropped) so apps can't dodge filtering by
          *  hardcoding their own DNS instead of using the (filtered) system resolver set above. */

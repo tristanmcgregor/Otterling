@@ -18,6 +18,12 @@ class IpPacket private constructor(
     val tcpAck: Long = 0,
     val tcpFlags: Int = 0,
     val tcpWindow: Int = 0,
+    /** The RFC 1323 Window Scale shift count this packet's sender offered, parsed from the TCP
+     * options of a SYN segment (null if absent or not a SYN -- the option is only ever valid on
+     * the initial SYN/SYN-ACK exchange). Needed to interpret [tcpWindow] as a real byte count
+     * (real window = tcpWindow shl the *peer's* shift) instead of being capped at 65535, which
+     * throttled every connection through this relay to well below real link speed. */
+    val tcpWindowScale: Int? = null,
 ) {
     val isSyn: Boolean get() = tcpFlags and TCP_SYN != 0
     val isAck: Boolean get() = tcpFlags and TCP_ACK != 0
@@ -49,9 +55,26 @@ class IpPacket private constructor(
      * ([sourceAddress]:[sourcePort]), with the given [seq]/[ack]/[flags]/[window] and
      * [segmentPayload]. Unlike UDP, the TCP checksum is mandatory (most stacks silently discard a
      * segment with an invalid one), so it's always computed over the pseudo-header + segment.
+     *
+     * [windowScaleToAdvertise], if non-null, appends an RFC 1323 Window Scale option (only
+     * meaningful -- and only ever passed -- on the SYN-ACK): it tells the client "multiply the
+     * window field of every future segment you get from me by 2^this" so we're not stuck
+     * advertising a max-65535-byte receive window for the rest of the connection's life.
      */
-    fun buildTcpSegment(seq: Long, ack: Long, flags: Int, window: Int, segmentPayload: ByteArray = ByteArray(0)): ByteArray {
-        val totalSize = IP_HEADER_SIZE + TCP_HEADER_SIZE + segmentPayload.size
+    fun buildTcpSegment(
+        seq: Long,
+        ack: Long,
+        flags: Int,
+        window: Int,
+        segmentPayload: ByteArray = ByteArray(0),
+        windowScaleToAdvertise: Int? = null,
+    ): ByteArray {
+        // Window Scale option is kind=3, len=3, 1 shift byte, padded with a 1-byte NOP to keep the
+        // header a multiple of 4 bytes (options are otherwise absent from every segment this relay
+        // ever sends, so this is the only case that needs to touch the header length at all).
+        val optionsSize = if (windowScaleToAdvertise != null) 4 else 0
+        val headerSize = TCP_HEADER_SIZE + optionsSize
+        val totalSize = IP_HEADER_SIZE + headerSize + segmentPayload.size
         val out = ByteArray(totalSize)
 
         writeIpHeader(out, totalSize, PROTOCOL_TCP, fromAddress = destinationAddress, toAddress = sourceAddress)
@@ -61,17 +84,23 @@ class IpPacket private constructor(
         writeUInt16(out, tcpOffset + 2, sourcePort)
         writeUInt32(out, tcpOffset + 4, seq)
         writeUInt32(out, tcpOffset + 8, ack)
-        out[tcpOffset + 12] = ((TCP_HEADER_SIZE / 4) shl 4).toByte() // data offset, no options
+        out[tcpOffset + 12] = ((headerSize / 4) shl 4).toByte() // data offset
         out[tcpOffset + 13] = flags.toByte()
         writeUInt16(out, tcpOffset + 14, window.coerceIn(0, 0xFFFF))
         writeUInt16(out, tcpOffset + 16, 0) // checksum placeholder
         writeUInt16(out, tcpOffset + 18, 0) // urgent pointer
-        System.arraycopy(segmentPayload, 0, out, tcpOffset + TCP_HEADER_SIZE, segmentPayload.size)
+        if (windowScaleToAdvertise != null) {
+            out[tcpOffset + TCP_HEADER_SIZE] = 3 // kind: Window Scale
+            out[tcpOffset + TCP_HEADER_SIZE + 1] = 3 // option length
+            out[tcpOffset + TCP_HEADER_SIZE + 2] = windowScaleToAdvertise.coerceIn(0, 14).toByte()
+            out[tcpOffset + TCP_HEADER_SIZE + 3] = 1 // NOP padding
+        }
+        System.arraycopy(segmentPayload, 0, out, tcpOffset + headerSize, segmentPayload.size)
 
         val tcpChecksum = transportChecksum(
             out,
             transportOffset = tcpOffset,
-            transportLength = TCP_HEADER_SIZE + segmentPayload.size,
+            transportLength = headerSize + segmentPayload.size,
             sourceAddress = destinationAddress,
             destAddress = sourceAddress,
             protocol = PROTOCOL_TCP,
@@ -161,6 +190,7 @@ class IpPacket private constructor(
             if (dataOffset < TCP_HEADER_SIZE) return null
             val flags = buffer[ihl + 13].toInt() and 0xFF
             val window = readUInt16(buffer, ihl + 14)
+            val windowScale = if (flags and TCP_SYN != 0) parseWindowScaleOption(buffer, ihl + TCP_HEADER_SIZE, dataOffset - TCP_HEADER_SIZE) else null
             val payloadStart = ihl + dataOffset
             val payload = if (payloadStart > length) ByteArray(0) else buffer.copyOfRange(payloadStart, length)
             return IpPacket(
@@ -174,7 +204,33 @@ class IpPacket private constructor(
                 tcpAck = ack,
                 tcpFlags = flags,
                 tcpWindow = window,
+                tcpWindowScale = windowScale,
             )
+        }
+
+        /** Scans a SYN segment's TCP options for a Window Scale option (kind 3), per RFC 1323's
+         * standard TLV option encoding (kind 0 = end-of-options, kind 1 = 1-byte NOP with no
+         * length byte, everything else is kind+length+data). Returns the raw shift count, or null
+         * if the client didn't offer one (in which case scaling must stay off for this connection
+         * entirely -- RFC 1323 requires *both* sides to advertise it or neither may use it). */
+        private fun parseWindowScaleOption(buffer: ByteArray, optionsStart: Int, optionsLength: Int): Int? {
+            var i = optionsStart
+            val end = optionsStart + optionsLength
+            while (i < end) {
+                val kind = buffer[i].toInt() and 0xFF
+                when (kind) {
+                    0 -> return null // end of options
+                    1 -> i += 1 // NOP
+                    else -> {
+                        if (i + 1 >= end) return null
+                        val optLen = buffer[i + 1].toInt() and 0xFF
+                        if (optLen < 2 || i + optLen > end) return null
+                        if (kind == 3 && optLen == 3) return buffer[i + 2].toInt() and 0xFF
+                        i += optLen
+                    }
+                }
+            }
+            return null
         }
 
         private fun formatAddress(buffer: ByteArray, offset: Int): String =

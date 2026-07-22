@@ -8,11 +8,9 @@ import java.net.Socket
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.random.Random
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 /**
  * NAT-relays TCP connections captured by [VpnFilterService]'s tun: for each new SYN, opens a real
@@ -25,13 +23,19 @@ import kotlinx.coroutines.withContext
  * you might assume, just broken. Capturing everything via a default route and relaying it back out
  * ourselves is the only way to filter DNS/known-bypass-IPs without breaking every other connection.
  *
- * Deliberately simplified vs. a spec-compliant TCP stack: no retransmission timers, no window
- * scaling, no SACK, no congestion control -- since every "wire" on the client side of this relay is
- * the local tun (effectively zero loss/reordering), a client segment is trusted to arrive at most
- * once and in order, and any oddities (stray packets, failed connects) are resolved with an
- * immediate RST rather than perfect RFC 793 behaviour. This is the same trade-off small
- * from-scratch Android "local VPN" content filters (DNS66, PersonalDNSFilter, etc.) make instead of
- * embedding a full network stack.
+ * Deliberately simplified vs. a spec-compliant TCP stack: no retransmission timers, no SACK, no
+ * congestion control -- since every "wire" on the client side of this relay is the local tun
+ * (effectively zero loss/reordering), a client segment is trusted to arrive at most once and in
+ * order, and any oddities (stray packets, failed connects) are resolved with an immediate RST
+ * rather than perfect RFC 793 behaviour. This is the same trade-off small from-scratch Android
+ * "local VPN" content filters (DNS66, PersonalDNSFilter, etc.) make instead of embedding a full
+ * network stack.
+ *
+ * Window scaling (RFC 1323) *is* implemented, and matters a lot here: without it every connection
+ * through this relay is hard-capped to a 65535-byte TCP window, which limits throughput to
+ * roughly window/RTT regardless of the real link speed (e.g. ~25Mbps at a fairly ordinary 20ms
+ * RTT) -- a real, previously-invisible bottleneck, since it only bites once DNS/TCP relaying
+ * itself is actually working end-to-end for high-throughput transfers.
  */
 class TcpRelayManager(
     private val scope: CoroutineScope,
@@ -59,7 +63,23 @@ class TcpRelayManager(
         // of view the stream just stalls forever. Starts at WINDOW_SIZE (this class's own
         // optimistic default) since the real value only arrives once the first client ACK does.
         @Volatile var clientAcked: Long = 0
-        @Volatile var clientWindow: Int = WINDOW_SIZE
+        @Volatile var clientWindow: Long = WINDOW_SIZE.toLong()
+
+        // Non-null only if *both* sides negotiated window scaling on the SYN/SYN-ACK (RFC 1323:
+        // if either side omits the option, neither may use it). [peerShift] is the client's own
+        // announced shift, needed to decode the window field of every ACK it sends us from then
+        // on; [ourShift] is the shift we announced, needed to correctly encode our own advertised
+        // window (otherwise stuck at 65535 like the client would be without this at all).
+        @Volatile var peerShift: Int? = null
+        @Volatile var ourShift: Int? = null
+
+        // Debug-only bookkeeping to measure real relay throughput/stall time per connection.
+        @Volatile var bytesFromSocket: Long = 0
+        @Volatile var windowWaitMillis: Long = 0
+        @Volatile var socketReadMillis: Long = 0
+        @Volatile var tunWriteMillis: Long = 0
+        @Volatile var readCount: Int = 0
+        val startedAtMillis: Long = System.currentTimeMillis()
     }
 
     private val connections = ConcurrentHashMap<FlowKey, Connection>()
@@ -109,9 +129,11 @@ class TcpRelayManager(
             // connected) -- protect() silently fails on it otherwise, since there's nothing to mark.
             socket.bind(InetSocketAddress(0))
             if (!protect(socket)) throw IOException("VpnService.protect() failed")
-            withContext(Dispatchers.IO) {
-                socket.connect(InetSocketAddress(InetAddress.getByName(connection.key.dstIp), connection.key.dstPort), CONNECT_TIMEOUT_MS)
-            }
+            // Blocking, but this whole call chain already runs on [scope]'s dispatcher -- a
+            // dedicated unbounded pool sized for one thread per concurrent connection (see
+            // VpnFilterService), not the global Dispatchers.IO, so it's safe to block here
+            // directly without an extra withContext hop.
+            socket.connect(InetSocketAddress(InetAddress.getByName(connection.key.dstIp), connection.key.dstPort), CONNECT_TIMEOUT_MS)
             socket.tcpNoDelay = true
             true
         } catch (error: Exception) {
@@ -133,10 +155,35 @@ class TcpRelayManager(
         // may run before the client's handshake-completing ACK has been processed) doesn't see a
         // bogus multi-gigabyte "in-flight" gap between a real serverSeq and a zeroed clientAcked.
         connection.clientAcked = connection.serverSeq
-        writeToTun(synPacket.buildTcpSegment(isn, connection.clientNextSeq, IpPacket.TCP_SYN or IpPacket.TCP_ACK, WINDOW_SIZE))
+        // Only offer scaling back if the client offered it first -- replying with the option when
+        // the client didn't send one is meaningless (nothing says the client would honor it), and
+        // omitting it when the client did would leave scaling off entirely per RFC 1323.
+        connection.peerShift = synPacket.tcpWindowScale
+        connection.ourShift = synPacket.tcpWindowScale?.let { OUR_WINDOW_SHIFT }
+        Log.d(
+            TAG,
+            "${connection.key.dstIp}:${connection.key.dstPort} window scale: client offered=${synPacket.tcpWindowScale}, negotiated=${connection.ourShift != null}",
+        )
+        writeToTun(
+            synPacket.buildTcpSegment(
+                isn,
+                connection.clientNextSeq,
+                IpPacket.TCP_SYN or IpPacket.TCP_ACK,
+                encodedWindow(connection),
+                windowScaleToAdvertise = connection.ourShift,
+            ),
+        )
 
         scope.launch { consumeInbox(connection) }
         scope.launch { relayFromSocket(connection) }
+    }
+
+    /** The window field value to put on the wire for [connection]'s current advertised receive
+     * window: scaled down by [Connection.ourShift] if negotiated, otherwise the same flat
+     * [WINDOW_SIZE] this relay always used before scaling support existed. */
+    private fun encodedWindow(connection: Connection): Int {
+        val shift = connection.ourShift ?: return WINDOW_SIZE
+        return (DESIRED_RECEIVE_WINDOW shr shift).coerceIn(0, 0xFFFF).toInt()
     }
 
     private suspend fun consumeInbox(connection: Connection) {
@@ -154,11 +201,11 @@ class TcpRelayManager(
             if (delta in 1 until WRAP_THRESHOLD) {
                 connection.clientAcked = packet.tcpAck
             }
-            connection.clientWindow = packet.tcpWindow
+            connection.clientWindow = packet.tcpWindow.toLong() shl (connection.peerShift ?: 0)
         }
         if (packet.payload.isNotEmpty() && packet.tcpSeq == connection.clientNextSeq) {
             try {
-                withContext(Dispatchers.IO) { socket.getOutputStream().write(packet.payload) }
+                socket.getOutputStream().write(packet.payload)
             } catch (error: IOException) {
                 closeConnection(connection, sendRst = true)
                 return
@@ -172,7 +219,7 @@ class TcpRelayManager(
                 connection.clientNextSeq = ackValue
                 runCatching { socket.shutdownOutput() }
             }
-            writeToTun(packet.buildTcpSegment(connection.serverSeq, ackValue, IpPacket.TCP_ACK, WINDOW_SIZE))
+            writeToTun(packet.buildTcpSegment(connection.serverSeq, ackValue, IpPacket.TCP_ACK, encodedWindow(connection)))
         }
     }
 
@@ -184,10 +231,14 @@ class TcpRelayManager(
      * place to hang a callback; the poll interval is short enough not to add noticeable latency.
      */
     private suspend fun waitForWindow(connection: Connection, neededBytes: Int) {
+        val waitStart = System.currentTimeMillis()
         while (true) {
             val inFlight = (connection.serverSeq - connection.clientAcked) and SEQ_MASK
-            val available = connection.clientWindow.toLong() - inFlight
-            if (available >= neededBytes) return
+            val available = connection.clientWindow - inFlight
+            if (available >= neededBytes) {
+                connection.windowWaitMillis += System.currentTimeMillis() - waitStart
+                return
+            }
             delay(WINDOW_POLL_DELAY_MS)
         }
     }
@@ -198,18 +249,24 @@ class TcpRelayManager(
         try {
             val input = socket.getInputStream()
             while (true) {
-                val read = withContext(Dispatchers.IO) { input.read(buffer) }
+                val readStart = System.currentTimeMillis()
+                val read = input.read(buffer)
+                connection.socketReadMillis += System.currentTimeMillis() - readStart
                 if (read < 0) break
+                connection.bytesFromSocket += read
+                connection.readCount++
                 waitForWindow(connection, read)
+                val writeStart = System.currentTimeMillis()
                 writeToTun(
                     connection.templatePacket.buildTcpSegment(
                         connection.serverSeq,
                         connection.clientNextSeq,
                         IpPacket.TCP_ACK or IpPacket.TCP_PSH,
-                        WINDOW_SIZE,
+                        encodedWindow(connection),
                         buffer.copyOf(read),
                     ),
                 )
+                connection.tunWriteMillis += System.currentTimeMillis() - writeStart
                 connection.serverSeq = (connection.serverSeq + read) and SEQ_MASK
             }
             writeToTun(
@@ -217,7 +274,7 @@ class TcpRelayManager(
                     connection.serverSeq,
                     connection.clientNextSeq,
                     IpPacket.TCP_FIN or IpPacket.TCP_ACK,
-                    WINDOW_SIZE,
+                    encodedWindow(connection),
                 ),
             )
             connection.serverSeq = (connection.serverSeq + 1) and SEQ_MASK
@@ -230,6 +287,16 @@ class TcpRelayManager(
     private suspend fun closeConnection(connection: Connection, sendRst: Boolean) {
         connections.remove(connection.key)
         connection.inbox.close()
+        val elapsedMs = System.currentTimeMillis() - connection.startedAtMillis
+        if (connection.bytesFromSocket > 0) {
+            val mbps = if (elapsedMs > 0) (connection.bytesFromSocket * 8.0 / 1000.0 / elapsedMs) else 0.0
+            Log.d(
+                TAG,
+                "${connection.key.dstIp}:${connection.key.dstPort} closed: ${connection.bytesFromSocket}B in ${elapsedMs}ms " +
+                    "(%.1fMbps), reads=${connection.readCount}, socket-read=${connection.socketReadMillis}ms, ".format(mbps) +
+                    "tun-write=${connection.tunWriteMillis}ms, window-wait=${connection.windowWaitMillis}ms, shift=${connection.ourShift}",
+            )
+        }
         if (sendRst) {
             writeToTun(
                 connection.templatePacket.buildTcpSegment(
@@ -254,7 +321,14 @@ class TcpRelayManager(
     private companion object {
         const val TAG = "TcpRelayManager"
         const val WINDOW_SIZE = 65535
-        const val MAX_SEGMENT_SIZE = 1400
+        // 7 => a raw window field of up to 65535 represents up to ~8.4MB real bytes, comfortably
+        // covering the bandwidth-delay product of a fast (100s of Mbps) link even at 100+ms RTT.
+        const val OUR_WINDOW_SHIFT = 7
+        const val DESIRED_RECEIVE_WINDOW = 4L * 1024 * 1024
+        // Matches VpnFilterService's tun MTU (16384) minus IP/TCP header overhead, with some
+        // margin -- see that MTU constant's comment for why this can be so much larger than a
+        // "real" 1500-byte Ethernet MTU.
+        const val MAX_SEGMENT_SIZE = 16 * 1024 - 100
         const val CONNECT_TIMEOUT_MS = 8_000
         const val SEQ_MASK = 0xFFFFFFFFL
         const val WRAP_THRESHOLD = 0x80000000L

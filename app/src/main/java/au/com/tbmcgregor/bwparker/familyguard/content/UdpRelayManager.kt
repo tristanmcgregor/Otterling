@@ -8,9 +8,7 @@ import java.net.InetSocketAddress
 import java.net.SocketTimeoutException
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 /**
  * NAT-relays non-DNS UDP traffic captured by [VpnFilterService]'s tun (e.g. QUIC/HTTP3, which a
@@ -72,13 +70,13 @@ class UdpRelayManager(
 
     private suspend fun send(flow: Flow, payload: ByteArray) {
         try {
-            withContext(Dispatchers.IO) {
-                val destination = InetSocketAddress(
-                    InetAddress.getByName(flow.templatePacket.destinationAddress),
-                    flow.templatePacket.destinationPort,
-                )
-                flow.socket.send(DatagramPacket(payload, payload.size, destination))
-            }
+            // See TcpRelayManager's establish() for why blocking directly (no withContext) is
+            // fine here: [scope] already runs on a dedicated unbounded pool, not Dispatchers.IO.
+            val destination = InetSocketAddress(
+                InetAddress.getByName(flow.templatePacket.destinationAddress),
+                flow.templatePacket.destinationPort,
+            )
+            flow.socket.send(DatagramPacket(payload, payload.size, destination))
         } catch (error: IOException) {
             // Best-effort -- the receive loop's own I/O failures are what actually tear the flow down.
         }
@@ -90,7 +88,7 @@ class UdpRelayManager(
             while (true) {
                 val datagram = DatagramPacket(buffer, buffer.size)
                 try {
-                    withContext(Dispatchers.IO) { flow.socket.receive(datagram) }
+                    flow.socket.receive(datagram)
                 } catch (timeout: SocketTimeoutException) {
                     if (System.currentTimeMillis() - flow.lastActivityMillis > IDLE_TIMEOUT_MS) break else continue
                 }
