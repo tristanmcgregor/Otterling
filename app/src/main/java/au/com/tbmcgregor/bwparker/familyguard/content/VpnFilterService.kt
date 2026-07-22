@@ -16,32 +16,51 @@ import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 /**
  * Local, always-on VpnService that filters DNS lookups (plus a short list of known public
- * DNS-over-HTTPS/DoT resolver IPs) against a downloaded domain blocklist ([DomainBlocklistManager]),
- * without decrypting or inspecting any actual web traffic. General app traffic is never routed
- * through this VPN -- only the virtual DNS address and the hardcoded resolver IPs are added as
- * routes, so there's no need to implement a full TCP/IP NAT stack for everything else.
+ * DNS-over-HTTPS/DoT resolver IPs, refused outright) against a downloaded domain blocklist
+ * ([DomainBlocklistManager]), without decrypting or inspecting any actual web traffic.
+ *
+ * Captures a full default route (every IPv4 destination) because a [VpnService] that captures all
+ * app traffic but only has routes for a handful of specific IPs makes every *other* destination
+ * unreachable for captured apps -- not "falls back to the real network" like an earlier version of
+ * this class assumed, just broken (this is what caused otherwise-unrelated apps, e.g. Spotify, to
+ * report "no internet" the moment this VPN turned on). Since DNS filtering needs *every* app's
+ * traffic funneled through here anyway (so nothing can bypass it), the only way to do that without
+ * breaking everything else is to also relay everything else back out ourselves --
+ * [TcpRelayManager]/[UdpRelayManager] do that: real destinations get a real (protected) socket
+ * opened on this device and bytes are bridged transparently in both directions; only DNS (port 53)
+ * and the hardcoded DoH/DoT IPs get special treatment.
  *
  * Registered as the device's mandatory VPN via [VpnFilterManager], which uses Device Owner's
  * `DevicePolicyManager.setAlwaysOnVpnPackage(..., lockdownEnabled = true)` -- once set, Android
  * blocks all network access unless this service is running, and the always-on VPN setting itself
  * is locked out of the user-facing Settings UI.
  *
+ * IPv6 isn't captured (no IPv6 address/route is ever added to the [Builder]), so it's blocked
+ * outright for captured apps rather than relayed -- acceptable for now since this only matters on
+ * networks that actually offer global IPv6 routing to begin with.
+ *
  * Some browsers' built-in "Secure DNS"/DNS-over-HTTPS features may fail to load pages while this
- * is active, since their hardcoded resolver IP gets dropped rather than falling through to the
+ * is active, since their hardcoded resolver IP gets refused rather than falling through to the
  * (filtered) system resolver -- same trade-off as disabling Secure DNS in Chrome.
  */
 class VpnFilterService : VpnService() {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    // Without this, an uncaught exception in any single relayed connection's coroutine (there are
+    // many, one+ per TCP/UDP flow) crashes this whole process by default -- taking down every
+    // other in-flight connection and the VPN itself, not just the one that hit a bug.
+    private val exceptionHandler = CoroutineExceptionHandler { _, error -> Log.e(TAG, "Unhandled relay error", error) }
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO + exceptionHandler)
     private var tunInterface: ParcelFileDescriptor? = null
     private var workerJob: Job? = null
     private val running = AtomicBoolean(false)
@@ -62,10 +81,14 @@ class VpnFilterService : VpnService() {
         val blocklist = DomainBlocklistManager(applicationContext)
         val builder = Builder()
             .setSession("Family Device Guard Filter")
+            .setMtu(MTU)
             .addAddress(VIRTUAL_IP, 32)
             .addDnsServer(VIRTUAL_IP)
-            .addRoute(VIRTUAL_IP, 32)
-        KNOWN_DOH_IPS.forEach { ip -> runCatching { builder.addRoute(ip, 32) } }
+            .addRoute("0.0.0.0", 0)
+            // VpnService treats the tunnel as metered by default. Left unset, apps that respect
+            // Data Saver / "restrict background data" (e.g. Spotify) get silently network-blocked
+            // by netd over this VPN even though the underlying Wi-Fi/cellular network is unmetered.
+            .setMetered(false)
 
         tunInterface = try {
             builder.establish()
@@ -89,10 +112,36 @@ class VpnFilterService : VpnService() {
         val input = FileInputStream(tun.fileDescriptor)
         val output = FileOutputStream(tun.fileDescriptor)
         val writeLock = Mutex()
+        // Centralized so every caller (DNS/TCP/UDP relay) is protected: a write can fail with EIO
+        // if the tun gets torn down (e.g. the VPN toggled off) while a background relay coroutine
+        // is mid-write. Uncaught, that IOException propagates to the coroutine dispatcher's thread
+        // and crashes the whole process -- taking down every other in-flight connection with it,
+        // not just the one that failed.
+        val writeToTun: suspend (ByteArray) -> Unit = { bytes ->
+            try {
+                writeLock.withLock { output.write(bytes) }
+            } catch (error: IOException) {
+                Log.w(TAG, "Failed writing to tun", error)
+            }
+        }
+        val isBlockedDestination: (String) -> Boolean = { ip -> ip in KNOWN_DOH_IPS }
+
+        val tcpRelay = TcpRelayManager(
+            scope = scope,
+            protect = { socket -> protect(socket) },
+            writeToTun = writeToTun,
+            isBlockedDestination = isBlockedDestination,
+        )
+        val udpRelay = UdpRelayManager(
+            scope = scope,
+            protect = { socket -> protect(socket) },
+            writeToTun = writeToTun,
+            isBlockedDestination = isBlockedDestination,
+        )
 
         while (running.get()) {
             // A fresh buffer per read -- the previous one may still be in flight on a background
-            // coroutine below, since DNS handling is no longer inline in this loop.
+            // coroutine, since DNS/TCP/UDP handling all happen off this loop.
             val buffer = ByteArray(32767)
             val length = try {
                 input.read(buffer)
@@ -103,35 +152,39 @@ class VpnFilterService : VpnService() {
             if (length <= 0) continue
 
             val packet = IpPacket.parse(buffer, length) ?: continue
-            if (packet.protocol == IpPacket.PROTOCOL_UDP && packet.destinationPort == DNS_PORT) {
-                // Handled on its own coroutine so one slow/stalled upstream lookup can't stall
-                // the tun read loop and pile up every other in-flight query behind it (this was
-                // causing apps that fire off many DNS lookups in quick succession, e.g. Spotify
-                // resolving several edge/access-point hostnames at once, to see lookups time out
-                // and report "no internet" even though the network itself was fine).
-                scope.launch { handleDnsPacket(packet, output, writeLock, blocklist) }
+            when (packet.protocol) {
+                IpPacket.PROTOCOL_UDP -> {
+                    if (packet.destinationPort == DNS_PORT) {
+                        // Handled on its own coroutine so one slow/stalled upstream lookup can't
+                        // stall this read loop and pile up every other in-flight query behind it
+                        // (this alone used to be enough to make apps that fire off many DNS
+                        // lookups in quick succession, e.g. Spotify resolving several
+                        // edge/access-point hostnames at once, see lookups time out).
+                        scope.launch { handleDnsPacket(packet, writeToTun, blocklist) }
+                    } else {
+                        udpRelay.handle(packet)
+                    }
+                }
+                IpPacket.PROTOCOL_TCP -> tcpRelay.handle(packet)
+                else -> {} // e.g. ICMP -- not relayed, no reply sent
             }
-            // Everything else that reached the tun is a known public DoH/DoT IP we deliberately
-            // routed here to drop -- no reply is sent, so those connections just fail/time out.
         }
     }
 
     private suspend fun handleDnsPacket(
         packet: IpPacket,
-        output: FileOutputStream,
-        writeLock: Mutex,
+        writeToTun: suspend (ByteArray) -> Unit,
         blocklist: DomainBlocklistManager,
     ) {
-        val query = DnsMessage.parseQuery(packet.udpPayload) ?: return
+        val query = DnsMessage.parseQuery(packet.payload) ?: return
         val response = if (blocklist.isBlocked(query.questionName)) {
-            DnsMessage.buildBlockedResponse(packet.udpPayload)
+            DnsMessage.buildBlockedResponse(packet.payload)
         } else {
-            forwardToUpstream(packet.udpPayload)
+            forwardToUpstream(packet.payload)
         } ?: return
 
         try {
-            val reply = packet.buildUdpReply(response)
-            writeLock.withLock { output.write(reply) }
+            writeToTun(packet.buildUdpReply(response))
         } catch (error: IOException) {
             Log.w(TAG, "Failed writing DNS reply to tun", error)
         }
@@ -158,7 +211,7 @@ class VpnFilterService : VpnService() {
 
     override fun onDestroy() {
         running.set(false)
-        workerJob?.cancel()
+        scope.cancel() // tears down every in-flight TCP/UDP relay connection too, not just the read loop
         tunInterface?.let { runCatching { it.close() } }
         tunInterface = null
         super.onDestroy()
@@ -190,9 +243,10 @@ class VpnFilterService : VpnService() {
         private const val DNS_PORT = 53
         private const val UPSTREAM_DNS = "1.1.1.1"
         private const val UPSTREAM_TIMEOUT_MS = 5_000
+        private const val MTU = 1500
 
-        /** Public DoH/DoT resolver IPs -- dropped so apps can't dodge filtering by hardcoding
-         *  their own DNS instead of using the (filtered) system resolver set above. */
+        /** Public DoH/DoT resolver IPs -- refused (RST/dropped) so apps can't dodge filtering by
+         *  hardcoding their own DNS instead of using the (filtered) system resolver set above. */
         private val KNOWN_DOH_IPS = setOf(
             "1.1.1.1", "1.0.0.1", // Cloudflare
             "8.8.8.8", "8.8.4.4", // Google
