@@ -34,6 +34,14 @@ import Foundation
     func enableDNSEnforcement(reply: @escaping (Data) -> Void)
     /// Requires the calling account to be in the `admin` group (i.e. the Guardian account).
     func disableDNSEnforcement(reply: @escaping (Data) -> Void)
+
+    /// Always allowed, from any account -- this only ever hands out a public key, never a secret.
+    func getGuardianSetupPublicKey(reply: @escaping (String?) -> Void)
+    /// Always allowed, from any account: decrypts `base64Ciphertext` with the daemon's private
+    /// key (never returned to the caller) and immediately uses the result to create or reset the
+    /// Guardian account's password. The caller only ever learns success/failure, never the
+    /// plaintext -- that's what makes it safe for a Standard account to trigger this itself.
+    func applyGuardianSetupCiphertext(_ base64Ciphertext: String, reply: @escaping (Data) -> Void)
 }
 
 public enum FocusLockCodec {

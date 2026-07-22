@@ -1,5 +1,6 @@
 import Foundation
 import FocusLockShared
+import Security
 
 /// Command-line override tool. Functionally this is just a thin wrapper around the same XPC
 /// calls the GUI makes -- the actual Guardian-account enforcement lives in the daemon
@@ -25,6 +26,10 @@ func printUsage() {
       focuslockctl enable-dns
       focuslockctl disable-dns                     (Guardian admin account only)
 
+      focuslockctl guardian-pubkey
+      focuslockctl guardian-link <relay-server-base-url> <phone-pubkey-base64>
+      focuslockctl guardian-claim <relay-server-base-url> <token>
+
     Protected apps (e.g. an accountability app) can't be quit -- the daemon relaunches them
     within seconds -- or deleted -- their bundle is locked with the filesystem-level immutable
     flag, which only root can clear, so a Standard account can't touch it even with sudo.
@@ -32,6 +37,13 @@ func printUsage() {
     DNS enforcement points every network service at Cloudflare's content-filtering resolver
     (1.1.1.3 / 1.0.0.3) and blocks alternate/DoH resolvers so it can't be sidestepped by just
     picking a different one.
+
+    guardian-link builds a one-time setup URL to send to your Guardian: they open it, choose a
+    Mac account password and a phone PIN, and their browser encrypts each separately against this
+    Mac's and the phone's public key before it ever reaches the relay server -- so whoever runs
+    that server (even you) only ever sees ciphertext. guardian-claim then fetches and decrypts
+    the Mac's half and applies it directly; you never see the plaintext either. The phone claims
+    its own half independently, from the app.
     """)
 }
 
@@ -112,9 +124,79 @@ Task {
     case "disable-dns":
         printResult(await client.disableDNSEnforcement())
 
+    case "guardian-pubkey":
+        if let key = await client.getGuardianSetupPublicKey() {
+            print(key)
+        } else {
+            print("Could not read/create this Mac's Guardian setup keypair.")
+        }
+
+    case "guardian-link":
+        guard arguments.count >= 4 else { printUsage(); semaphore.signal(); exit(1) }
+        let serverBase = arguments[2].hasSuffix("/") ? String(arguments[2].dropLast()) : arguments[2]
+        let phonePubKey = arguments[3]
+        guard let macPubKey = await client.getGuardianSetupPublicKey() else {
+            print("Could not read/create this Mac's Guardian setup keypair.")
+            semaphore.signal()
+            exit(1)
+        }
+        let token = randomURLSafeToken()
+        var components = URLComponents(string: "\(serverBase)/setup/\(token)")!
+        components.queryItems = [
+            URLQueryItem(name: "mac_pub", value: macPubKey),
+            URLQueryItem(name: "phone_pub", value: phonePubKey),
+        ]
+        if let url = components.url {
+            print("Send this link to your Guardian (expires in 30 minutes, single use):")
+            print(url.absoluteString)
+            print("")
+            print("Once they've submitted it, run:")
+            print("  focuslockctl guardian-claim \(serverBase) \(token)")
+        } else {
+            print("Failed to build setup URL.")
+        }
+
+    case "guardian-claim":
+        guard arguments.count >= 4 else { printUsage(); semaphore.signal(); exit(1) }
+        let serverBase = arguments[2].hasSuffix("/") ? String(arguments[2].dropLast()) : arguments[2]
+        let token = arguments[3]
+        guard let url = URL(string: "\(serverBase)/drop/\(token)/mac") else {
+            print("Invalid server URL.")
+            semaphore.signal()
+            exit(1)
+        }
+        do {
+            let (data, response) = try await URLSession.shared.data(from: url)
+            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+                print("Nothing to claim yet -- has the Guardian submitted the link?")
+                semaphore.signal()
+                exit(1)
+            }
+            guard
+                let json = try? JSONSerialization.jsonObject(with: data) as? [String: String],
+                let ciphertext = json["ciphertext"]
+            else {
+                print("Malformed response from relay server.")
+                semaphore.signal()
+                exit(1)
+            }
+            printResult(await client.applyGuardianSetupCiphertext(ciphertext))
+        } catch {
+            print("Failed to reach relay server: \(error.localizedDescription)")
+        }
+
     default:
         printUsage()
     }
     semaphore.signal()
 }
 semaphore.wait()
+
+func randomURLSafeToken() -> String {
+    var bytes = [UInt8](repeating: 0, count: 32)
+    _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+    return Data(bytes).base64EncodedString()
+        .replacingOccurrences(of: "+", with: "-")
+        .replacingOccurrences(of: "/", with: "_")
+        .replacingOccurrences(of: "=", with: "")
+}

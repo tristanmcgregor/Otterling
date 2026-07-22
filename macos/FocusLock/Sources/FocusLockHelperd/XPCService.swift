@@ -134,4 +134,19 @@ final class XPCService: NSObject, FocusLockXPCProtocol {
         onStateChanged()
         reply(FocusLockCodec.encode(FocusLockResult.ok))
     }
+
+    func getGuardianSetupPublicKey(reply: @escaping (String?) -> Void) {
+        reply(GuardianSetupCrypto.publicKeySPKIBase64())
+    }
+
+    func applyGuardianSetupCiphertext(_ base64Ciphertext: String, reply: @escaping (Data) -> Void) {
+        guard let password = GuardianSetupCrypto.decrypt(base64Ciphertext: base64Ciphertext) else {
+            reply(FocusLockCodec.encode(FocusLockResult.denied("Could not decrypt payload")))
+            return
+        }
+        let applied = GuardianAccountManager.applyPassword(password)
+        reply(FocusLockCodec.encode(
+            applied ? FocusLockResult.ok : FocusLockResult.denied("Failed to apply Guardian account password")
+        ))
+    }
 }

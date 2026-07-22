@@ -23,9 +23,19 @@ final class EnforcementLoop {
 
     // Debounces relaunch attempts per app so a slow-starting process (which won't show up in a
     // process scan for a second or two) doesn't get `open`'d again on every tick before it's had
-    // a chance to appear.
+    // a chance to appear. Backs off exponentially (capped) on consecutive failures -- e.g. no
+    // console session (locked/logged-out) -- so a permanently-failing relaunch doesn't flood
+    // RunningBoard with launch requests forever; that was observed to degrade unrelated system
+    // services (sfltool/spctl calls taking 40s+ under that load).
     private var lastRelaunchAttempt: [String: Date] = [:]
-    private let relaunchCooldown: TimeInterval = 6
+    private var consecutiveFailures: [String: Int] = [:]
+    private let baseRelaunchCooldown: TimeInterval = 6
+    private let maxRelaunchCooldown: TimeInterval = 300
+
+    private func cooldown(forConsecutiveFailures failures: Int) -> TimeInterval {
+        guard failures > 0 else { return baseRelaunchCooldown }
+        return min(baseRelaunchCooldown * pow(2, Double(failures)), maxRelaunchCooldown)
+    }
 
     // DNSEnforcer shells out to networksetup a few times per network service; that's cheap
     // enough occasionally but wasteful on every 3s tick, so it's checked on its own slower
@@ -85,14 +95,24 @@ final class EnforcementLoop {
                         AppProtector.lock(bundlePath: app.bundlePath)
                     }
 
-                    if let last = self.lastRelaunchAttempt[app.executableName], Date().timeIntervalSince(last) < self.relaunchCooldown {
+                    let failures = self.consecutiveFailures[app.executableName] ?? 0
+                    if let last = self.lastRelaunchAttempt[app.executableName],
+                       Date().timeIntervalSince(last) < self.cooldown(forConsecutiveFailures: failures) {
                         continue
                     }
-                    if AppProtector.relaunchIfNeeded(app, runningExecutables: runningExecutables) {
+
+                    switch AppProtector.relaunchIfNeeded(app, runningExecutables: runningExecutables) {
+                    case .alreadyRunning:
+                        break
+                    case .succeeded:
                         self.lastRelaunchAttempt[app.executableName] = Date()
+                        self.consecutiveFailures[app.executableName] = 0
                         FileHandle.standardError.write(
                             "[enforcement] relaunched protected app: \(app.displayName)\n".data(using: .utf8)!
                         )
+                    case .failed, .noConsoleSession:
+                        self.lastRelaunchAttempt[app.executableName] = Date()
+                        self.consecutiveFailures[app.executableName] = failures + 1
                     }
                 }
             }

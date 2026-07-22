@@ -37,22 +37,34 @@ enum AppProtector {
         return flags.contains("schg")
     }
 
+    enum RelaunchOutcome {
+        case alreadyRunning
+        case noConsoleSession
+        case succeeded
+        case failed
+    }
+
     /// Relaunches the app in the console user's GUI session (not root's) if it isn't currently
     /// running (per `runningExecutables`, from `CommandLineScanner`, computed once per
-    /// enforcement tick and shared across all protected apps). Returns true if a relaunch was
-    /// triggered.
-    @discardableResult
-    static func relaunchIfNeeded(_ app: ProtectedApp, runningExecutables: Set<String>) -> Bool {
-        guard !runningExecutables.contains(app.executableName.lowercased()) else { return false }
+    /// enforcement tick and shared across all protected apps).
+    ///
+    /// Distinguishes failure from success so the caller can back off exponentially -- e.g. no
+    /// console user logged in (locked/logged-out screen) means every attempt fails identically,
+    /// and retrying that every few seconds forever floods RunningBoard with launch requests badly
+    /// enough to degrade unrelated system services (observed: `sfltool`/`spctl` calls taking 40s+
+    /// under that load). Not a problem when the app is actually launchable and just slow to start.
+    static func relaunchIfNeeded(_ app: ProtectedApp, runningExecutables: Set<String>) -> RelaunchOutcome {
+        guard !runningExecutables.contains(app.executableName.lowercased()) else { return .alreadyRunning }
         guard let uid = ConsoleUser.currentUID() else {
             log("relaunch skipped for \(app.displayName): could not determine console user")
-            return false
+            return .noConsoleSession
         }
         let (status, output) = runCapturingOutput("/bin/launchctl", ["asuser", String(uid), "/usr/bin/open", app.bundlePath])
         if status != 0 {
             log("relaunch of \(app.displayName) failed (status \(status)): \(output)")
+            return .failed
         }
-        return true
+        return .succeeded
     }
 
     private static func log(_ message: String) {

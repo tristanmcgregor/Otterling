@@ -96,6 +96,13 @@ but not always, the same as the app's display name -- check with `ls "/Applicati
 if unsure), and `bundlePath` is the full path to the `.app` itself. The GUI's "+ Protect App..."
 button fills both in for you from a file picker.
 
+### Setting the Guardian password remotely
+
+`focuslockctl guardian-link`/`guardian-claim` let your Guardian set (or reset) the account
+password and the phone app's PIN over a one-time link, without whoever hosts the relay server
+(even you) ever seeing either secret in plaintext -- see `../../server/README.md` for the full
+flow and why it's safe to self-host.
+
 ## Project layout
 
 ```

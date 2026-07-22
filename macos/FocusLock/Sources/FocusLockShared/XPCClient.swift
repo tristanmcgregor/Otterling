@@ -94,4 +94,20 @@ public final class FocusLockXPCClient {
             }
         }
     }
+
+    public func getGuardianSetupPublicKey() async -> String? {
+        await withCheckedContinuation { continuation in
+            proxy().getGuardianSetupPublicKey { key in
+                continuation.resume(returning: key)
+            }
+        }
+    }
+
+    public func applyGuardianSetupCiphertext(_ base64Ciphertext: String) async -> FocusLockResult {
+        await withCheckedContinuation { continuation in
+            proxy().applyGuardianSetupCiphertext(base64Ciphertext) { data in
+                continuation.resume(returning: FocusLockCodec.decode(FocusLockResult.self, from: data) ?? .denied("Malformed reply"))
+            }
+        }
+    }
 }
