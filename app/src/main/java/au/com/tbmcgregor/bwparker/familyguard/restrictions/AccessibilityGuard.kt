@@ -44,10 +44,18 @@ object AccessibilityGuard {
             ?.split(':')
             ?.filter { it.isNotBlank() }
 
+    /** Settings must be reachable from inside the pinned nag screen -- its own "Open Accessibility
+     * settings" button is how you're meant to get out, by turning the service back on -- so it
+     * has to be in the lock-task allowlist too, or [Context.startActivity] for it silently does
+     * nothing while [au.com.tbmcgregor.bwparker.familyguard.tamper.AccessibilityGuardActivity] is
+     * pinned, leaving no way out of the nag screen except us fixing it over adb. */
+    private const val SETTINGS_PACKAGE = "com.android.settings"
+
     /** Re-derives the permitted-accessibility-services allowlist from whatever's enabled right
-     * now, unioned with this app's own package, and locks this app in as the only allowed
-     * lock-task package (needed for [au.com.tbmcgregor.bwparker.familyguard.tamper.AccessibilityGuardActivity]'s
-     * pinned nag screen). Safe to call repeatedly/periodically. */
+     * now, unioned with this app's own package, and locks this app plus Settings in as the
+     * allowed lock-task packages (needed for
+     * [au.com.tbmcgregor.bwparker.familyguard.tamper.AccessibilityGuardActivity]'s pinned nag
+     * screen). Safe to call repeatedly/periodically. */
     fun reapplyAllowlist(context: Context) {
         val dpm = context.getSystemService(DevicePolicyManager::class.java) ?: return
         val admin = ComponentName(context, DeviceAdminReceiverImpl::class.java)
@@ -57,7 +65,7 @@ object AccessibilityGuard {
         val allowlist = (currentlyEnabledPackages + context.packageName).distinct()
         try {
             dpm.setPermittedAccessibilityServices(admin, allowlist)
-            dpm.setLockTaskPackages(admin, arrayOf(context.packageName))
+            dpm.setLockTaskPackages(admin, arrayOf(context.packageName, SETTINGS_PACKAGE))
         } catch (error: SecurityException) {
             Log.e(TAG, "Not authorized to lock down accessibility services (device owner not active yet?)", error)
         }
