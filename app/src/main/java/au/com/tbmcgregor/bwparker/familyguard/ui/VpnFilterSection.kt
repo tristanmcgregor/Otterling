@@ -37,7 +37,6 @@ fun VpnFilterSection(context: Context) {
 
     var refreshTrigger by remember { mutableIntStateOf(0) }
     var enabled by remember { mutableStateOf(false) }
-    var lockdownEnabled by remember { mutableStateOf(false) }
     var domainCount by remember { mutableIntStateOf(0) }
     var lastUpdated by remember { mutableStateOf<Long?>(null) }
     var busy by remember { mutableStateOf(false) }
@@ -45,7 +44,6 @@ fun VpnFilterSection(context: Context) {
 
     LaunchedEffect(refreshTrigger) {
         enabled = vpnManager.wasEnabledByUser()
-        lockdownEnabled = vpnManager.isLockdownEnabled()
         domainCount = blocklistManager.domainCount()
         lastUpdated = blocklistManager.lastUpdatedMillis().takeIf { it > 0 }
     }
@@ -55,18 +53,13 @@ fun VpnFilterSection(context: Context) {
         icon = Icons.Default.VpnLock,
         subtitle = "Filters DNS lookups (and known DNS-over-HTTPS resolvers) against a downloaded " +
             "adult-content domain list. Doesn't decrypt or read any web page content -- see chat " +
-            "for why. Once enabled, Android won't let this be turned off from Settings, and blocks " +
-            "all network access if the filter isn't running.",
+            "for why. Once enabled, Android won't let this be turned off from Settings -- but " +
+            "unlike a full lockdown VPN, if the filter service itself is killed, traffic falls " +
+            "back to normal (unfiltered) rather than cutting off the internet entirely.",
     ) {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text("Status", style = MaterialTheme.typography.bodyLarge)
             StatusText(if (enabled) "Enabled" else "Disabled", isGood = enabled)
-        }
-        if (enabled) {
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("Lockdown (can't be bypassed)", style = MaterialTheme.typography.bodyLarge)
-                StatusText(if (lockdownEnabled) "Active" else "Not active", isGood = lockdownEnabled)
-            }
         }
 
         val lastUpdatedText = lastUpdated?.let { DateFormat.getDateTimeInstance().format(Date(it)) } ?: "Never"

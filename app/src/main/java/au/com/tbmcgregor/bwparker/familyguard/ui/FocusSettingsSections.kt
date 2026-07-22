@@ -311,10 +311,38 @@ fun TimeBudgetsSection(context: Context) {
     var refreshTrigger by remember { mutableIntStateOf(0) }
     var budgets by remember { mutableStateOf<List<AppTimeBudget>>(emptyList()) }
     var usageByPackage by remember { mutableStateOf<Map<String, Int>>(emptyMap()) }
+    var installedApps by remember { mutableStateOf<List<InstalledAppInfo>>(emptyList()) }
+    var showAppPicker by remember { mutableStateOf(false) }
+    var pendingPackage by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(refreshTrigger) {
         budgets = budgetManager.budgets()
         usageByPackage = budgets.associate { it.packageName to budgetManager.todayCounter(it.packageName).totalSeconds }
+    }
+
+    if (showAppPicker) {
+        AppPickerDialog(
+            apps = installedApps,
+            onDismiss = { showAppPicker = false },
+            onSelect = { app ->
+                pendingPackage = app.packageName
+                showAppPicker = false
+            },
+        )
+    }
+
+    pendingPackage?.let { packageName ->
+        TimeBudgetInputDialog(
+            packageName = packageName,
+            onDismiss = { pendingPackage = null },
+            onConfirm = { dailyLimitMinutes, subLimitMinutes, subLimitLabel ->
+                coroutineScope.launch {
+                    budgetManager.setBudget(packageName, dailyLimitMinutes, subLimitMinutes, subLimitLabel)
+                    refreshTrigger++
+                }
+                pendingPackage = null
+            },
+        )
     }
 
     SectionCard(
@@ -324,18 +352,28 @@ fun TimeBudgetsSection(context: Context) {
             "be enabled for this to work. The app is suspended for the rest of the day once a " +
             "limit is hit.",
     ) {
-        OutlinedButton(onClick = {
-            coroutineScope.launch {
-                budgetManager.setBudget(
-                    packageName = "com.google.android.youtube",
-                    dailyLimitMinutes = 120,
-                    subLimitMinutes = 60,
-                    subLimitLabel = "Shorts",
-                )
-                refreshTrigger++
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = {
+                coroutineScope.launch {
+                    budgetManager.setBudget(
+                        packageName = "com.google.android.youtube",
+                        dailyLimitMinutes = 120,
+                        subLimitMinutes = 60,
+                        subLimitLabel = "Shorts",
+                    )
+                    refreshTrigger++
+                }
+            }) {
+                Text("Quick add: YouTube (2h / 1h Shorts)")
             }
-        }) {
-            Text("Quick add: YouTube (2h total / 1h Shorts)")
+            Button(onClick = {
+                coroutineScope.launch {
+                    installedApps = withContext(Dispatchers.IO) { loadInstalledApps(context) }
+                    showAppPicker = true
+                }
+            }) {
+                Text("Choose app + custom limits")
+            }
         }
 
         if (budgets.isEmpty()) {
@@ -366,6 +404,64 @@ fun TimeBudgetsSection(context: Context) {
             }
         }
     }
+}
+
+@Composable
+private fun TimeBudgetInputDialog(
+    packageName: String,
+    onDismiss: () -> Unit,
+    onConfirm: (dailyLimitMinutes: Int, subLimitMinutes: Int?, subLimitLabel: String?) -> Unit,
+) {
+    var totalMinutesText by remember { mutableStateOf("120") }
+    var subLimitMinutesText by remember { mutableStateOf("") }
+    var subLimitLabelText by remember { mutableStateOf("") }
+
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Daily budget for $packageName") },
+        text = {
+            androidx.compose.foundation.layout.Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = totalMinutesText,
+                    onValueChange = { totalMinutesText = it },
+                    label = { Text("Total daily limit (minutes)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Text(
+                    "Optional stricter sub-limit for a feature the accessibility service can " +
+                        "detect within this app (e.g. YouTube Shorts). Leave blank to skip.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                OutlinedTextField(
+                    value = subLimitMinutesText,
+                    onValueChange = { subLimitMinutesText = it },
+                    label = { Text("Sub-limit (minutes, optional)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = subLimitLabelText,
+                    onValueChange = { subLimitLabelText = it },
+                    label = { Text("Sub-limit label (e.g. Shorts)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = {
+            Button(onClick = {
+                val total = totalMinutesText.toIntOrNull() ?: return@Button
+                val subLimit = subLimitMinutesText.toIntOrNull()
+                onConfirm(total, subLimit, subLimitLabelText.takeIf { subLimit != null && it.isNotBlank() })
+            }) {
+                Text("Save")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
 }
 
 @Composable

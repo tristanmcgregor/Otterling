@@ -8,10 +8,16 @@ import au.com.tbmcgregor.bwparker.familyguard.admin.DeviceAdminReceiverImpl
 
 /**
  * Registers [VpnFilterService] as the device's mandatory always-on VPN via Device Owner's
- * [DevicePolicyManager.setAlwaysOnVpnPackage], with lockdown enabled so Android blocks all
- * network access whenever the service isn't actually running, and the always-on VPN setting
- * itself is removed from the user-facing Settings UI. Requires Device Owner -- no consent dialog
- * is shown, unlike a normal app calling `VpnService.prepare()`.
+ * [DevicePolicyManager.setAlwaysOnVpnPackage]. The always-on VPN setting is locked out of the
+ * user-facing Settings UI either way. Requires Device Owner -- no consent dialog is shown, unlike
+ * a normal app calling `VpnService.prepare()`.
+ *
+ * Deliberately does NOT pass `lockdownEnabled = true`: lockdown requires every single connection
+ * to have an explicit route through the tunnel, and this VPN only captures DNS + a handful of
+ * known DoH/DoT resolver IPs (see [VpnFilterService]) rather than a full default route, since
+ * routing everything would require reimplementing a general TCP/IP NAT relay. Under lockdown,
+ * anything without an explicit route gets no path at all instead of falling back to the normal
+ * network -- which is what caused the "no internet" incident this comment is here to explain.
  */
 class VpnFilterManager(private val context: Context) {
     private val devicePolicyManager: DevicePolicyManager? =
@@ -31,12 +37,12 @@ class VpnFilterManager(private val context: Context) {
         }
     }
 
-    /** Starts the filter service and locks it in as the mandatory always-on VPN. */
+    /** Starts the filter service and locks it in as the mandatory always-on VPN (no lockdown). */
     fun enable(): Boolean {
         VpnFilterService.start(context)
         val dpm = devicePolicyManager ?: return false
         return try {
-            dpm.setAlwaysOnVpnPackage(adminComponent, context.packageName, true)
+            dpm.setAlwaysOnVpnPackage(adminComponent, context.packageName, false)
             prefs.edit().putBoolean(KEY_ENABLED, true).apply()
             true
         } catch (error: SecurityException) {
