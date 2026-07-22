@@ -21,6 +21,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * Local, always-on VpnService that filters DNS lookups (plus a short list of known public
@@ -86,9 +88,12 @@ class VpnFilterService : VpnService() {
     private fun runPacketLoop(tun: ParcelFileDescriptor, blocklist: DomainBlocklistManager) {
         val input = FileInputStream(tun.fileDescriptor)
         val output = FileOutputStream(tun.fileDescriptor)
-        val buffer = ByteArray(32767)
+        val writeLock = Mutex()
 
         while (running.get()) {
+            // A fresh buffer per read -- the previous one may still be in flight on a background
+            // coroutine below, since DNS handling is no longer inline in this loop.
+            val buffer = ByteArray(32767)
             val length = try {
                 input.read(buffer)
             } catch (error: IOException) {
@@ -99,14 +104,24 @@ class VpnFilterService : VpnService() {
 
             val packet = IpPacket.parse(buffer, length) ?: continue
             if (packet.protocol == IpPacket.PROTOCOL_UDP && packet.destinationPort == DNS_PORT) {
-                handleDnsPacket(packet, output, blocklist)
+                // Handled on its own coroutine so one slow/stalled upstream lookup can't stall
+                // the tun read loop and pile up every other in-flight query behind it (this was
+                // causing apps that fire off many DNS lookups in quick succession, e.g. Spotify
+                // resolving several edge/access-point hostnames at once, to see lookups time out
+                // and report "no internet" even though the network itself was fine).
+                scope.launch { handleDnsPacket(packet, output, writeLock, blocklist) }
             }
             // Everything else that reached the tun is a known public DoH/DoT IP we deliberately
             // routed here to drop -- no reply is sent, so those connections just fail/time out.
         }
     }
 
-    private fun handleDnsPacket(packet: IpPacket, output: FileOutputStream, blocklist: DomainBlocklistManager) {
+    private suspend fun handleDnsPacket(
+        packet: IpPacket,
+        output: FileOutputStream,
+        writeLock: Mutex,
+        blocklist: DomainBlocklistManager,
+    ) {
         val query = DnsMessage.parseQuery(packet.udpPayload) ?: return
         val response = if (blocklist.isBlocked(query.questionName)) {
             DnsMessage.buildBlockedResponse(packet.udpPayload)
@@ -115,7 +130,8 @@ class VpnFilterService : VpnService() {
         } ?: return
 
         try {
-            output.write(packet.buildUdpReply(response))
+            val reply = packet.buildUdpReply(response)
+            writeLock.withLock { output.write(reply) }
         } catch (error: IOException) {
             Log.w(TAG, "Failed writing DNS reply to tun", error)
         }
