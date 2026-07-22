@@ -4,6 +4,8 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.BitmapFactory
 import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -46,7 +48,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.core.content.FileProvider
+import java.io.File
 import au.com.tbmcgregor.bwparker.familyguard.focus.AppTimeBudget
 import au.com.tbmcgregor.bwparker.familyguard.focus.AppTimeBudgetManager
 import au.com.tbmcgregor.bwparker.familyguard.focus.DetectedHabit
@@ -414,6 +419,13 @@ fun HabitRulesSection(context: Context) {
         is HabitRuleWizardStep.PickCondition -> HabitConditionPickerDialog(
             detectedHabits = detectedHabits,
             initialHabitNames = step.edit?.initialHabitNames ?: emptyList(),
+            proofRequirements = proofRequirements,
+            onSetProofRequirement = { habitName, required, referencePhotoPath ->
+                coroutineScope.launch {
+                    habitProofManager.setRequirement(habitName, required, referencePhotoPath)
+                    proofRequirements = habitProofManager.requirements()
+                }
+            },
             onDismiss = { wizardStep = null },
             onSelect = { habitNames ->
                 // Time windows only make sense (and are only checkable outside a live scan) when
@@ -615,41 +627,30 @@ fun HabitRulesSection(context: Context) {
             Text(
                 "Every habit row the scanner has found so far, and whether it looked checked off " +
                     "the last time its screen was open. Open the tracker app, then come back here " +
-                    "and refresh if a habit you expect isn't listed. \"Require photo proof\" means " +
+                    "and refresh if a habit you expect isn't listed. \"Requires image proof\" means " +
                     "ticking that habit in HabitShare alone won't satisfy any rule -- you'll also " +
-                    "have to submit a photo + note here in this app before it counts for today.",
+                    "have to take a same-day photo here that visually matches the reference photo.",
                 style = MaterialTheme.typography.bodySmall,
             )
             if (detectedHabits.isEmpty()) {
                 Text("Nothing detected yet -- open the habit tracker app first.", style = MaterialTheme.typography.bodySmall)
             } else {
                 detectedHabits.forEach { habit ->
-                    val required = proofRequirements.find { it.habitName.equals(habit.name, ignoreCase = true) }?.required == true
                     Column(modifier = Modifier.fillMaxWidth()) {
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                             Text(habit.name, style = MaterialTheme.typography.bodySmall)
                             StatusText(if (habit.doneToday) "Done" else "Not done", isGood = habit.doneToday)
                         }
-                        Row(
-                            modifier = Modifier.fillMaxWidth().clickable {
+                        ProofRequirementRow(
+                            habitName = habit.name,
+                            requirement = proofRequirements.find { it.habitName.equals(habit.name, ignoreCase = true) },
+                            onSetRequirement = { required, referencePhotoPath ->
                                 coroutineScope.launch {
-                                    habitProofManager.setRequired(habit.name, !required)
+                                    habitProofManager.setRequirement(habit.name, required, referencePhotoPath)
                                     proofRequirements = habitProofManager.requirements()
                                 }
                             },
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Checkbox(
-                                checked = required,
-                                onCheckedChange = { checked ->
-                                    coroutineScope.launch {
-                                        habitProofManager.setRequired(habit.name, checked)
-                                        proofRequirements = habitProofManager.requirements()
-                                    }
-                                },
-                            )
-                            Text("Require photo proof", style = MaterialTheme.typography.bodySmall)
-                        }
+                        )
                     }
                 }
             }
@@ -674,6 +675,80 @@ fun HabitRulesSection(context: Context) {
             } else {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     proofLogs.forEach { log -> HabitProofLogRow(log) }
+                }
+            }
+        }
+    }
+}
+
+/** Path a reference photo for [habitName] always lives at -- stable per habit name so retaking it
+ * just overwrites the same file, and so the same file survives being referenced from wherever this
+ * row is shown (the rule-builder wizard, and the standalone detected-habits tuning list). */
+private fun referencePhotoFile(context: Context, habitName: String): File {
+    val dir = File(context.filesDir, "habit_proofs").apply { mkdirs() }
+    val safeName = habitName.replace(Regex("[^A-Za-z0-9]"), "_").take(60)
+    return File(dir, "reference_$safeName.jpg")
+}
+
+/**
+ * "Requires image proof" checkbox for one habit: turning it on immediately opens the camera to
+ * take the one-time reference photo (required before it can be turned on at all -- there's nothing
+ * to compare against otherwise); turning it off clears the requirement. Shown both in the
+ * rule-builder condition picker (per the user's request to set this up while adding a habit to a
+ * rule) and in the standalone detected-habits tuning list, sharing the same underlying
+ * [HabitProofRequirement] since multiple rules can gate on the same habit name.
+ */
+@Composable
+private fun ProofRequirementRow(
+    habitName: String,
+    requirement: HabitProofRequirement?,
+    onSetRequirement: (required: Boolean, referencePhotoPath: String?) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val context = LocalContext.current
+    val required = requirement?.required == true
+    val referencePath = requirement?.referencePhotoPath
+    val targetFile = remember(habitName) { referencePhotoFile(context, habitName) }
+    val targetUri = remember(targetFile) {
+        FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", targetFile)
+    }
+
+    val takeReferencePhoto = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
+        if (success) onSetRequirement(true, targetFile.absolutePath)
+    }
+
+    Column(modifier = modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth().clickable {
+                if (required) onSetRequirement(false, null) else takeReferencePhoto.launch(targetUri)
+            },
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Checkbox(
+                checked = required,
+                onCheckedChange = { checked ->
+                    if (checked) takeReferencePhoto.launch(targetUri) else onSetRequirement(false, null)
+                },
+            )
+            Text("Requires image proof (must match a reference photo)", style = MaterialTheme.typography.bodySmall)
+        }
+        if (required && referencePath != null) {
+            val bitmap = remember(referencePath) {
+                runCatching {
+                    BitmapFactory.Options().apply { inSampleSize = 4 }
+                        .let { opts -> BitmapFactory.decodeFile(referencePath, opts) }
+                }.getOrNull()
+            }
+            Row(modifier = Modifier.padding(start = 40.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (bitmap != null) {
+                    Image(
+                        bitmap = bitmap.asImageBitmap(),
+                        contentDescription = "Reference photo for $habitName",
+                        modifier = Modifier.height(56.dp),
+                    )
+                }
+                TextButton(onClick = { takeReferencePhoto.launch(targetUri) }) {
+                    Text("Retake reference photo")
                 }
             }
         }
@@ -795,6 +870,8 @@ private fun HabitRuleRow(
 private fun HabitConditionPickerDialog(
     detectedHabits: List<DetectedHabit>,
     initialHabitNames: List<String> = emptyList(),
+    proofRequirements: List<HabitProofRequirement> = emptyList(),
+    onSetProofRequirement: (habitName: String, required: Boolean, referencePhotoPath: String?) -> Unit = { _, _, _ -> },
     onDismiss: () -> Unit,
     onSelect: (habitNames: List<String>) -> Unit,
     onSelectTimeOnly: () -> Unit,
@@ -835,14 +912,24 @@ private fun HabitConditionPickerDialog(
                 )
                 if (detectedHabits.isNotEmpty()) {
                     detectedHabits.forEach { habit ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { toggle(habit.name) },
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Checkbox(checked = habit.name in selected, onCheckedChange = { toggle(habit.name) })
-                            Text(habit.name)
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { toggle(habit.name) },
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Checkbox(checked = habit.name in selected, onCheckedChange = { toggle(habit.name) })
+                                Text(habit.name)
+                            }
+                            ProofRequirementRow(
+                                habitName = habit.name,
+                                requirement = proofRequirements.find { it.habitName.equals(habit.name, ignoreCase = true) },
+                                onSetRequirement = { required, referencePhotoPath ->
+                                    onSetProofRequirement(habit.name, required, referencePhotoPath)
+                                },
+                                modifier = Modifier.padding(start = 40.dp),
+                            )
                         }
                     }
                 } else {

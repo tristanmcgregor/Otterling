@@ -9,7 +9,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.lifecycle.lifecycleScope
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -18,11 +17,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -36,21 +34,28 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
+import androidx.lifecycle.lifecycleScope
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
+private sealed interface ProofMatchState {
+    object Idle : ProofMatchState
+    object Checking : ProofMatchState
+    object Matched : ProofMatchState
+    object NoMatch : ProofMatchState
+}
+
 /**
  * Full-screen "prove it" prompt shown by [FocusGuardAccessibilityService] when a habit configured
- * in [HabitProofManager] as requiring proof gets ticked in HabitShare without one yet today: take
- * a photo plus a short note (e.g. which chapter was read) before that tick is allowed to satisfy
- * any [HabitRule]. Dismissing without submitting just leaves the habit un-trusted -- it'll be
- * re-prompted on the next scan since the underlying tick is still there with no proof logged.
+ * in [HabitProofManager] as requiring proof gets ticked in HabitShare without approved proof yet
+ * today: take a photo, which is automatically compared against the habit's stored reference photo
+ * via [ImageMatcher] -- only a visual match is recorded and allowed to satisfy any [HabitRule]. A
+ * non-match shows an inline "doesn't match" message and lets you retake; dismissing without a
+ * match just leaves the habit un-trusted, re-prompted on the next scan.
  */
 class HabitProofActivity : ComponentActivity() {
-    private var photoFile: File? = null
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         isShowing = true
@@ -63,45 +68,52 @@ class HabitProofActivity : ComponentActivity() {
         val dir = File(filesDir, "habit_proofs").apply { mkdirs() }
         val safeName = habitName.replace(Regex("[^A-Za-z0-9]"), "_").take(60)
         val file = File(dir, "${safeName}_${System.currentTimeMillis()}.jpg")
-        photoFile = file
         val photoUri: Uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
+        val manager = HabitProofManager(applicationContext)
 
         setContent {
-            var photoTaken by remember { mutableStateOf(false) }
+            var matchState by remember { mutableStateOf<ProofMatchState>(ProofMatchState.Idle) }
             var preview by remember { mutableStateOf<Bitmap?>(null) }
-            var note by remember { mutableStateOf("") }
+            var referenceMissing by remember { mutableStateOf(false) }
 
             val takePicture = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
-                photoTaken = success
-                if (success) {
-                    lifecycleScope.launch {
-                        preview = withContext(Dispatchers.IO) { decodeShrunk(file) }
+                if (!success) return@rememberLauncherForActivityResult
+                matchState = ProofMatchState.Checking
+                lifecycleScope.launch {
+                    preview = withContext(Dispatchers.IO) { decodeShrunk(file) }
+                    val referencePath = manager.requirement(habitName)?.referencePhotoPath
+                    if (referencePath == null) {
+                        referenceMissing = true
+                        return@launch
+                    }
+                    val matches = withContext(Dispatchers.Default) {
+                        ImageMatcher.isMatch(file, File(referencePath))
+                    }
+                    if (matches) {
+                        manager.recordProof(habitName, file.absolutePath)
+                        withContext(Dispatchers.Default) { HabitRuleManager(applicationContext).reapplyAll() }
+                        matchState = ProofMatchState.Matched
+                        Toast.makeText(applicationContext, "Approved: $habitName", Toast.LENGTH_SHORT).show()
+                        finish()
+                    } else {
+                        matchState = ProofMatchState.NoMatch
                     }
                 }
             }
 
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    HabitProofScreen(
-                        habitName = habitName,
-                        photoTaken = photoTaken,
-                        preview = preview,
-                        note = note,
-                        onNoteChange = { note = it },
-                        onTakePhoto = { takePicture.launch(photoUri) },
-                        onSubmit = {
-                            lifecycleScope.launch {
-                                val manager = HabitProofManager(applicationContext)
-                                manager.recordProof(habitName, file.absolutePath, note.trim())
-                                withContext(Dispatchers.Default) {
-                                    HabitRuleManager(applicationContext).reapplyAll()
-                                }
-                                Toast.makeText(applicationContext, "Proof saved for $habitName", Toast.LENGTH_SHORT).show()
-                                finish()
-                            }
-                        },
-                        onSkip = { finish() },
-                    )
+                    if (referenceMissing) {
+                        NoReferencePhotoScreen(habitName = habitName, onDismiss = { finish() })
+                    } else {
+                        HabitProofScreen(
+                            habitName = habitName,
+                            matchState = matchState,
+                            preview = preview,
+                            onTakePhoto = { takePicture.launch(photoUri) },
+                            onSkip = { finish() },
+                        )
+                    }
                 }
             }
         }
@@ -137,12 +149,9 @@ class HabitProofActivity : ComponentActivity() {
 @Composable
 private fun HabitProofScreen(
     habitName: String,
-    photoTaken: Boolean,
+    matchState: ProofMatchState,
     preview: Bitmap?,
-    note: String,
-    onNoteChange: (String) -> Unit,
     onTakePhoto: () -> Unit,
-    onSubmit: () -> Unit,
     onSkip: () -> Unit,
 ) {
     Column(
@@ -153,8 +162,8 @@ private fun HabitProofScreen(
         Text("Prove it: $habitName", style = MaterialTheme.typography.headlineSmall, textAlign = TextAlign.Center)
         Spacer(Modifier.height(8.dp))
         Text(
-            "Take a photo showing you actually did this, and note what you did. This has to be " +
-                "submitted before this habit counts towards unlocking anything today.",
+            "Take a photo showing you actually doing this. It's automatically checked against " +
+                "your reference photo -- only a match unlocks anything gated on this habit today.",
             style = MaterialTheme.typography.bodyMedium,
             textAlign = TextAlign.Center,
         )
@@ -169,26 +178,49 @@ private fun HabitProofScreen(
             Spacer(Modifier.height(16.dp))
         }
 
-        Button(onClick = onTakePhoto) {
-            Text(if (photoTaken) "Retake photo" else "Take photo")
+        when (matchState) {
+            ProofMatchState.Checking -> {
+                CircularProgressIndicator()
+                Spacer(Modifier.height(8.dp))
+                Text("Checking against your reference photo...", style = MaterialTheme.typography.bodySmall)
+            }
+            ProofMatchState.NoMatch -> {
+                Text(
+                    "Doesn't match your reference photo -- try again.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.error,
+                    textAlign = TextAlign.Center,
+                )
+                Spacer(Modifier.height(12.dp))
+            }
+            else -> {}
         }
-        Spacer(Modifier.height(16.dp))
 
-        OutlinedTextField(
-            value = note,
-            onValueChange = onNoteChange,
-            label = { Text("What did you do? (e.g. chapter read)") },
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(8.dp),
-        )
-        Spacer(Modifier.height(24.dp))
-
-        Button(onClick = onSubmit, enabled = photoTaken && note.isNotBlank()) {
-            Text("Submit proof")
+        Button(onClick = onTakePhoto, enabled = matchState != ProofMatchState.Checking) {
+            Text(if (matchState == ProofMatchState.NoMatch) "Retake photo" else "Take photo")
         }
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(12.dp))
         OutlinedButton(onClick = onSkip) {
             Text("Not now")
         }
+    }
+}
+
+@Composable
+private fun NoReferencePhotoScreen(habitName: String, onDismiss: () -> Unit) {
+    Column(
+        modifier = Modifier.fillMaxSize().padding(32.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text("No reference photo set for \"$habitName\"", style = MaterialTheme.typography.headlineSmall, textAlign = TextAlign.Center)
+        Spacer(Modifier.height(12.dp))
+        Text(
+            "Go to Habit Rules in Settings and re-enable photo proof for this habit to set one.",
+            style = MaterialTheme.typography.bodyMedium,
+            textAlign = TextAlign.Center,
+        )
+        Spacer(Modifier.height(24.dp))
+        Button(onClick = onDismiss) { Text("OK") }
     }
 }

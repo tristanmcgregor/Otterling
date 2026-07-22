@@ -6,27 +6,41 @@ import java.time.LocalDate
 
 /**
  * Anti-cheat layer on top of [HabitTrackerScanner] detection: lets specific habit names be marked
- * as requiring same-day photo proof (a picture plus a short note, e.g. which chapter was read)
- * before their "done" tick is trusted by [HabitRuleManager]. We can't see or control HabitShare's
- * own state, only whether *our* unlocks fire, so this only ever makes a rule *harder* to satisfy,
- * never easier.
+ * as requiring same-day photo proof before their "done" tick is trusted by [HabitRuleManager].
+ * Proof isn't just "any photo" -- [setRequirement] captures one reference photo up front (taken
+ * when the requirement is first turned on, e.g. from the rule-builder wizard), and every day's
+ * submitted photo must visually match it (see [ImageMatcher], enforced by [HabitProofActivity])
+ * before [recordProof] is ever called. We can't see or control HabitShare's own state, only
+ * whether *our* unlocks fire, so this only ever makes a rule *harder* to satisfy, never easier.
  */
 class HabitProofManager(context: Context) {
     private val dao = AppDatabase.getInstance(context).habitProofDao()
 
     suspend fun requirements(): List<HabitProofRequirement> = dao.getAllRequirements()
 
+    suspend fun requirement(habitName: String): HabitProofRequirement? = dao.getRequirement(habitName.trim())
+
     suspend fun isRequired(habitName: String): Boolean =
         dao.getRequirement(habitName.trim())?.required == true
 
-    suspend fun setRequired(habitName: String, required: Boolean) {
-        dao.upsertRequirement(HabitProofRequirement(habitName.trim(), required))
+    /** Turns proof on (with the reference photo just taken) or off (clearing any reference photo)
+     * for [habitName]. */
+    suspend fun setRequirement(habitName: String, required: Boolean, referencePhotoPath: String?) {
+        dao.upsertRequirement(
+            HabitProofRequirement(
+                habitName = habitName.trim(),
+                required = required,
+                referencePhotoPath = if (required) referencePhotoPath else null,
+            ),
+        )
     }
 
     suspend fun hasProofToday(habitName: String): Boolean =
         dao.getLog(habitName.trim(), LocalDate.now().toEpochDay()) != null
 
-    suspend fun recordProof(habitName: String, photoPath: String, note: String) {
+    /** Called only once a submitted photo has already been checked to visually match the
+     * reference photo (see [ImageMatcher]) -- this is the "approved" record itself. */
+    suspend fun recordProof(habitName: String, photoPath: String, note: String = "") {
         dao.upsertLog(
             HabitProofLog(
                 habitName = habitName.trim(),

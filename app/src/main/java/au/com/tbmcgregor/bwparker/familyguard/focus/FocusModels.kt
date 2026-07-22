@@ -154,20 +154,26 @@ data class DetectedHabit(
  * that matters, [HabitRuleManager] additionally requires a same-day [HabitProofLog] to exist before
  * treating that habit as "done" for rule-evaluation purposes. Doesn't affect HabitShare itself (we
  * can't touch its own state), only whether *this app's* unlocks are granted.
+ *
+ * [referencePhotoPath] is the photo taken once, up front, when proof is first required (e.g. "what
+ * doing this habit looks like") -- every day's submitted photo is compared against it by
+ * [ImageMatcher], and only an on-device visual match is accepted (see [HabitProofActivity]).
+ * Non-null whenever [required] is true.
  */
 @Entity(tableName = "habit_proof_requirements")
 data class HabitProofRequirement(
     @PrimaryKey val habitName: String,
     val required: Boolean = true,
+    val referencePhotoPath: String? = null,
 )
 
-/** One submitted proof for [habitName] on [dateEpochDay]: a photo plus a short note (e.g. which
- * chapter was read). At most one per habit per day -- resubmitting overwrites the same day's row. */
+/** One *approved* (visually matched) proof for [habitName] on [dateEpochDay]. At most one per
+ * habit per day -- resubmitting overwrites the same day's row. [note] is optional extra context. */
 @Entity(tableName = "habit_proof_logs", primaryKeys = ["habitName", "dateEpochDay"])
 data class HabitProofLog(
     val habitName: String,
     val dateEpochDay: Long,
     val photoPath: String,
-    val note: String,
+    val note: String = "",
     val submittedAtMillis: Long,
 )
