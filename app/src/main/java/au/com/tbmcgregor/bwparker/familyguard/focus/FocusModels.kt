@@ -74,8 +74,11 @@ data class RewardLedger(
  * unlockMinutes once done" model: outside the window, or once the required habit(s) are done today,
  * the target is unblocked; inside the window while they're not done, it's blocked. [windowEndMinute]
  * of 0 means "through to midnight" (wraps around), so e.g. start=1260 (9pm) end=0 covers 9pm-midnight.
- * A windowed rule requires specific [requiredHabitNames] (not the "all habits" pattern), since only
- * per-habit done state is persisted for [reapplyAll] to check outside of a live scan.
+ * A windowed rule with non-empty [requiredHabitNames] requires those specific habits (not the "all
+ * habits" pattern), since only per-habit done state is persisted for [reapplyAll] to check outside
+ * of a live scan. A windowed rule with *empty* [requiredHabitNames] has no habit condition at all --
+ * it's simply blocked, unconditionally, for the entire window every day (e.g. "no phone before
+ * 9am"), and unblocked the rest of the time.
  */
 @Entity(tableName = "habit_rules")
 data class HabitRule(

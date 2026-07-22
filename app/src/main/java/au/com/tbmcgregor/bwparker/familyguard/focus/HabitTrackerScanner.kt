@@ -21,6 +21,10 @@ package au.com.tbmcgregor.bwparker.familyguard.focus
  * out missing or misattributed.
  */
 object HabitTrackerScanner {
+    /** The only habit tracker this app knows how to read -- habit rules always gate on this app,
+     * so the rule-builder UI never needs to ask which tracker to use. */
+    const val HABITSHARE_PACKAGE_NAME = "com.habitshareapp"
+
     /** One flattened accessibility node: its text, content description, and checkable/checked state. */
     data class Entry(
         val text: String?,

@@ -50,6 +50,7 @@ import au.com.tbmcgregor.bwparker.familyguard.focus.DetectedHabitManager
 import au.com.tbmcgregor.bwparker.familyguard.focus.FocusGuardAccessibilityService
 import au.com.tbmcgregor.bwparker.familyguard.focus.HabitRule
 import au.com.tbmcgregor.bwparker.familyguard.focus.HabitRuleManager
+import au.com.tbmcgregor.bwparker.familyguard.focus.HabitTrackerScanner
 import au.com.tbmcgregor.bwparker.familyguard.focus.MindfulApp
 import au.com.tbmcgregor.bwparker.familyguard.focus.MindfulAppManager
 import au.com.tbmcgregor.bwparker.familyguard.focus.requiredHabitNames
@@ -332,7 +333,6 @@ private fun TimeBudgetInputDialog(
  * the final Confirm step updates the existing row (by [editingId]) instead of inserting a new one. */
 private data class HabitRuleEditContext(
     val editingId: Long,
-    val initialTriggerPackageName: String,
     val initialHabitNames: List<String>,
     val initialWindowStart: Int?,
     val initialWindowEnd: Int?,
@@ -340,8 +340,14 @@ private data class HabitRuleEditContext(
     val initialUnlockMinutes: Int,
 )
 
+/** HabitShare is the only habit tracker this app knows how to read, so it's always the trigger --
+ * the wizard skips straight to picking a condition instead of asking which app to use. Falls back
+ * to a synthetic label if HabitShare isn't installed/scanned yet so the flow still works. */
+private fun habitShareAppInfo(installedApps: List<InstalledAppInfo>): InstalledAppInfo =
+    installedApps.find { it.packageName == HabitTrackerScanner.HABITSHARE_PACKAGE_NAME }
+        ?: InstalledAppInfo(HabitTrackerScanner.HABITSHARE_PACKAGE_NAME, "HabitShare")
+
 private sealed class HabitRuleWizardStep {
-    data class PickTrigger(val edit: HabitRuleEditContext? = null) : HabitRuleWizardStep()
     data class PickCondition(val edit: HabitRuleEditContext?, val trigger: InstalledAppInfo) : HabitRuleWizardStep()
     data class PickWindow(
         val edit: HabitRuleEditContext?,
@@ -390,12 +396,6 @@ fun HabitRulesSection(context: Context) {
         installedApps.find { it.packageName == packageName }?.label ?: packageName
 
     when (val step = wizardStep) {
-        is HabitRuleWizardStep.PickTrigger -> AppPickerDialog(
-            apps = installedApps,
-            initialQuery = installedApps.find { it.packageName == step.edit?.initialTriggerPackageName }?.label ?: "",
-            onDismiss = { wizardStep = null },
-            onSelect = { app -> wizardStep = HabitRuleWizardStep.PickCondition(step.edit, app) },
-        )
         is HabitRuleWizardStep.PickCondition -> HabitConditionPickerDialog(
             detectedHabits = detectedHabits,
             initialHabitNames = step.edit?.initialHabitNames ?: emptyList(),
@@ -408,6 +408,13 @@ fun HabitRulesSection(context: Context) {
                 } else {
                     HabitRuleWizardStep.PickWindow(step.edit, step.trigger, habitNames)
                 }
+            },
+            onSelectTimeOnly = {
+                // No habit condition at all -- always blocked for a chosen time window (e.g. "no
+                // phone before 9am"). Goes straight to the window picker; there's no "always"
+                // option for this path since an unconditional, un-windowed rule would just be a
+                // permanent block with no way to ever unlock it.
+                wizardStep = HabitRuleWizardStep.PickWindow(step.edit, step.trigger, emptyList())
             },
         )
         is HabitRuleWizardStep.PickWindow -> HabitWindowPickerDialog(
@@ -513,9 +520,9 @@ fun HabitRulesSection(context: Context) {
     SectionCard(
         title = "Habit Rules (Command Builder)",
         icon = Icons.Default.PlayArrow,
-        subtitle = "Build as many \"(app B) is blocked until (habit(s) done in app A), then unlocks " +
-            "for (X) minutes\" commands as you like -- gate on any/all habits, or require one or " +
-            "more specific habits (ALL of them must be done) auto-detected from the tracker's " +
+        subtitle = "Build as many \"(app) is blocked until (habit(s) done in HabitShare), then " +
+            "unlocks for (X) minutes\" commands as you like -- gate on any/all habits, or require " +
+            "one or more specific habits (ALL of them must be done) auto-detected from HabitShare's " +
             "screen. The target app stays blocked until its condition is met for the day; the " +
             "unlock window then counts down automatically.",
     ) {
@@ -525,7 +532,7 @@ fun HabitRulesSection(context: Context) {
                     installedApps = withContext(Dispatchers.IO) { loadInstalledApps(context) }
                 }
                 detectedHabits = detectedHabitManager.latest()
-                wizardStep = HabitRuleWizardStep.PickTrigger()
+                wizardStep = HabitRuleWizardStep.PickCondition(edit = null, trigger = habitShareAppInfo(installedApps))
             }
         }) {
             Text("Add rule")
@@ -548,16 +555,16 @@ fun HabitRulesSection(context: Context) {
                                     installedApps = withContext(Dispatchers.IO) { loadInstalledApps(context) }
                                 }
                                 detectedHabits = detectedHabitManager.latest()
-                                wizardStep = HabitRuleWizardStep.PickTrigger(
+                                wizardStep = HabitRuleWizardStep.PickCondition(
                                     edit = HabitRuleEditContext(
                                         editingId = rule.id,
-                                        initialTriggerPackageName = rule.triggerPackageName,
                                         initialHabitNames = rule.requiredHabitNames(),
                                         initialWindowStart = rule.windowStartMinute,
                                         initialWindowEnd = rule.windowEndMinute,
                                         initialTargetPackageName = rule.targetPackageName,
                                         initialUnlockMinutes = rule.unlockMinutes.takeIf { it > 0 } ?: 30,
                                     ),
+                                    trigger = habitShareAppInfo(installedApps),
                                 )
                             }
                         },
@@ -625,21 +632,28 @@ private fun HabitRuleRow(
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             val required = rule.requiredHabitNames()
-            val conditionLabel = if (required.isEmpty()) "all habits" else required.joinToString(" AND ")
             val windowStart = rule.windowStartMinute
             val windowEnd = rule.windowEndMinute
+            // Empty required-habits means different things depending on whether it's windowed --
+            // see HabitRule's doc.
+            val timeOnly = windowStart != null && windowEnd != null && required.isEmpty()
+            val conditionLabel = if (required.isEmpty()) "all habits" else required.joinToString(" AND ")
             Text(
-                "$targetLabel blocked until \"$conditionLabel\" done in $triggerLabel",
+                if (timeOnly) "$targetLabel blocked" else "$targetLabel blocked until \"$conditionLabel\" done in $triggerLabel",
                 style = MaterialTheme.typography.bodyMedium,
             )
             if (windowStart != null && windowEnd != null) {
                 Text(
-                    "-> only enforced ${formatMinuteOfDay(windowStart)}-${formatMinuteOfDay(windowEnd)}",
+                    if (timeOnly) {
+                        "-> every day ${formatMinuteOfDay(windowStart)}-${formatMinuteOfDay(windowEnd)}, no habit needed"
+                    } else {
+                        "-> only enforced ${formatMinuteOfDay(windowStart)}-${formatMinuteOfDay(windowEnd)}"
+                    },
                     style = MaterialTheme.typography.bodySmall,
                 )
                 val unlocked = !isRuleCurrentlyWindowed(windowStart, windowEnd)
                 StatusText(
-                    if (unlocked) "Outside its window right now" else "Inside its window -- blocked until done",
+                    if (unlocked) "Outside its window right now" else if (timeOnly) "Inside its window -- blocked" else "Inside its window -- blocked until done",
                     isGood = unlocked,
                 )
             } else {
@@ -686,6 +700,7 @@ private fun HabitConditionPickerDialog(
     initialHabitNames: List<String> = emptyList(),
     onDismiss: () -> Unit,
     onSelect: (habitNames: List<String>) -> Unit,
+    onSelectTimeOnly: () -> Unit,
 ) {
     val detectedNames = remember(detectedHabits) { detectedHabits.map { it.name }.toSet() }
     var selected by remember {
@@ -712,6 +727,9 @@ private fun HabitConditionPickerDialog(
             ) {
                 OutlinedButton(onClick = { onSelect(emptyList()) }, modifier = Modifier.fillMaxWidth()) {
                     Text("Any/all habits complete")
+                }
+                OutlinedButton(onClick = onSelectTimeOnly, modifier = Modifier.fillMaxWidth()) {
+                    Text("No habit needed -- just block during specific hours")
                 }
                 Text(
                     "Or require one or more specific habits below -- ALL selected habits must be " +
@@ -787,29 +805,42 @@ private fun HabitWindowPickerDialog(
     onDismiss: () -> Unit,
     onSelect: (windowStartMinute: Int?, windowEndMinute: Int?) -> Unit,
 ) {
-    var showCustom by remember { mutableStateOf(initialWindowStart != null && initialWindowEnd != null) }
+    // A "time only" rule (no habit condition) has no "Always" option -- an unwindowed rule with no
+    // condition to ever satisfy would just be a permanent, un-liftable block -- so it always shows
+    // the time fields directly instead of asking "always vs. windowed" first.
+    val timeOnly = habitNames.isEmpty()
+    var showCustom by remember { mutableStateOf(timeOnly || (initialWindowStart != null && initialWindowEnd != null)) }
     var startText by remember { mutableStateOf(initialWindowStart?.let { formatMinuteOfDay(it) } ?: "00:00") }
-    var endText by remember { mutableStateOf(initialWindowEnd?.let { formatMinuteOfDay(it) } ?: "21:00") }
+    var endText by remember { mutableStateOf(initialWindowEnd?.let { formatMinuteOfDay(it) } ?: if (timeOnly) "09:00" else "21:00") }
     val conditionLabel = habitNames.joinToString(" AND ")
     val start = parseTimeToMinuteOfDay(startText)
     val end = parseTimeToMinuteOfDay(endText)
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("When should blocking on \"$conditionLabel\" apply?") },
+        title = { Text(if (timeOnly) "When should this app be blocked?" else "When should blocking on \"$conditionLabel\" apply?") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = { onSelect(null, null) }, modifier = Modifier.fillMaxWidth()) {
-                    Text("Always (no time restriction)")
-                }
-                OutlinedButton(onClick = { showCustom = true }, modifier = Modifier.fillMaxWidth()) {
-                    Text("Only during a specific time window")
+                if (!timeOnly) {
+                    OutlinedButton(onClick = { onSelect(null, null) }, modifier = Modifier.fillMaxWidth()) {
+                        Text("Always (no time restriction)")
+                    }
+                    OutlinedButton(onClick = { showCustom = true }, modifier = Modifier.fillMaxWidth()) {
+                        Text("Only during a specific time window")
+                    }
                 }
                 if (showCustom) {
                     Text(
-                        "Blocks (while \"$conditionLabel\" isn't done yet today) from the start " +
-                            "time until the end time. Use 00:00 as the end time to mean " +
-                            "\"through to midnight\" -- e.g. start 21:00, end 00:00 covers 9pm-midnight.",
+                        if (timeOnly) {
+                            "Blocks the app every day from the start time until the end time, " +
+                                "unconditionally -- no habit needs to be done. Use 00:00 as the " +
+                                "end time to mean \"through to midnight\" -- e.g. start 21:00, " +
+                                "end 00:00 covers 9pm-midnight."
+                        } else {
+                            "Blocks (while \"$conditionLabel\" isn't done yet today) from the start " +
+                                "time until the end time. Use 00:00 as the end time to mean " +
+                                "\"through to midnight\" -- e.g. start 21:00, end 00:00 covers 9pm-midnight."
+                        },
                         style = MaterialTheme.typography.bodySmall,
                     )
                     OutlinedTextField(
@@ -863,9 +894,15 @@ private fun HabitRuleWindowConfirmDialog(
         title = { Text(if (isEditing) "Confirm changes" else "Confirm rule") },
         text = {
             Text(
-                "$targetLabel will be blocked from ${formatMinuteOfDay(windowStartMinute)} to " +
-                    "${formatMinuteOfDay(windowEndMinute)} unless \"$conditionLabel\" is done in " +
-                    "$triggerLabel that day. No time restriction outside that window.",
+                if (habitNames.isEmpty()) {
+                    "$targetLabel will be blocked every day from ${formatMinuteOfDay(windowStartMinute)} " +
+                        "to ${formatMinuteOfDay(windowEndMinute)}, unconditionally -- no habit needed. " +
+                        "No time restriction outside that window."
+                } else {
+                    "$targetLabel will be blocked from ${formatMinuteOfDay(windowStartMinute)} to " +
+                        "${formatMinuteOfDay(windowEndMinute)} unless \"$conditionLabel\" is done in " +
+                        "$triggerLabel that day. No time restriction outside that window."
+                },
                 style = MaterialTheme.typography.bodyMedium,
             )
         },

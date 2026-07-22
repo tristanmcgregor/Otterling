@@ -38,12 +38,15 @@ class HabitRuleManager(context: Context) {
 
     /**
      * [requiredHabitNames] empty means "any/all habits complete" (the original whole-tracker
-     * pattern); otherwise the rule only fires once every listed habit is done today.
+     * pattern) for a non-windowed rule, or "no habit condition at all -- just block for the whole
+     * window" for a windowed one (see [HabitRule]); otherwise the rule only fires once every
+     * listed habit is done today.
      *
      * [windowStartMinute]/[windowEndMinute] (both minutes-since-midnight 0..1439, or both left
      * null) make this a time-windowed rule instead of the "unlock for [unlockMinutes] once done"
-     * model -- see [HabitRule] for exact semantics. Requires non-empty [requiredHabitNames]: there's
-     * no persisted "all habits done" signal for [reapplyAll] to check outside of a live scan.
+     * model -- see [HabitRule] for exact semantics. Unlike a non-windowed rule, "all habits done"
+     * has no persisted signal [reapplyAll] can check outside of a live scan, so a windowed rule's
+     * [requiredHabitNames] must either be empty (pure time block) or name specific habits.
      */
     suspend fun addRule(
         triggerPackageName: String,
@@ -53,10 +56,6 @@ class HabitRuleManager(context: Context) {
         windowStartMinute: Int? = null,
         windowEndMinute: Int? = null,
     ) {
-        val windowed = windowStartMinute != null && windowEndMinute != null
-        require(!windowed || requiredHabitNames.isNotEmpty()) {
-            "Time-windowed rules require at least one specific habit name"
-        }
         dao.insert(
             HabitRule(
                 triggerPackageName = triggerPackageName,
@@ -91,10 +90,6 @@ class HabitRuleManager(context: Context) {
         windowStartMinute: Int? = null,
         windowEndMinute: Int? = null,
     ) {
-        val windowed = windowStartMinute != null && windowEndMinute != null
-        require(!windowed || requiredHabitNames.isNotEmpty()) {
-            "Time-windowed rules require at least one specific habit name"
-        }
         val existing = dao.getAll().find { it.id == id } ?: return
         dao.update(
             existing.copy(
@@ -196,7 +191,12 @@ class HabitRuleManager(context: Context) {
         val end = rule.windowEndMinute
         if (start != null && end != null) {
             if (!isWithinWindow(nowMinuteOfDay, start, end)) return true
-            return rule.requiredHabitNames().all { requiredName ->
+            val required = rule.requiredHabitNames()
+            // Empty here means "no habit condition at all" for a windowed rule (see HabitRule) --
+            // unlike the non-windowed "any/all habits complete" pattern, there's no condition to
+            // ever satisfy, so it's simply blocked for the entire window, every day.
+            if (required.isEmpty()) return false
+            return required.all { requiredName ->
                 val needle = requiredName.lowercase()
                 doneHabitNamesToday.any { it.contains(needle) || needle.contains(it) }
             }
