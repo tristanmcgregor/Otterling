@@ -14,8 +14,6 @@ import au.com.tbmcgregor.bwparker.familyguard.focus.DetectedHabit
 import au.com.tbmcgregor.bwparker.familyguard.focus.DetectedHabitDao
 import au.com.tbmcgregor.bwparker.familyguard.focus.FocusSession
 import au.com.tbmcgregor.bwparker.familyguard.focus.FocusSessionDao
-import au.com.tbmcgregor.bwparker.familyguard.focus.HabitGateState
-import au.com.tbmcgregor.bwparker.familyguard.focus.HabitGateStateDao
 import au.com.tbmcgregor.bwparker.familyguard.focus.HabitRule
 import au.com.tbmcgregor.bwparker.familyguard.focus.HabitRuleDao
 import au.com.tbmcgregor.bwparker.familyguard.focus.MindfulApp
@@ -37,12 +35,11 @@ import au.com.tbmcgregor.bwparker.familyguard.tamper.TamperEventDao
         AppTimeBudget::class,
         AppUsageCounter::class,
         FocusSession::class,
-        HabitGateState::class,
         RewardLedger::class,
         HabitRule::class,
         DetectedHabit::class,
     ],
-    version = 11,
+    version = 12,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -61,8 +58,6 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun appUsageCounterDao(): AppUsageCounterDao
 
     abstract fun focusSessionDao(): FocusSessionDao
-
-    abstract fun habitGateStateDao(): HabitGateStateDao
 
     abstract fun rewardLedgerDao(): RewardLedgerDao
 
@@ -92,6 +87,7 @@ abstract class AppDatabase : RoomDatabase() {
                         MIGRATION_8_9,
                         MIGRATION_9_10,
                         MIGRATION_10_11,
+                        MIGRATION_11_12,
                     )
                     .build()
                     .also { instance = it }
@@ -298,6 +294,14 @@ abstract class AppDatabase : RoomDatabase() {
                     )
                     """.trimIndent(),
                 )
+            }
+        }
+
+        // Habit Tracker Reward Gate feature was removed (superseded by the Habit Rules command
+        // system); drop its now-unused table.
+        private val MIGRATION_11_12 = object : Migration(11, 12) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("DROP TABLE IF EXISTS habit_gate_state")
             }
         }
     }

@@ -48,13 +48,6 @@ data class FocusSession(
     val completed: Boolean = false,
 )
 
-/** Whether today's habit-tracker completion has already been detected and rewarded (once/day). */
-@Entity(tableName = "habit_gate_state")
-data class HabitGateState(
-    @PrimaryKey val dateEpochDay: Long,
-    val rewardGranted: Boolean = false,
-)
-
 /** Singleton row (id is always 0) tracking unspent reward minutes earned from focus sessions/habits. */
 @Entity(tableName = "reward_ledger")
 data class RewardLedger(

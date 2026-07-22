@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Accessibility
-import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Timelapse
 import androidx.compose.material3.Button
@@ -37,7 +36,6 @@ import au.com.tbmcgregor.bwparker.familyguard.focus.AppTimeBudgetManager
 import au.com.tbmcgregor.bwparker.familyguard.focus.DetectedHabit
 import au.com.tbmcgregor.bwparker.familyguard.focus.DetectedHabitManager
 import au.com.tbmcgregor.bwparker.familyguard.focus.FocusGuardAccessibilityService
-import au.com.tbmcgregor.bwparker.familyguard.focus.HabitGateManager
 import au.com.tbmcgregor.bwparker.familyguard.focus.HabitRule
 import au.com.tbmcgregor.bwparker.familyguard.focus.HabitRuleManager
 import au.com.tbmcgregor.bwparker.familyguard.focus.MindfulApp
@@ -307,94 +305,6 @@ private fun TimeBudgetInputDialog(
             TextButton(onClick = onDismiss) { Text("Cancel") }
         },
     )
-}
-
-@Composable
-fun HabitGateSection(context: Context) {
-    val coroutineScope = rememberCoroutineScope()
-    val habitGateManager = remember { HabitGateManager(context) }
-    var refreshTrigger by remember { mutableIntStateOf(0) }
-    var installedApps by remember { mutableStateOf<List<InstalledAppInfo>>(emptyList()) }
-    var showAppPicker by remember { mutableStateOf(false) }
-    var trackerPackage by remember { mutableStateOf(habitGateManager.trackerPackageName) }
-    var rewardMinutesText by remember { mutableStateOf(habitGateManager.rewardMinutes.toString()) }
-    var grantedToday by remember { mutableStateOf(false) }
-    var capturedText by remember { mutableStateOf("") }
-    var showCapture by remember { mutableStateOf(false) }
-
-    LaunchedEffect(refreshTrigger) {
-        grantedToday = habitGateManager.isGrantedToday()
-        capturedText = habitGateManager.lastCapturedText
-    }
-
-    if (showAppPicker) {
-        AppPickerDialog(
-            apps = installedApps,
-            onDismiss = { showAppPicker = false },
-            onSelect = { app ->
-                habitGateManager.trackerPackageName = app.packageName
-                trackerPackage = app.packageName
-                showAppPicker = false
-            },
-        )
-    }
-
-    SectionCard(
-        title = "Habit Tracker Reward Gate",
-        icon = Icons.Default.CheckCircle,
-        subtitle = "There's no public API for most habit trackers (e.g. HabitShare), so this " +
-            "detects a \"done\" state by scanning on-screen text for a pattern like \"3/3\" -- " +
-            "tune it using the capture below if it doesn't fire reliably.",
-    ) {
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("Habit tracker app", style = MaterialTheme.typography.bodyLarge)
-            Text(trackerPackage ?: "Not set", style = MaterialTheme.typography.bodySmall)
-        }
-        Button(onClick = {
-            coroutineScope.launch {
-                installedApps = withContext(Dispatchers.IO) { loadInstalledApps(context) }
-                showAppPicker = true
-            }
-        }) {
-            Text("Choose habit tracker app")
-        }
-
-        OutlinedTextField(
-            value = rewardMinutesText,
-            onValueChange = {
-                rewardMinutesText = it
-                it.toIntOrNull()?.let { minutes -> habitGateManager.rewardMinutes = minutes }
-            },
-            label = { Text("Reward minutes per day, once all habits are done") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
-
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("Today's status", style = MaterialTheme.typography.bodyLarge)
-            StatusText(if (grantedToday) "Reward granted" else "Not yet", isGood = grantedToday)
-        }
-
-        HorizontalDivider()
-
-        TextButton(onClick = { showCapture = !showCapture }) {
-            Text(if (showCapture) "Hide debug capture" else "Show debug capture (tuning helper)")
-        }
-        if (showCapture) {
-            Text(
-                "Last screen text read from the tracker app (open it, then come back here and " +
-                    "refresh):",
-                style = MaterialTheme.typography.bodySmall,
-            )
-            Text(
-                capturedText.ifBlank { "Nothing captured yet -- open the habit tracker app first." },
-                style = MaterialTheme.typography.bodySmall,
-            )
-            OutlinedButton(onClick = { refreshTrigger++ }) {
-                Text("Refresh capture")
-            }
-        }
-    }
 }
 
 /**

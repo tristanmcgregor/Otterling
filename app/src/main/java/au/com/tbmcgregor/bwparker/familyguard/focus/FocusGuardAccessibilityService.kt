@@ -19,10 +19,9 @@ import kotlinx.coroutines.withContext
  * One shared accessibility service backing all the self-improvement features: it watches which
  * app is in the foreground and (a) shows [FrictionActivity] before "mindful" apps, (b) ticks
  * [AppTimeBudgetManager] counters and heuristically detects YouTube-Shorts-style sub-features for
- * time budgets, and (c) scans a configured habit-tracker app's screen text for a completion
- * pattern to grant [HabitGateManager] rewards and evaluate [HabitRuleManager] commands. Must be
- * enabled manually by the user in Settings > Accessibility -- there's no way to grant this
- * programmatically.
+ * time budgets, and (c) scans a configured habit-tracker app's screen for individual habit rows
+ * to evaluate [HabitRuleManager] commands. Must be enabled manually by the user in
+ * Settings > Accessibility -- there's no way to grant this programmatically.
  */
 class FocusGuardAccessibilityService : AccessibilityService() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -32,7 +31,6 @@ class FocusGuardAccessibilityService : AccessibilityService() {
 
     private lateinit var mindfulAppManager: MindfulAppManager
     private lateinit var budgetManager: AppTimeBudgetManager
-    private lateinit var habitGateManager: HabitGateManager
     private lateinit var habitRuleManager: HabitRuleManager
     private lateinit var detectedHabitManager: DetectedHabitManager
 
@@ -40,7 +38,6 @@ class FocusGuardAccessibilityService : AccessibilityService() {
         super.onServiceConnected()
         mindfulAppManager = MindfulAppManager(applicationContext)
         budgetManager = AppTimeBudgetManager(applicationContext)
-        habitGateManager = HabitGateManager(applicationContext)
         habitRuleManager = HabitRuleManager(applicationContext)
         detectedHabitManager = DetectedHabitManager(applicationContext)
     }
@@ -58,7 +55,7 @@ class FocusGuardAccessibilityService : AccessibilityService() {
             onForegroundChanged(packageName)
         }
 
-        if (packageName == habitGateManager.trackerPackageName || packageName in triggerPackages) {
+        if (packageName in triggerPackages) {
             scope.launch { scanHabitTracker(packageName) }
         }
     }
@@ -122,17 +119,6 @@ class FocusGuardAccessibilityService : AccessibilityService() {
         val detectedRows = HabitTrackerScanner.extractRows(habitEntries)
         detectedHabitManager.recordScan(detectedRows)
 
-        if (packageName == habitGateManager.trackerPackageName) {
-            habitGateManager.lastCapturedText = texts.joinToString("\n").take(4000)
-            if (!habitGateManager.isGrantedToday() && looksLikeAllHabitsComplete(texts)) {
-                if (habitGateManager.grantIfNotAlready()) {
-                    withContext(Dispatchers.Main) {
-                        Toast.makeText(applicationContext, "Habit reward earned!", Toast.LENGTH_SHORT).show()
-                    }
-                }
-            }
-        }
-
         val grantedCount = habitRuleManager.evaluateTrigger(packageName, texts, detectedRows)
         if (grantedCount > 0) {
             withContext(Dispatchers.Main) {
@@ -156,17 +142,6 @@ class FocusGuardAccessibilityService : AccessibilityService() {
         for (i in 0 until node.childCount) {
             val child = node.getChild(i) ?: continue
             collectHabitEntries(child, out, maxNodes)
-        }
-    }
-
-    /** Matches common "3/3" or "3 of 3" completion-counter phrasing where done == total > 0. */
-    private fun looksLikeAllHabitsComplete(texts: List<String>): Boolean {
-        val pattern = Regex("""(\d+)\s*(?:/|of)\s*(\d+)""", RegexOption.IGNORE_CASE)
-        return texts.any { text ->
-            val match = pattern.find(text) ?: return@any false
-            val (done, total) = match.destructured
-            val totalValue = total.toIntOrNull() ?: return@any false
-            totalValue > 0 && done.toIntOrNull() == totalValue
         }
     }
 

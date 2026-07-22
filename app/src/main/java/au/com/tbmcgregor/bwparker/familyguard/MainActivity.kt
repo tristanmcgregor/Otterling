@@ -58,7 +58,6 @@ import au.com.tbmcgregor.bwparker.familyguard.tamper.TamperEvent
 import au.com.tbmcgregor.bwparker.familyguard.tamper.TamperEventLogger
 import au.com.tbmcgregor.bwparker.familyguard.ui.AccessibilityServiceSection
 import au.com.tbmcgregor.bwparker.familyguard.ui.AppPickerDialog
-import au.com.tbmcgregor.bwparker.familyguard.ui.HabitGateSection
 import au.com.tbmcgregor.bwparker.familyguard.ui.HabitRulesSection
 import au.com.tbmcgregor.bwparker.familyguard.ui.InstalledAppInfo
 import au.com.tbmcgregor.bwparker.familyguard.ui.MindfulAppsSection
@@ -119,7 +118,6 @@ class MainActivity : ComponentActivity() {
                             AccessibilityServiceSection(applicationContext)
                             MindfulAppsSection(applicationContext)
                             TimeBudgetsSection(applicationContext)
-                            HabitGateSection(applicationContext)
                             HabitRulesSection(applicationContext)
                             KnoxSetupSection()
                         }

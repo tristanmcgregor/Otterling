@@ -69,15 +69,6 @@ interface FocusSessionDao {
 }
 
 @Dao
-interface HabitGateStateDao {
-    @Query("SELECT * FROM habit_gate_state WHERE dateEpochDay = :dateEpochDay")
-    suspend fun get(dateEpochDay: Long): HabitGateState?
-
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun upsert(state: HabitGateState)
-}
-
-@Dao
 interface RewardLedgerDao {
     @Query("SELECT * FROM reward_ledger WHERE id = 0")
     suspend fun get(): RewardLedger?
