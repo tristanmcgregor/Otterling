@@ -36,6 +36,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import au.com.tbmcgregor.bwparker.familyguard.focus.AppTimeBudget
 import au.com.tbmcgregor.bwparker.familyguard.focus.AppTimeBudgetManager
+import au.com.tbmcgregor.bwparker.familyguard.focus.DetectedHabit
+import au.com.tbmcgregor.bwparker.familyguard.focus.DetectedHabitManager
 import au.com.tbmcgregor.bwparker.familyguard.focus.FocusGuardAccessibilityService
 import au.com.tbmcgregor.bwparker.familyguard.focus.FocusSessionManager
 import au.com.tbmcgregor.bwparker.familyguard.focus.HabitGateManager
@@ -557,44 +559,64 @@ fun HabitGateSection(context: Context) {
     }
 }
 
-/** Steps of the "add a rule" wizard: pick the trigger app, then the app it unlocks, then minutes. */
+/**
+ * Steps of the "add a rule" wizard: pick the trigger app, then which habit within it (any/all, or
+ * one specific detected habit), then the app it unlocks, then minutes.
+ */
 private sealed class HabitRuleWizardStep {
     object PickTrigger : HabitRuleWizardStep()
-    data class PickTarget(val trigger: InstalledAppInfo) : HabitRuleWizardStep()
-    data class Confirm(val trigger: InstalledAppInfo, val target: InstalledAppInfo) : HabitRuleWizardStep()
+    data class PickCondition(val trigger: InstalledAppInfo) : HabitRuleWizardStep()
+    data class PickTarget(val trigger: InstalledAppInfo, val habitName: String?) : HabitRuleWizardStep()
+    data class Confirm(val trigger: InstalledAppInfo, val habitName: String?, val target: InstalledAppInfo) :
+        HabitRuleWizardStep()
 }
 
 @Composable
 fun HabitRulesSection(context: Context) {
     val coroutineScope = rememberCoroutineScope()
     val habitRuleManager = remember { HabitRuleManager(context) }
+    val detectedHabitManager = remember { DetectedHabitManager(context) }
     var refreshTrigger by remember { mutableIntStateOf(0) }
     var rules by remember { mutableStateOf<List<HabitRule>>(emptyList()) }
     var installedApps by remember { mutableStateOf<List<InstalledAppInfo>>(emptyList()) }
+    var detectedHabits by remember { mutableStateOf<List<DetectedHabit>>(emptyList()) }
     var wizardStep by remember { mutableStateOf<HabitRuleWizardStep?>(null) }
+    var showDetected by remember { mutableStateOf(false) }
 
     LaunchedEffect(refreshTrigger) {
         rules = habitRuleManager.rules()
+        detectedHabits = detectedHabitManager.latest()
     }
 
     when (val step = wizardStep) {
         is HabitRuleWizardStep.PickTrigger -> AppPickerDialog(
             apps = installedApps,
             onDismiss = { wizardStep = null },
-            onSelect = { app -> wizardStep = HabitRuleWizardStep.PickTarget(app) },
+            onSelect = { app -> wizardStep = HabitRuleWizardStep.PickCondition(app) },
+        )
+        is HabitRuleWizardStep.PickCondition -> HabitConditionPickerDialog(
+            detectedHabits = detectedHabits,
+            onDismiss = { wizardStep = null },
+            onSelect = { habitName -> wizardStep = HabitRuleWizardStep.PickTarget(step.trigger, habitName) },
         )
         is HabitRuleWizardStep.PickTarget -> AppPickerDialog(
             apps = installedApps,
             onDismiss = { wizardStep = null },
-            onSelect = { app -> wizardStep = HabitRuleWizardStep.Confirm(step.trigger, app) },
+            onSelect = { app -> wizardStep = HabitRuleWizardStep.Confirm(step.trigger, step.habitName, app) },
         )
         is HabitRuleWizardStep.Confirm -> HabitRuleMinutesDialog(
             triggerLabel = step.trigger.label,
+            habitName = step.habitName,
             targetLabel = step.target.label,
             onDismiss = { wizardStep = null },
             onConfirm = { minutes ->
                 coroutineScope.launch {
-                    habitRuleManager.addRule(step.trigger.packageName, step.target.packageName, minutes)
+                    habitRuleManager.addRule(
+                        step.trigger.packageName,
+                        step.target.packageName,
+                        minutes,
+                        step.habitName,
+                    )
                     refreshTrigger++
                 }
                 wizardStep = null
@@ -606,13 +628,15 @@ fun HabitRulesSection(context: Context) {
     SectionCard(
         title = "Habit Rules (Command Builder)",
         icon = Icons.Default.PlayArrow,
-        subtitle = "Build as many \"when (habit done in app A) -> unlock (app B) for (X) minutes\" " +
-            "commands as you like. The target app stays suspended until its habit is completed " +
-            "for the day; the unlock window then counts down automatically.",
+        subtitle = "Build as many \"when (a habit is done in app A) -> unlock (app B) for (X) " +
+            "minutes\" commands as you like -- gate on any/all habits, or one specific habit " +
+            "auto-detected from the tracker's screen. The target app stays suspended until its " +
+            "condition is met for the day; the unlock window then counts down automatically.",
     ) {
         Button(onClick = {
             coroutineScope.launch {
                 installedApps = withContext(Dispatchers.IO) { loadInstalledApps(context) }
+                detectedHabits = detectedHabitManager.latest()
                 wizardStep = HabitRuleWizardStep.PickTrigger
             }
         }) {
@@ -632,7 +656,7 @@ fun HabitRulesSection(context: Context) {
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            "When ${rule.triggerPackageName} habit is done",
+                            "When \"${rule.habitName ?: "all habits"}\" done in ${rule.triggerPackageName}",
                             style = MaterialTheme.typography.bodyMedium,
                         )
                         Text(
@@ -665,21 +689,104 @@ fun HabitRulesSection(context: Context) {
                 }
             }
         }
+
+        HorizontalDivider()
+
+        TextButton(onClick = { showDetected = !showDetected }) {
+            Text(if (showDetected) "Hide detected habits" else "Show detected habits (tuning helper)")
+        }
+        if (showDetected) {
+            Text(
+                "Every habit row the scanner has found so far, and whether it looked checked off " +
+                    "the last time its screen was open. Open the tracker app, then come back here " +
+                    "and refresh if a habit you expect isn't listed.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            if (detectedHabits.isEmpty()) {
+                Text("Nothing detected yet -- open the habit tracker app first.", style = MaterialTheme.typography.bodySmall)
+            } else {
+                detectedHabits.forEach { habit ->
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text(habit.name, style = MaterialTheme.typography.bodySmall)
+                        StatusText(if (habit.doneToday) "Done" else "Not done", isGood = habit.doneToday)
+                    }
+                }
+            }
+            OutlinedButton(onClick = { refreshTrigger++ }) {
+                Text("Refresh")
+            }
+        }
     }
+}
+
+@Composable
+private fun HabitConditionPickerDialog(
+    detectedHabits: List<DetectedHabit>,
+    onDismiss: () -> Unit,
+    onSelect: (habitName: String?) -> Unit,
+) {
+    var customName by remember { mutableStateOf("") }
+
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Which habit should trigger this?") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { onSelect(null) }, modifier = Modifier.fillMaxWidth()) {
+                    Text("Any/all habits complete")
+                }
+                if (detectedHabits.isNotEmpty()) {
+                    Text(
+                        "Or a specific habit auto-detected from the tracker's screen:",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    detectedHabits.forEach { habit ->
+                        OutlinedButton(onClick = { onSelect(habit.name) }, modifier = Modifier.fillMaxWidth()) {
+                            Text(habit.name)
+                        }
+                    }
+                } else {
+                    Text(
+                        "No habits detected yet -- open the tracker app first, or type a name to " +
+                            "match manually below:",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                OutlinedTextField(
+                    value = customName,
+                    onValueChange = { customName = it },
+                    label = { Text("Custom habit name (optional)") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                if (customName.isNotBlank()) {
+                    Button(onClick = { onSelect(customName) }, modifier = Modifier.fillMaxWidth()) {
+                        Text("Use \"$customName\"")
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
 }
 
 @Composable
 private fun HabitRuleMinutesDialog(
     triggerLabel: String,
+    habitName: String?,
     targetLabel: String,
     onDismiss: () -> Unit,
     onConfirm: (unlockMinutes: Int) -> Unit,
 ) {
     var minutesText by remember { mutableStateOf("30") }
+    val conditionLabel = habitName ?: "all habits"
 
     androidx.compose.material3.AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("When $triggerLabel is done...") },
+        title = { Text("When \"$conditionLabel\" is done in $triggerLabel...") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(

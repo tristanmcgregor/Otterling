@@ -103,3 +103,12 @@ interface HabitRuleDao {
     @Query("DELETE FROM habit_rules WHERE id = :id")
     suspend fun delete(id: Long)
 }
+
+@Dao
+interface DetectedHabitDao {
+    @Query("SELECT * FROM detected_habits ORDER BY name")
+    suspend fun getAll(): List<DetectedHabit>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(habit: DetectedHabit)
+}

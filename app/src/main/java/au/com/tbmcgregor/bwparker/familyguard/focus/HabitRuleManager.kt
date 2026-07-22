@@ -29,12 +29,19 @@ class HabitRuleManager(context: Context) {
 
     suspend fun rules(): List<HabitRule> = dao.getAll()
 
-    suspend fun addRule(triggerPackageName: String, targetPackageName: String, unlockMinutes: Int) {
+    /** [habitName] null means "any/all habits complete" (the original whole-tracker pattern). */
+    suspend fun addRule(
+        triggerPackageName: String,
+        targetPackageName: String,
+        unlockMinutes: Int,
+        habitName: String? = null,
+    ) {
         dao.insert(
             HabitRule(
                 triggerPackageName = triggerPackageName,
                 targetPackageName = targetPackageName,
                 unlockMinutes = unlockMinutes,
+                habitName = habitName,
             ),
         )
         reapplyAll()
@@ -51,23 +58,39 @@ class HabitRuleManager(context: Context) {
     }
 
     /**
-     * Called by the accessibility service once it has scanned [triggerPackageName]'s on-screen
-     * text into [texts]. Grants (at most once per calendar day, per rule) every enabled rule whose
-     * trigger matches and whose completion pattern is found, and returns how many fired -- useful
-     * for a "you just unlocked N app(s)" toast. Idempotent: safe to call on every scan.
+     * Called by the accessibility service once it has scanned [triggerPackageName]'s screen into
+     * [texts] (whole-screen text, for the "all complete" pattern) and [detectedHabitRows] (name +
+     * done-today pairs from [HabitTrackerScanner], for single-habit rules). Grants (at most once
+     * per calendar day, per rule) every enabled rule whose trigger matches and whose condition is
+     * met, and returns how many fired -- useful for a "you just unlocked N app(s)" toast.
+     * Idempotent: safe to call on every scan.
      */
-    suspend fun evaluateTrigger(triggerPackageName: String, texts: List<String>): Int {
+    suspend fun evaluateTrigger(
+        triggerPackageName: String,
+        texts: List<String>,
+        detectedHabitRows: List<Pair<String, Boolean>>,
+    ): Int {
         val today = LocalDate.now().toEpochDay()
         val candidates = dao.forTrigger(triggerPackageName).filter { it.lastGrantedEpochDay != today }
-        if (candidates.isEmpty() || !looksLikeAllComplete(texts)) return 0
+        if (candidates.isEmpty()) return 0
+
+        val allComplete = looksLikeAllComplete(texts)
+        val doneHabitNames = detectedHabitRows.filter { it.second }.map { it.first.lowercase() }
 
         val now = System.currentTimeMillis()
+        var grantedCount = 0
         candidates.forEach { rule ->
+            val fires = when (val habitName = rule.habitName?.lowercase()) {
+                null -> allComplete
+                else -> doneHabitNames.any { it.contains(habitName) || habitName.contains(it) }
+            }
+            if (!fires) return@forEach
             val newUntil = maxOf(rule.unlockUntilMillis, now) + rule.unlockMinutes * 60_000L
             dao.update(rule.copy(lastGrantedEpochDay = today, unlockUntilMillis = newUntil))
+            grantedCount++
         }
-        reapplyAll()
-        return candidates.size
+        if (grantedCount > 0) reapplyAll()
+        return grantedCount
     }
 
     /** Re-derives suspended state for every target app from scratch. Call periodically. */

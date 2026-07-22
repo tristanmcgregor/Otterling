@@ -34,6 +34,7 @@ class FocusGuardAccessibilityService : AccessibilityService() {
     private lateinit var budgetManager: AppTimeBudgetManager
     private lateinit var habitGateManager: HabitGateManager
     private lateinit var habitRuleManager: HabitRuleManager
+    private lateinit var detectedHabitManager: DetectedHabitManager
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -41,6 +42,7 @@ class FocusGuardAccessibilityService : AccessibilityService() {
         budgetManager = AppTimeBudgetManager(applicationContext)
         habitGateManager = HabitGateManager(applicationContext)
         habitRuleManager = HabitRuleManager(applicationContext)
+        detectedHabitManager = DetectedHabitManager(applicationContext)
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -115,6 +117,11 @@ class FocusGuardAccessibilityService : AccessibilityService() {
         val texts = mutableListOf<String>()
         collectNodeInfo(root, texts = texts, resourceIds = mutableListOf(), maxNodes = 400)
 
+        val habitEntries = mutableListOf<HabitTrackerScanner.Entry>()
+        collectHabitEntries(root, habitEntries, maxNodes = 400)
+        val detectedRows = HabitTrackerScanner.extractRows(habitEntries)
+        detectedHabitManager.recordScan(detectedRows)
+
         if (packageName == habitGateManager.trackerPackageName) {
             habitGateManager.lastCapturedText = texts.joinToString("\n").take(4000)
             if (!habitGateManager.isGrantedToday() && looksLikeAllHabitsComplete(texts)) {
@@ -126,12 +133,29 @@ class FocusGuardAccessibilityService : AccessibilityService() {
             }
         }
 
-        val grantedCount = habitRuleManager.evaluateTrigger(packageName, texts)
+        val grantedCount = habitRuleManager.evaluateTrigger(packageName, texts, detectedRows)
         if (grantedCount > 0) {
             withContext(Dispatchers.Main) {
                 val label = if (grantedCount == 1) "app" else "apps"
                 Toast.makeText(applicationContext, "Unlocked $grantedCount $label for your habit!", Toast.LENGTH_SHORT).show()
             }
+        }
+    }
+
+    /** Flattens the tree in traversal order, recording every node's text + checkable/checked state
+     * -- input for [HabitTrackerScanner], which pairs checkboxes with their nearby label. */
+    @Suppress("DEPRECATION")
+    private fun collectHabitEntries(
+        node: AccessibilityNodeInfo,
+        out: MutableList<HabitTrackerScanner.Entry>,
+        maxNodes: Int,
+    ) {
+        if (out.size >= maxNodes) return
+        val text = node.text?.toString()?.takeIf { it.isNotBlank() }
+        out.add(HabitTrackerScanner.Entry(text = text, checkable = node.isCheckable, checked = node.isChecked))
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            collectHabitEntries(child, out, maxNodes)
         }
     }
 
