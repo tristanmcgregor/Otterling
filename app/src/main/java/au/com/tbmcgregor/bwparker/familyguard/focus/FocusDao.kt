@@ -85,3 +85,21 @@ interface RewardLedgerDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(ledger: RewardLedger)
 }
+
+@Dao
+interface HabitRuleDao {
+    @Query("SELECT * FROM habit_rules ORDER BY id")
+    suspend fun getAll(): List<HabitRule>
+
+    @Query("SELECT * FROM habit_rules WHERE triggerPackageName = :triggerPackageName AND enabled = 1")
+    suspend fun forTrigger(triggerPackageName: String): List<HabitRule>
+
+    @Insert
+    suspend fun insert(rule: HabitRule): Long
+
+    @androidx.room.Update
+    suspend fun update(rule: HabitRule)
+
+    @Query("DELETE FROM habit_rules WHERE id = :id")
+    suspend fun delete(id: Long)
+}

@@ -11,6 +11,7 @@ import android.util.Log
 import au.com.tbmcgregor.bwparker.familyguard.content.AppSuspensionManager
 import au.com.tbmcgregor.bwparker.familyguard.focus.AppTimeBudgetManager
 import au.com.tbmcgregor.bwparker.familyguard.focus.BudgetEnforcer
+import au.com.tbmcgregor.bwparker.familyguard.focus.HabitRuleManager
 import au.com.tbmcgregor.bwparker.familyguard.focus.RewardLedgerManager
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.AppUninstallGuard
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.DeviceRestrictionsManager
@@ -47,6 +48,7 @@ class ProtectionEnforcementService : Service() {
             val budgetEnforcer = BudgetEnforcer(applicationContext)
             val budgetManager = AppTimeBudgetManager(applicationContext)
             val rewardLedgerManager = RewardLedgerManager(applicationContext)
+            val habitRuleManager = HabitRuleManager(applicationContext)
             loopJob = scope.launch {
                 runCatching { suspensionManager.reapplyAll() }
                     .onFailure { Log.w(TAG, "Blocked-app reapply failed", it) }
@@ -59,6 +61,8 @@ class ProtectionEnforcementService : Service() {
                         .onFailure { Log.w(TAG, "Time budget reapply failed", it) }
                     runCatching { rewardLedgerManager.reapply() }
                         .onFailure { Log.w(TAG, "Reward ledger reapply failed", it) }
+                    runCatching { habitRuleManager.reapplyAll() }
+                        .onFailure { Log.w(TAG, "Habit rule reapply failed", it) }
                     runCatching { budgetManager.pruneOldCounters() }
                         .onFailure { Log.w(TAG, "Usage counter prune failed", it) }
                     delay(POLL_INTERVAL_MS)

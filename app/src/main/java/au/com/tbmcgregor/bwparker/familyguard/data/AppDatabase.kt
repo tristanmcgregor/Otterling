@@ -14,6 +14,8 @@ import au.com.tbmcgregor.bwparker.familyguard.focus.FocusSession
 import au.com.tbmcgregor.bwparker.familyguard.focus.FocusSessionDao
 import au.com.tbmcgregor.bwparker.familyguard.focus.HabitGateState
 import au.com.tbmcgregor.bwparker.familyguard.focus.HabitGateStateDao
+import au.com.tbmcgregor.bwparker.familyguard.focus.HabitRule
+import au.com.tbmcgregor.bwparker.familyguard.focus.HabitRuleDao
 import au.com.tbmcgregor.bwparker.familyguard.focus.MindfulApp
 import au.com.tbmcgregor.bwparker.familyguard.focus.MindfulAppDao
 import au.com.tbmcgregor.bwparker.familyguard.focus.RewardApp
@@ -35,8 +37,9 @@ import au.com.tbmcgregor.bwparker.familyguard.tamper.TamperEventDao
         FocusSession::class,
         HabitGateState::class,
         RewardLedger::class,
+        HabitRule::class,
     ],
-    version = 9,
+    version = 10,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -60,6 +63,8 @@ abstract class AppDatabase : RoomDatabase() {
 
     abstract fun rewardLedgerDao(): RewardLedgerDao
 
+    abstract fun habitRuleDao(): HabitRuleDao
+
     companion object {
         @Volatile
         private var instance: AppDatabase? = null
@@ -80,6 +85,7 @@ abstract class AppDatabase : RoomDatabase() {
                         MIGRATION_6_7,
                         MIGRATION_7_8,
                         MIGRATION_8_9,
+                        MIGRATION_9_10,
                     )
                     .build()
                     .also { instance = it }
@@ -246,6 +252,25 @@ abstract class AppDatabase : RoomDatabase() {
                         id INTEGER NOT NULL,
                         earnedMinutesRemaining INTEGER NOT NULL,
                         PRIMARY KEY(id)
+                    )
+                    """.trimIndent(),
+                )
+            }
+        }
+
+        // Habit-rule command system: "when (habit done in app A) -> unlock (app B) for (N) min".
+        private val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS habit_rules (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        triggerPackageName TEXT NOT NULL,
+                        targetPackageName TEXT NOT NULL,
+                        unlockMinutes INTEGER NOT NULL,
+                        enabled INTEGER NOT NULL,
+                        lastGrantedEpochDay INTEGER NOT NULL,
+                        unlockUntilMillis INTEGER NOT NULL
                     )
                     """.trimIndent(),
                 )

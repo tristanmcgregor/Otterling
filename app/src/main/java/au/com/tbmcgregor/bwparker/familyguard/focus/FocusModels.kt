@@ -61,3 +61,22 @@ data class RewardLedger(
     @PrimaryKey val id: Int = 0,
     val earnedMinutesRemaining: Int = 0,
 )
+
+/**
+ * A user-defined command: "when (a completion pattern is seen in [triggerPackageName]) -> unlock
+ * [targetPackageName] for [unlockMinutes] minutes". [targetPackageName] is suspended by default
+ * (like a [RewardApp]) and only opens while one of its rules has an active unlock window.
+ * [lastGrantedEpochDay] makes firing idempotent per calendar day; [unlockUntilMillis] is this
+ * rule's own currently-active unlock expiry (a target with multiple rules unlocks if any of them
+ * is currently active).
+ */
+@Entity(tableName = "habit_rules")
+data class HabitRule(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val triggerPackageName: String,
+    val targetPackageName: String,
+    val unlockMinutes: Int,
+    val enabled: Boolean = true,
+    val lastGrantedEpochDay: Long = -1,
+    val unlockUntilMillis: Long = 0,
+)

@@ -5,12 +5,14 @@ import android.content.Context
 import android.content.Intent
 import android.provider.Settings
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Accessibility
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.HourglassTop
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SelfImprovement
 import androidx.compose.material.icons.filled.Timelapse
 import androidx.compose.material3.Button
@@ -18,6 +20,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -36,6 +39,8 @@ import au.com.tbmcgregor.bwparker.familyguard.focus.AppTimeBudgetManager
 import au.com.tbmcgregor.bwparker.familyguard.focus.FocusGuardAccessibilityService
 import au.com.tbmcgregor.bwparker.familyguard.focus.FocusSessionManager
 import au.com.tbmcgregor.bwparker.familyguard.focus.HabitGateManager
+import au.com.tbmcgregor.bwparker.familyguard.focus.HabitRule
+import au.com.tbmcgregor.bwparker.familyguard.focus.HabitRuleManager
 import au.com.tbmcgregor.bwparker.familyguard.focus.MindfulApp
 import au.com.tbmcgregor.bwparker.familyguard.focus.MindfulAppManager
 import au.com.tbmcgregor.bwparker.familyguard.focus.RewardApp
@@ -420,7 +425,7 @@ private fun TimeBudgetInputDialog(
         onDismissRequest = onDismiss,
         title = { Text("Daily budget for $packageName") },
         text = {
-            androidx.compose.foundation.layout.Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
                     value = totalMinutesText,
                     onValueChange = { totalMinutesText = it },
@@ -550,4 +555,156 @@ fun HabitGateSection(context: Context) {
             }
         }
     }
+}
+
+/** Steps of the "add a rule" wizard: pick the trigger app, then the app it unlocks, then minutes. */
+private sealed class HabitRuleWizardStep {
+    object PickTrigger : HabitRuleWizardStep()
+    data class PickTarget(val trigger: InstalledAppInfo) : HabitRuleWizardStep()
+    data class Confirm(val trigger: InstalledAppInfo, val target: InstalledAppInfo) : HabitRuleWizardStep()
+}
+
+@Composable
+fun HabitRulesSection(context: Context) {
+    val coroutineScope = rememberCoroutineScope()
+    val habitRuleManager = remember { HabitRuleManager(context) }
+    var refreshTrigger by remember { mutableIntStateOf(0) }
+    var rules by remember { mutableStateOf<List<HabitRule>>(emptyList()) }
+    var installedApps by remember { mutableStateOf<List<InstalledAppInfo>>(emptyList()) }
+    var wizardStep by remember { mutableStateOf<HabitRuleWizardStep?>(null) }
+
+    LaunchedEffect(refreshTrigger) {
+        rules = habitRuleManager.rules()
+    }
+
+    when (val step = wizardStep) {
+        is HabitRuleWizardStep.PickTrigger -> AppPickerDialog(
+            apps = installedApps,
+            onDismiss = { wizardStep = null },
+            onSelect = { app -> wizardStep = HabitRuleWizardStep.PickTarget(app) },
+        )
+        is HabitRuleWizardStep.PickTarget -> AppPickerDialog(
+            apps = installedApps,
+            onDismiss = { wizardStep = null },
+            onSelect = { app -> wizardStep = HabitRuleWizardStep.Confirm(step.trigger, app) },
+        )
+        is HabitRuleWizardStep.Confirm -> HabitRuleMinutesDialog(
+            triggerLabel = step.trigger.label,
+            targetLabel = step.target.label,
+            onDismiss = { wizardStep = null },
+            onConfirm = { minutes ->
+                coroutineScope.launch {
+                    habitRuleManager.addRule(step.trigger.packageName, step.target.packageName, minutes)
+                    refreshTrigger++
+                }
+                wizardStep = null
+            },
+        )
+        null -> {}
+    }
+
+    SectionCard(
+        title = "Habit Rules (Command Builder)",
+        icon = Icons.Default.PlayArrow,
+        subtitle = "Build as many \"when (habit done in app A) -> unlock (app B) for (X) minutes\" " +
+            "commands as you like. The target app stays suspended until its habit is completed " +
+            "for the day; the unlock window then counts down automatically.",
+    ) {
+        Button(onClick = {
+            coroutineScope.launch {
+                installedApps = withContext(Dispatchers.IO) { loadInstalledApps(context) }
+                wizardStep = HabitRuleWizardStep.PickTrigger
+            }
+        }) {
+            Text("Add rule")
+        }
+
+        if (rules.isEmpty()) {
+            Text("No rules yet -- add one above.", style = MaterialTheme.typography.bodySmall)
+        } else {
+            val now = System.currentTimeMillis()
+            rules.forEach { rule ->
+                HorizontalDivider()
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            "When ${rule.triggerPackageName} habit is done",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        Text(
+                            "-> unlock ${rule.targetPackageName} for ${rule.unlockMinutes} min",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        val unlocked = rule.unlockUntilMillis > now
+                        StatusText(
+                            if (unlocked) "Unlocked (until you use it up)" else "Locked, waiting on today's habit",
+                            isGood = unlocked,
+                        )
+                    }
+                    Switch(
+                        checked = rule.enabled,
+                        onCheckedChange = { enabled ->
+                            coroutineScope.launch {
+                                habitRuleManager.setEnabled(rule.id, enabled)
+                                refreshTrigger++
+                            }
+                        },
+                    )
+                    TextButton(onClick = {
+                        coroutineScope.launch {
+                            habitRuleManager.deleteRule(rule.id)
+                            refreshTrigger++
+                        }
+                    }) {
+                        Text("Remove")
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HabitRuleMinutesDialog(
+    triggerLabel: String,
+    targetLabel: String,
+    onDismiss: () -> Unit,
+    onConfirm: (unlockMinutes: Int) -> Unit,
+) {
+    var minutesText by remember { mutableStateOf("30") }
+
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("When $triggerLabel is done...") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    "...unlock $targetLabel for how many minutes?",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                OutlinedTextField(
+                    value = minutesText,
+                    onValueChange = { minutesText = it },
+                    label = { Text("Unlock minutes") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = {
+            Button(onClick = {
+                val minutes = minutesText.toIntOrNull() ?: return@Button
+                if (minutes > 0) onConfirm(minutes)
+            }) {
+                Text("Save rule")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
 }

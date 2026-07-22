@@ -20,23 +20,27 @@ import kotlinx.coroutines.withContext
  * app is in the foreground and (a) shows [FrictionActivity] before "mindful" apps, (b) ticks
  * [AppTimeBudgetManager] counters and heuristically detects YouTube-Shorts-style sub-features for
  * time budgets, and (c) scans a configured habit-tracker app's screen text for a completion
- * pattern to grant [HabitGateManager] rewards. Must be enabled manually by the user in
- * Settings > Accessibility -- there's no way to grant this programmatically.
+ * pattern to grant [HabitGateManager] rewards and evaluate [HabitRuleManager] commands. Must be
+ * enabled manually by the user in Settings > Accessibility -- there's no way to grant this
+ * programmatically.
  */
 class FocusGuardAccessibilityService : AccessibilityService() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var tickJob: Job? = null
     private var currentPackage: String? = null
+    private var triggerPackages: Set<String> = emptySet()
 
     private lateinit var mindfulAppManager: MindfulAppManager
     private lateinit var budgetManager: AppTimeBudgetManager
     private lateinit var habitGateManager: HabitGateManager
+    private lateinit var habitRuleManager: HabitRuleManager
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         mindfulAppManager = MindfulAppManager(applicationContext)
         budgetManager = AppTimeBudgetManager(applicationContext)
         habitGateManager = HabitGateManager(applicationContext)
+        habitRuleManager = HabitRuleManager(applicationContext)
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -52,7 +56,7 @@ class FocusGuardAccessibilityService : AccessibilityService() {
             onForegroundChanged(packageName)
         }
 
-        if (packageName == habitGateManager.trackerPackageName) {
+        if (packageName == habitGateManager.trackerPackageName || packageName in triggerPackages) {
             scope.launch { scanHabitTracker(packageName) }
         }
     }
@@ -60,6 +64,8 @@ class FocusGuardAccessibilityService : AccessibilityService() {
     private fun onForegroundChanged(packageName: String) {
         tickJob?.cancel()
         scope.launch {
+            triggerPackages = habitRuleManager.rules().map { it.triggerPackageName }.toSet()
+
             val mindfulApp = mindfulAppManager.apps().find { it.packageName == packageName }
             if (mindfulApp != null && !mindfulAppManager.isWithinGracePeriod(packageName)) {
                 withContext(Dispatchers.Main) { launchFriction(packageName, mindfulApp.delaySeconds) }
@@ -109,12 +115,22 @@ class FocusGuardAccessibilityService : AccessibilityService() {
         val texts = mutableListOf<String>()
         collectNodeInfo(root, texts = texts, resourceIds = mutableListOf(), maxNodes = 400)
 
-        habitGateManager.lastCapturedText = texts.joinToString("\n").take(4000)
-        if (!habitGateManager.isGrantedToday() && looksLikeAllHabitsComplete(texts)) {
-            if (habitGateManager.grantIfNotAlready()) {
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(applicationContext, "Habit reward earned!", Toast.LENGTH_SHORT).show()
+        if (packageName == habitGateManager.trackerPackageName) {
+            habitGateManager.lastCapturedText = texts.joinToString("\n").take(4000)
+            if (!habitGateManager.isGrantedToday() && looksLikeAllHabitsComplete(texts)) {
+                if (habitGateManager.grantIfNotAlready()) {
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(applicationContext, "Habit reward earned!", Toast.LENGTH_SHORT).show()
+                    }
                 }
+            }
+        }
+
+        val grantedCount = habitRuleManager.evaluateTrigger(packageName, texts)
+        if (grantedCount > 0) {
+            withContext(Dispatchers.Main) {
+                val label = if (grantedCount == 1) "app" else "apps"
+                Toast.makeText(applicationContext, "Unlocked $grantedCount $label for your habit!", Toast.LENGTH_SHORT).show()
             }
         }
     }
