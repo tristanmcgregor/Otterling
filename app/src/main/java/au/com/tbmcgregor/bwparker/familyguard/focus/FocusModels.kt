@@ -68,6 +68,14 @@ data class RewardLedger(
  * from [DetectedHabit], joined with [HABIT_NAME_DELIMITER], ALL of which must be done today for
  * the rule to fire. Use [requiredHabitNames]/[encodeRequiredHabitNames] rather than touching
  * [habitName] directly.
+ *
+ * [windowStartMinute]/[windowEndMinute] (both minutes-since-local-midnight, 0..1439, or both null)
+ * make this rule only enforce blocking during that time-of-day window instead of the "unlock for
+ * unlockMinutes once done" model: outside the window, or once the required habit(s) are done today,
+ * the target is unblocked; inside the window while they're not done, it's blocked. [windowEndMinute]
+ * of 0 means "through to midnight" (wraps around), so e.g. start=1260 (9pm) end=0 covers 9pm-midnight.
+ * A windowed rule requires specific [requiredHabitNames] (not the "all habits" pattern), since only
+ * per-habit done state is persisted for [reapplyAll] to check outside of a live scan.
  */
 @Entity(tableName = "habit_rules")
 data class HabitRule(
@@ -79,6 +87,8 @@ data class HabitRule(
     val lastGrantedEpochDay: Long = -1,
     val unlockUntilMillis: Long = 0,
     val habitName: String? = null,
+    val windowStartMinute: Int? = null,
+    val windowEndMinute: Int? = null,
 )
 
 /** Non-printable separator, so it can't collide with a real habit name typed by the user. */
@@ -93,6 +103,11 @@ fun HabitRule.requiredHabitNames(): List<String> =
  * list encodes to null, meaning "any/all habits complete". */
 fun encodeRequiredHabitNames(names: List<String>): String? =
     names.map { it.trim() }.filter { it.isNotBlank() }.takeIf { it.isNotEmpty() }?.joinToString(HABIT_NAME_DELIMITER)
+
+/** True if this rule only enforces blocking during a specific time-of-day window (see
+ * [HabitRule.windowStartMinute]/[HabitRule.windowEndMinute]) rather than the "unlock for N minutes
+ * once done" model. */
+fun HabitRule.isTimeWindowed(): Boolean = windowStartMinute != null && windowEndMinute != null
 
 /**
  * A single habit row detected by [HabitTrackerScanner] scanning the tracker app's accessibility

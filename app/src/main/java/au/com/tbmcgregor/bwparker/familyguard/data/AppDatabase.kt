@@ -39,7 +39,7 @@ import au.com.tbmcgregor.bwparker.familyguard.tamper.TamperEventDao
         HabitRule::class,
         DetectedHabit::class,
     ],
-    version = 12,
+    version = 13,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -88,6 +88,7 @@ abstract class AppDatabase : RoomDatabase() {
                         MIGRATION_9_10,
                         MIGRATION_10_11,
                         MIGRATION_11_12,
+                        MIGRATION_12_13,
                     )
                     .build()
                     .also { instance = it }
@@ -302,6 +303,14 @@ abstract class AppDatabase : RoomDatabase() {
         private val MIGRATION_11_12 = object : Migration(11, 12) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("DROP TABLE IF EXISTS habit_gate_state")
+            }
+        }
+
+        // Time-of-day windowed habit rules: e.g. "block unless done, but only from 9pm to midnight".
+        private val MIGRATION_12_13 = object : Migration(12, 13) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE habit_rules ADD COLUMN windowStartMinute INTEGER")
+                db.execSQL("ALTER TABLE habit_rules ADD COLUMN windowEndMinute INTEGER")
             }
         }
     }

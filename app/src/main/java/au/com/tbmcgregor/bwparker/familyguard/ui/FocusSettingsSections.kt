@@ -313,15 +313,28 @@ private fun TimeBudgetInputDialog(
 
 /**
  * Steps of the "add a rule" wizard: pick the trigger app, then which habit(s) within it gate the
- * block (any/all, or one-or-more specific detected habits that must ALL be done), then the app
- * that stays blocked until that condition is met, then how long it unlocks for.
+ * block (any/all, or one-or-more specific detected habits that must ALL be done), then -- only
+ * when specific habit(s) were picked -- whether the block only applies during a time-of-day
+ * window, then the app that stays blocked until that condition is met, then confirm (asking how
+ * long it unlocks for, unless it's time-windowed).
  */
 private sealed class HabitRuleWizardStep {
     object PickTrigger : HabitRuleWizardStep()
     data class PickCondition(val trigger: InstalledAppInfo) : HabitRuleWizardStep()
-    data class PickTarget(val trigger: InstalledAppInfo, val habitNames: List<String>) : HabitRuleWizardStep()
-    data class Confirm(val trigger: InstalledAppInfo, val habitNames: List<String>, val target: InstalledAppInfo) :
-        HabitRuleWizardStep()
+    data class PickWindow(val trigger: InstalledAppInfo, val habitNames: List<String>) : HabitRuleWizardStep()
+    data class PickTarget(
+        val trigger: InstalledAppInfo,
+        val habitNames: List<String>,
+        val windowStartMinute: Int?,
+        val windowEndMinute: Int?,
+    ) : HabitRuleWizardStep()
+    data class Confirm(
+        val trigger: InstalledAppInfo,
+        val habitNames: List<String>,
+        val windowStartMinute: Int?,
+        val windowEndMinute: Int?,
+        val target: InstalledAppInfo,
+    ) : HabitRuleWizardStep()
 }
 
 @Composable
@@ -350,31 +363,83 @@ fun HabitRulesSection(context: Context) {
         is HabitRuleWizardStep.PickCondition -> HabitConditionPickerDialog(
             detectedHabits = detectedHabits,
             onDismiss = { wizardStep = null },
-            onSelect = { habitNames -> wizardStep = HabitRuleWizardStep.PickTarget(step.trigger, habitNames) },
+            onSelect = { habitNames ->
+                // Time windows only make sense (and are only checkable outside a live scan) when
+                // gating on specific habit(s), not the "any/all habits" whole-tracker pattern.
+                wizardStep = if (habitNames.isEmpty()) {
+                    HabitRuleWizardStep.PickTarget(step.trigger, habitNames, null, null)
+                } else {
+                    HabitRuleWizardStep.PickWindow(step.trigger, habitNames)
+                }
+            },
+        )
+        is HabitRuleWizardStep.PickWindow -> HabitWindowPickerDialog(
+            habitNames = step.habitNames,
+            onDismiss = { wizardStep = null },
+            onSelect = { start, end ->
+                wizardStep = HabitRuleWizardStep.PickTarget(step.trigger, step.habitNames, start, end)
+            },
         )
         is HabitRuleWizardStep.PickTarget -> AppPickerDialog(
             apps = installedApps,
             onDismiss = { wizardStep = null },
-            onSelect = { app -> wizardStep = HabitRuleWizardStep.Confirm(step.trigger, step.habitNames, app) },
-        )
-        is HabitRuleWizardStep.Confirm -> HabitRuleMinutesDialog(
-            triggerLabel = step.trigger.label,
-            habitNames = step.habitNames,
-            targetLabel = step.target.label,
-            onDismiss = { wizardStep = null },
-            onConfirm = { minutes ->
-                coroutineScope.launch {
-                    habitRuleManager.addRule(
-                        step.trigger.packageName,
-                        step.target.packageName,
-                        minutes,
-                        step.habitNames,
-                    )
-                    refreshTrigger++
-                }
-                wizardStep = null
+            onSelect = { app ->
+                wizardStep = HabitRuleWizardStep.Confirm(
+                    step.trigger,
+                    step.habitNames,
+                    step.windowStartMinute,
+                    step.windowEndMinute,
+                    app,
+                )
             },
         )
+        is HabitRuleWizardStep.Confirm -> {
+            val windowStart = step.windowStartMinute
+            val windowEnd = step.windowEndMinute
+            if (windowStart != null && windowEnd != null) {
+                HabitRuleWindowConfirmDialog(
+                    triggerLabel = step.trigger.label,
+                    habitNames = step.habitNames,
+                    windowStartMinute = windowStart,
+                    windowEndMinute = windowEnd,
+                    targetLabel = step.target.label,
+                    onDismiss = { wizardStep = null },
+                    onConfirm = {
+                        coroutineScope.launch {
+                            habitRuleManager.addRule(
+                                triggerPackageName = step.trigger.packageName,
+                                targetPackageName = step.target.packageName,
+                                unlockMinutes = 0,
+                                requiredHabitNames = step.habitNames,
+                                windowStartMinute = windowStart,
+                                windowEndMinute = windowEnd,
+                            )
+                            refreshTrigger++
+                        }
+                        wizardStep = null
+                    },
+                )
+            } else {
+                HabitRuleMinutesDialog(
+                    triggerLabel = step.trigger.label,
+                    habitNames = step.habitNames,
+                    targetLabel = step.target.label,
+                    onDismiss = { wizardStep = null },
+                    onConfirm = { minutes ->
+                        coroutineScope.launch {
+                            habitRuleManager.addRule(
+                                step.trigger.packageName,
+                                step.target.packageName,
+                                minutes,
+                                step.habitNames,
+                            )
+                            refreshTrigger++
+                        }
+                        wizardStep = null
+                    },
+                )
+            }
+        }
         null -> {}
     }
 
@@ -411,20 +476,34 @@ fun HabitRulesSection(context: Context) {
                     Column(modifier = Modifier.weight(1f)) {
                         val required = rule.requiredHabitNames()
                         val conditionLabel = if (required.isEmpty()) "all habits" else required.joinToString(" AND ")
+                        val windowStart = rule.windowStartMinute
+                        val windowEnd = rule.windowEndMinute
                         Text(
                             "${rule.targetPackageName} blocked until \"$conditionLabel\" done in " +
                                 rule.triggerPackageName,
                             style = MaterialTheme.typography.bodyMedium,
                         )
-                        Text(
-                            "-> then unlocked for ${rule.unlockMinutes} min",
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                        val unlocked = rule.unlockUntilMillis > now
-                        StatusText(
-                            if (unlocked) "Unlocked (until you use it up)" else "Blocked, waiting on today's habit(s)",
-                            isGood = unlocked,
-                        )
+                        if (windowStart != null && windowEnd != null) {
+                            Text(
+                                "-> only enforced ${formatMinuteOfDay(windowStart)}-${formatMinuteOfDay(windowEnd)}",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                            val unlocked = !isRuleCurrentlyWindowed(windowStart, windowEnd)
+                            StatusText(
+                                if (unlocked) "Outside its window right now" else "Inside its window -- blocked until done",
+                                isGood = unlocked,
+                            )
+                        } else {
+                            Text(
+                                "-> then unlocked for ${rule.unlockMinutes} min",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                            val unlocked = rule.unlockUntilMillis > now
+                            StatusText(
+                                if (unlocked) "Unlocked (until you use it up)" else "Blocked, waiting on today's habit(s)",
+                                isGood = unlocked,
+                            )
+                        }
                     }
                     Switch(
                         checked = rule.enabled,
@@ -562,6 +641,123 @@ private fun HabitConditionPickerDialog(
             TextButton(onClick = onDismiss) { Text("Cancel") }
         },
     )
+}
+
+@Composable
+private fun HabitWindowPickerDialog(
+    habitNames: List<String>,
+    onDismiss: () -> Unit,
+    onSelect: (windowStartMinute: Int?, windowEndMinute: Int?) -> Unit,
+) {
+    var showCustom by remember { mutableStateOf(false) }
+    var startText by remember { mutableStateOf("00:00") }
+    var endText by remember { mutableStateOf("21:00") }
+    val conditionLabel = habitNames.joinToString(" AND ")
+    val start = parseTimeToMinuteOfDay(startText)
+    val end = parseTimeToMinuteOfDay(endText)
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("When should blocking on \"$conditionLabel\" apply?") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { onSelect(null, null) }, modifier = Modifier.fillMaxWidth()) {
+                    Text("Always (no time restriction)")
+                }
+                OutlinedButton(onClick = { showCustom = true }, modifier = Modifier.fillMaxWidth()) {
+                    Text("Only during a specific time window")
+                }
+                if (showCustom) {
+                    Text(
+                        "Blocks (while \"$conditionLabel\" isn't done yet today) from the start " +
+                            "time until the end time. Use 00:00 as the end time to mean " +
+                            "\"through to midnight\" -- e.g. start 21:00, end 00:00 covers 9pm-midnight.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    OutlinedTextField(
+                        value = startText,
+                        onValueChange = { startText = it },
+                        label = { Text("Start time (24h, e.g. 21:00)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    OutlinedTextField(
+                        value = endText,
+                        onValueChange = { endText = it },
+                        label = { Text("End time (24h, e.g. 00:00 for midnight)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    if (start == null || end == null) {
+                        Text("Enter times as HH:mm, e.g. 21:00", style = MaterialTheme.typography.bodySmall)
+                    }
+                    Button(
+                        onClick = { if (start != null && end != null) onSelect(start, end) },
+                        enabled = start != null && end != null,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("Continue")
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
+}
+
+@Composable
+private fun HabitRuleWindowConfirmDialog(
+    triggerLabel: String,
+    habitNames: List<String>,
+    windowStartMinute: Int,
+    windowEndMinute: Int,
+    targetLabel: String,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    val conditionLabel = habitNames.joinToString(" AND ")
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Confirm rule") },
+        text = {
+            Text(
+                "$targetLabel will be blocked from ${formatMinuteOfDay(windowStartMinute)} to " +
+                    "${formatMinuteOfDay(windowEndMinute)} unless \"$conditionLabel\" is done in " +
+                    "$triggerLabel that day. No time restriction outside that window.",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        },
+        confirmButton = {
+            Button(onClick = onConfirm) { Text("Save rule") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
+}
+
+private fun parseTimeToMinuteOfDay(text: String): Int? {
+    val match = Regex("""^\s*(\d{1,2}):(\d{2})\s*$""").find(text) ?: return null
+    val hour = match.groupValues[1].toIntOrNull() ?: return null
+    val minute = match.groupValues[2].toIntOrNull() ?: return null
+    if (hour !in 0..23 || minute !in 0..59) return null
+    return hour * 60 + minute
+}
+
+private fun formatMinuteOfDay(minuteOfDay: Int): String {
+    val clamped = minuteOfDay.coerceIn(0, 1439)
+    return "%02d:%02d".format(clamped / 60, clamped % 60)
+}
+
+/** UI-only display hint: whether the current time falls inside [start, end) (wrapping at
+ * midnight if end <= start), independent of whether the required habit(s) are done. */
+private fun isRuleCurrentlyWindowed(start: Int, end: Int): Boolean {
+    val now = java.time.LocalTime.now()
+    val minuteOfDay = now.hour * 60 + now.minute
+    return if (start <= end) minuteOfDay in start until end else minuteOfDay >= start || minuteOfDay < end
 }
 
 @Composable
