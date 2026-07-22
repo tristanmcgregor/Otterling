@@ -60,10 +60,11 @@ fun loadInstalledApps(context: Context): List<InstalledAppInfo> {
 @Composable
 fun AppPickerDialog(
     apps: List<InstalledAppInfo>,
+    initialQuery: String = "",
     onDismiss: () -> Unit,
     onSelect: (InstalledAppInfo) -> Unit,
 ) {
-    var query by remember { mutableStateOf("") }
+    var query by remember { mutableStateOf(initialQuery) }
     val filtered = remember(apps, query) {
         if (query.isBlank()) {
             apps

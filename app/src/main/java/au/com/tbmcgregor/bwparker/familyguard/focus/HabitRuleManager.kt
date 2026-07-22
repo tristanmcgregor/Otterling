@@ -75,9 +75,57 @@ class HabitRuleManager(context: Context) {
         reapplyAll()
     }
 
+    /**
+     * Replaces every field of an existing rule in place (used by the "Edit rule" flow) and
+     * resets its grant state, since the old unlock/last-granted state was derived from a
+     * condition that may no longer exist. If [targetPackageName] changes and no other rule still
+     * governs the old target, that app is explicitly unsuspended rather than left stuck blocked
+     * with nothing left to ever unlock it.
+     */
+    suspend fun updateRule(
+        id: Long,
+        triggerPackageName: String,
+        targetPackageName: String,
+        unlockMinutes: Int,
+        requiredHabitNames: List<String> = emptyList(),
+        windowStartMinute: Int? = null,
+        windowEndMinute: Int? = null,
+    ) {
+        val windowed = windowStartMinute != null && windowEndMinute != null
+        require(!windowed || requiredHabitNames.isNotEmpty()) {
+            "Time-windowed rules require at least one specific habit name"
+        }
+        val existing = dao.getAll().find { it.id == id } ?: return
+        dao.update(
+            existing.copy(
+                triggerPackageName = triggerPackageName,
+                targetPackageName = targetPackageName,
+                unlockMinutes = unlockMinutes,
+                habitName = encodeRequiredHabitNames(requiredHabitNames),
+                windowStartMinute = windowStartMinute,
+                windowEndMinute = windowEndMinute,
+                lastGrantedEpochDay = -1,
+                unlockUntilMillis = 0,
+            ),
+        )
+        reapplyAll()
+        unsuspendOrphanedTarget(oldTarget = existing.targetPackageName, newTarget = targetPackageName)
+    }
+
     suspend fun deleteRule(id: Long) {
+        val oldTarget = dao.getAll().find { it.id == id }?.targetPackageName
         dao.delete(id)
         reapplyAll()
+        unsuspendOrphanedTarget(oldTarget = oldTarget, newTarget = null)
+    }
+
+    /** If [oldTarget] no longer has any rule pointing at it, it should no longer be blocked --
+     * reapplyAll() only visits targets that still have at least one rule, so a target that just
+     * lost its last (or only, now-retargeted) rule would otherwise stay suspended forever. */
+    private suspend fun unsuspendOrphanedTarget(oldTarget: String?, newTarget: String?) {
+        if (oldTarget == null || oldTarget == newTarget) return
+        val stillGoverned = dao.getAll().any { it.targetPackageName == oldTarget }
+        if (!stillGoverned) setSuspended(oldTarget, suspended = false)
     }
 
     /**
