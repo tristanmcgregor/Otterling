@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AdminPanelSettings
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.FilterAlt
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.VerifiedUser
@@ -58,7 +59,7 @@ import au.com.tbmcgregor.bwparker.familyguard.tamper.TamperEvent
 import au.com.tbmcgregor.bwparker.familyguard.tamper.TamperEventLogger
 import au.com.tbmcgregor.bwparker.familyguard.ui.AccessibilityServiceSection
 import au.com.tbmcgregor.bwparker.familyguard.ui.AppPickerDialog
-import au.com.tbmcgregor.bwparker.familyguard.ui.HabitRulesSection
+import au.com.tbmcgregor.bwparker.familyguard.ui.HabitShareSettingsScreen
 import au.com.tbmcgregor.bwparker.familyguard.ui.InstalledAppInfo
 import au.com.tbmcgregor.bwparker.familyguard.ui.MindfulAppsSection
 import au.com.tbmcgregor.bwparker.familyguard.ui.PinLockScreen
@@ -76,7 +77,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
-    private enum class Screen { Home, PinEntry, Settings }
+    private enum class Screen { Home, PinEntry, Settings, HabitShareSettings }
 
     private val notificationPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
@@ -118,9 +119,13 @@ class MainActivity : ComponentActivity() {
                             AccessibilityServiceSection(applicationContext)
                             MindfulAppsSection(applicationContext)
                             TimeBudgetsSection(applicationContext)
-                            HabitRulesSection(applicationContext)
+                            HabitShareNavSection(onOpen = { screen = Screen.HabitShareSettings })
                             KnoxSetupSection()
                         }
+                        Screen.HabitShareSettings -> HabitShareSettingsScreen(
+                            context = applicationContext,
+                            onBack = { screen = Screen.Settings },
+                        )
                     }
                 }
             }
@@ -546,6 +551,20 @@ class MainActivity : ComponentActivity() {
         PrivateDnsFilterManager.Result.Success -> "Applied"
         PrivateDnsFilterManager.Result.UnsupportedApiLevel -> "Requires Android 10+"
         is PrivateDnsFilterManager.Result.Failed -> "Failed: ${result.message}"
+    }
+
+    @Composable
+    private fun HabitShareNavSection(onOpen: () -> Unit) {
+        SectionCard(
+            title = "HabitShare",
+            icon = Icons.Default.CheckCircle,
+            subtitle = "Connect your account, choose which habits need image proof, and build " +
+                "habit-based app-unlock rules.",
+        ) {
+            Button(onClick = onOpen, modifier = Modifier.fillMaxWidth()) {
+                Text("Open HabitShare settings")
+            }
+        }
     }
 
     @Composable

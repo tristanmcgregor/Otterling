@@ -16,6 +16,7 @@ import au.com.tbmcgregor.bwparker.familyguard.content.AppSuspensionManager
 import au.com.tbmcgregor.bwparker.familyguard.focus.AppTimeBudgetManager
 import au.com.tbmcgregor.bwparker.familyguard.focus.BudgetEnforcer
 import au.com.tbmcgregor.bwparker.familyguard.focus.HabitRuleManager
+import au.com.tbmcgregor.bwparker.familyguard.focus.HabitShareSyncManager
 import au.com.tbmcgregor.bwparker.familyguard.focus.RewardLedgerManager
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.AccessibilityGuard
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.AppUninstallGuard
@@ -39,6 +40,7 @@ import kotlinx.coroutines.launch
 class ProtectionEnforcementService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var loopJob: Job? = null
+    private var habitShareSyncJob: Job? = null
     private var accessibilityObserver: ContentObserver? = null
 
     override fun onCreate() {
@@ -76,6 +78,16 @@ class ProtectionEnforcementService : Service() {
                     runCatching { budgetManager.pruneOldCounters() }
                         .onFailure { Log.w(TAG, "Usage counter prune failed", it) }
                     delay(POLL_INTERVAL_MS)
+                }
+            }
+        }
+        if (habitShareSyncJob == null) {
+            val habitShareSyncManager = HabitShareSyncManager(applicationContext)
+            habitShareSyncJob = scope.launch {
+                while (isActive) {
+                    runCatching { habitShareSyncManager.syncIfConnected() }
+                        .onFailure { Log.w(TAG, "HabitShare sync failed", it) }
+                    delay(HABITSHARE_SYNC_INTERVAL_MS)
                 }
             }
         }
@@ -119,6 +131,8 @@ class ProtectionEnforcementService : Service() {
         accessibilityObserver = null
         loopJob?.cancel()
         loopJob = null
+        habitShareSyncJob?.cancel()
+        habitShareSyncJob = null
         super.onDestroy()
     }
 
@@ -142,6 +156,7 @@ class ProtectionEnforcementService : Service() {
         private const val CHANNEL_ID = "protection_enforcement"
         private const val NOTIFICATION_ID = 1001
         private const val POLL_INTERVAL_MS = 5 * 60 * 1000L
+        private const val HABITSHARE_SYNC_INTERVAL_MS = 30 * 1000L
 
         fun start(context: Context) {
             context.startForegroundService(Intent(context, ProtectionEnforcementService::class.java))

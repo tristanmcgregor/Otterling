@@ -11,6 +11,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -18,9 +19,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Accessibility
+import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Timelapse
 import androidx.compose.material3.AlertDialog
@@ -37,6 +41,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -61,6 +66,7 @@ import au.com.tbmcgregor.bwparker.familyguard.focus.HabitProofManager
 import au.com.tbmcgregor.bwparker.familyguard.focus.HabitProofRequirement
 import au.com.tbmcgregor.bwparker.familyguard.focus.HabitRule
 import au.com.tbmcgregor.bwparker.familyguard.focus.HabitRuleManager
+import au.com.tbmcgregor.bwparker.familyguard.focus.HabitShareApiClient
 import au.com.tbmcgregor.bwparker.familyguard.focus.HabitTrackerScanner
 import au.com.tbmcgregor.bwparker.familyguard.focus.MindfulApp
 import au.com.tbmcgregor.bwparker.familyguard.focus.MindfulAppManager
@@ -386,6 +392,187 @@ private sealed class HabitRuleWizardStep {
     ) : HabitRuleWizardStep()
 }
 
+/**
+ * Full-screen HabitShare settings hub reached from the main Settings list. Groups everything
+ * habit-related that used to be scattered inline: the account connection, per-habit image
+ * verification, and the rule command-builder.
+ */
+@Composable
+fun HabitShareSettingsScreen(context: Context, onBack: () -> Unit) {
+    Column(modifier = Modifier.fillMaxSize()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconButton(onClick = onBack) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+            }
+            Text("HabitShare", style = MaterialTheme.typography.headlineSmall)
+        }
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 20.dp, vertical = 4.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            HabitShareAccountSection(context)
+            HabitShareVerificationSection(context)
+            HabitRulesSection(context)
+        }
+    }
+}
+
+/**
+ * Connect / disconnect the user's own HabitShare login. When connected, [HabitShareSyncManager]
+ * reads exact done/not-done status directly from HabitShare's server every 30s instead of relying
+ * on the on-screen scan.
+ */
+@Composable
+fun HabitShareAccountSection(context: Context) {
+    val coroutineScope = rememberCoroutineScope()
+    val apiClient = remember { HabitShareApiClient(context) }
+    var connected by remember { mutableStateOf(apiClient.isConnected()) }
+    var username by remember { mutableStateOf(apiClient.connectedUsername().orEmpty()) }
+    var showLoginForm by remember { mutableStateOf(false) }
+    var usernameInput by remember { mutableStateOf("") }
+    var passwordInput by remember { mutableStateOf("") }
+    var loginError by remember { mutableStateOf<String?>(null) }
+    var isLoggingIn by remember { mutableStateOf(false) }
+
+    SectionCard(
+        title = "HabitShare Account",
+        icon = Icons.Default.CloudSync,
+        subtitle = "Connect your HabitShare login so completions are read straight from " +
+            "HabitShare's own server -- far more reliable than reading them off the screen.",
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                if (connected) "Connected" else "Not connected",
+                style = MaterialTheme.typography.bodyLarge,
+            )
+            StatusText(if (connected) "Live sync" else "Screen scan", isGood = connected)
+        }
+        if (connected) {
+            Text("Signed in as $username", style = MaterialTheme.typography.bodySmall)
+            OutlinedButton(onClick = {
+                apiClient.disconnect()
+                connected = false
+                username = ""
+            }) { Text("Disconnect") }
+        } else {
+            if (!showLoginForm) {
+                Button(onClick = { showLoginForm = true }) { Text("Connect account") }
+            } else {
+                OutlinedTextField(
+                    value = usernameInput,
+                    onValueChange = { usernameInput = it },
+                    label = { Text("HabitShare username") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = passwordInput,
+                    onValueChange = { passwordInput = it },
+                    label = { Text("HabitShare password") },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                loginError?.let {
+                    Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        enabled = !isLoggingIn && usernameInput.isNotBlank() && passwordInput.isNotBlank(),
+                        onClick = {
+                            coroutineScope.launch {
+                                isLoggingIn = true
+                                loginError = null
+                                when (apiClient.login(usernameInput, passwordInput)) {
+                                    is HabitShareApiClient.LoginResult.Success -> {
+                                        connected = true
+                                        username = usernameInput
+                                        showLoginForm = false
+                                        passwordInput = ""
+                                    }
+                                    is HabitShareApiClient.LoginResult.InvalidCredentials ->
+                                        loginError = "Incorrect username or password."
+                                    is HabitShareApiClient.LoginResult.NetworkError ->
+                                        loginError = "Couldn't reach HabitShare -- check your connection and try again."
+                                }
+                                isLoggingIn = false
+                            }
+                        },
+                    ) { Text(if (isLoggingIn) "Connecting..." else "Log in") }
+                    OutlinedButton(onClick = { showLoginForm = false; loginError = null }) { Text("Cancel") }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * "General settings" the user asked for: one checkbox per detected habit deciding whether ticking
+ * it in HabitShare also demands a same-day photo that visually matches a reference photo before it
+ * counts. Enforcement of "ticked yes + image verified" lives in [HabitProofManager.filterSatisfied]
+ * / [HabitProofManager.namesNeedingProof]; this screen just configures it.
+ */
+@Composable
+fun HabitShareVerificationSection(context: Context) {
+    val coroutineScope = rememberCoroutineScope()
+    val detectedHabitManager = remember { DetectedHabitManager(context) }
+    val habitProofManager = remember { HabitProofManager(context) }
+    var refreshTrigger by remember { mutableIntStateOf(0) }
+    var detectedHabits by remember { mutableStateOf<List<DetectedHabit>>(emptyList()) }
+    var proofRequirements by remember { mutableStateOf<List<HabitProofRequirement>>(emptyList()) }
+
+    LaunchedEffect(refreshTrigger) {
+        detectedHabits = detectedHabitManager.latest()
+        proofRequirements = habitProofManager.requirements()
+    }
+
+    SectionCard(
+        title = "Image Verification",
+        icon = Icons.Default.PhotoCamera,
+        subtitle = "Tick a habit to require photo proof. When required, ticking it in HabitShare " +
+            "isn't enough on its own -- it only counts toward unblocking an app once you've also " +
+            "taken a same-day photo that visually matches the reference photo you set here.",
+    ) {
+        if (detectedHabits.isEmpty()) {
+            Text(
+                "No habits detected yet. Open HabitShare (or connect your account above) so your " +
+                    "habits show up here, then refresh.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+        } else {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                detectedHabits.forEachIndexed { index, habit ->
+                    if (index > 0) HorizontalDivider()
+                    Text(habit.name, style = MaterialTheme.typography.bodyMedium)
+                    ProofRequirementRow(
+                        habitName = habit.name,
+                        requirement = proofRequirements.find { it.habitName.equals(habit.name, ignoreCase = true) },
+                        onSetRequirement = { required, referencePhotoPath ->
+                            coroutineScope.launch {
+                                habitProofManager.setRequirement(habit.name, required, referencePhotoPath)
+                                proofRequirements = habitProofManager.requirements()
+                            }
+                        },
+                    )
+                }
+            }
+        }
+        OutlinedButton(onClick = { refreshTrigger++ }) { Text("Refresh") }
+    }
+}
+
 @Composable
 fun HabitRulesSection(context: Context) {
     val coroutineScope = rememberCoroutineScope()
@@ -625,32 +812,26 @@ fun HabitRulesSection(context: Context) {
         }
         if (showDetected) {
             Text(
-                "Every habit row the scanner has found so far, and whether it looked checked off " +
-                    "the last time its screen was open. Open the tracker app, then come back here " +
-                    "and refresh if a habit you expect isn't listed. \"Requires image proof\" means " +
-                    "ticking that habit in HabitShare alone won't satisfy any rule -- you'll also " +
-                    "have to take a same-day photo here that visually matches the reference photo.",
+                "Every habit row detected so far, and whether it's currently ticked for today. " +
+                    "Open HabitShare (or connect your account in HabitShare settings) and refresh " +
+                    "if a habit you expect isn't listed. Set which of these need image proof under " +
+                    "\"Image verification\" in HabitShare settings.",
                 style = MaterialTheme.typography.bodySmall,
             )
             if (detectedHabits.isEmpty()) {
                 Text("Nothing detected yet -- open the habit tracker app first.", style = MaterialTheme.typography.bodySmall)
             } else {
                 detectedHabits.forEach { habit ->
-                    Column(modifier = Modifier.fillMaxWidth()) {
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text(habit.name, style = MaterialTheme.typography.bodySmall)
-                            StatusText(if (habit.doneToday) "Done" else "Not done", isGood = habit.doneToday)
-                        }
-                        ProofRequirementRow(
-                            habitName = habit.name,
-                            requirement = proofRequirements.find { it.habitName.equals(habit.name, ignoreCase = true) },
-                            onSetRequirement = { required, referencePhotoPath ->
-                                coroutineScope.launch {
-                                    habitProofManager.setRequirement(habit.name, required, referencePhotoPath)
-                                    proofRequirements = habitProofManager.requirements()
-                                }
-                            },
+                    val needsProof = proofRequirements.any {
+                        it.habitName.equals(habit.name, ignoreCase = true) &&
+                            it.required && !it.referencePhotoPath.isNullOrBlank()
+                    }
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text(
+                            habit.name + if (needsProof) "  (image proof)" else "",
+                            style = MaterialTheme.typography.bodySmall,
                         )
+                        StatusText(if (habit.doneToday) "Done" else "Not done", isGood = habit.doneToday)
                     }
                 }
             }
@@ -674,7 +855,18 @@ fun HabitRulesSection(context: Context) {
                 Text("No proof submitted yet.", style = MaterialTheme.typography.bodySmall)
             } else {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    proofLogs.forEach { log -> HabitProofLogRow(log) }
+                    proofLogs.forEach { log ->
+                        HabitProofLogRow(
+                            log = log,
+                            onRemove = {
+                                coroutineScope.launch {
+                                    habitProofManager.deleteLog(log.habitName, log.dateEpochDay)
+                                    habitRuleManager.reapplyAll()
+                                    proofLogs = habitProofManager.recentLogs()
+                                }
+                            },
+                        )
+                    }
                 }
             }
         }
@@ -706,8 +898,12 @@ private fun ProofRequirementRow(
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
-    val required = requirement?.required == true
     val referencePath = requirement?.referencePhotoPath
+    // A row flagged required but missing its reference photo (e.g. a relic of an older build that
+    // allowed enabling proof without one) can never actually be satisfied -- show it unchecked so
+    // the checkbox accurately reflects "not really configured yet" and re-checking it walks
+    // through taking a reference photo again.
+    val required = requirement?.required == true && !referencePath.isNullOrBlank()
     val targetFile = remember(habitName) { referencePhotoFile(context, habitName) }
     val targetUri = remember(targetFile) {
         FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", targetFile)
@@ -756,16 +952,21 @@ private fun ProofRequirementRow(
 }
 
 @Composable
-private fun HabitProofLogRow(log: HabitProofLog) {
+private fun HabitProofLogRow(log: HabitProofLog, onRemove: () -> Unit) {
     val bitmap = remember(log.photoPath) {
         runCatching {
             BitmapFactory.Options().apply { inSampleSize = 4 }
                 .let { opts -> BitmapFactory.decodeFile(log.photoPath, opts) }
         }.getOrNull()
     }
+    var confirmingRemove by remember(log) { mutableStateOf(false) }
+
     OutlinedCard(modifier = Modifier.fillMaxWidth().padding(4.dp)) {
         Column(modifier = Modifier.padding(12.dp)) {
-            Text(log.habitName, style = MaterialTheme.typography.bodyMedium)
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text(log.habitName, style = MaterialTheme.typography.bodyMedium)
+                TextButton(onClick = { confirmingRemove = true }) { Text("Remove") }
+            }
             Text(
                 java.time.LocalDate.ofEpochDay(log.dateEpochDay).toString(),
                 style = MaterialTheme.typography.bodySmall,
@@ -782,6 +983,25 @@ private fun HabitProofLogRow(log: HabitProofLog) {
                 )
             }
         }
+    }
+
+    if (confirmingRemove) {
+        AlertDialog(
+            onDismissRequest = { confirmingRemove = false },
+            title = { Text("Remove this proof?") },
+            text = {
+                Text(
+                    "\"${log.habitName}\" on ${java.time.LocalDate.ofEpochDay(log.dateEpochDay)} will no " +
+                        "longer count as done today -- any rule gated on it may re-block immediately.",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { confirmingRemove = false; onRemove() }) { Text("Remove") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmingRemove = false }) { Text("Cancel") }
+            },
+        )
     }
 }
 
