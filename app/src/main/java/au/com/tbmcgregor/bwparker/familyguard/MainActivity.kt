@@ -42,6 +42,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import au.com.tbmcgregor.bwparker.familyguard.admin.DeviceOwnerManager
 import au.com.tbmcgregor.bwparker.familyguard.content.AppSuspensionManager
+import au.com.tbmcgregor.bwparker.familyguard.content.BlocklistRefreshWorker
 import au.com.tbmcgregor.bwparker.familyguard.content.PrivateDnsFilterManager
 import au.com.tbmcgregor.bwparker.familyguard.data.BlockedApp
 import au.com.tbmcgregor.bwparker.familyguard.data.ProtectedApp
@@ -66,6 +67,7 @@ import au.com.tbmcgregor.bwparker.familyguard.ui.RewardAppsSection
 import au.com.tbmcgregor.bwparker.familyguard.ui.SectionCard
 import au.com.tbmcgregor.bwparker.familyguard.ui.SettingsScreen
 import au.com.tbmcgregor.bwparker.familyguard.ui.TimeBudgetsSection
+import au.com.tbmcgregor.bwparker.familyguard.ui.VpnFilterSection
 import au.com.tbmcgregor.bwparker.familyguard.ui.loadInstalledApps
 import au.com.tbmcgregor.bwparker.familyguard.ui.StatusText
 import au.com.tbmcgregor.bwparker.familyguard.ui.SwitchRow
@@ -89,6 +91,7 @@ class MainActivity : ComponentActivity() {
         requestBatteryOptimizationExemptionIfNeeded()
         ProtectionEnforcementService.start(applicationContext)
         RestrictionEnforcementWorker.enqueuePeriodic(applicationContext)
+        BlocklistRefreshWorker.enqueuePeriodic(applicationContext)
         setContent {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
@@ -113,6 +116,7 @@ class MainActivity : ComponentActivity() {
                             RestrictionsSection()
                             UninstallProtectionSection()
                             ContentFilterSection()
+                            VpnFilterSection(applicationContext)
                             AccessibilityServiceSection(applicationContext)
                             FocusRewardsSection(applicationContext)
                             RewardAppsSection(applicationContext)

@@ -84,6 +84,19 @@
             android:excludeFromRecents="true"
             android:taskAffinity=""
             android:theme="@style/Theme.FamilyDeviceGuard" />
+
+        <service
+            android:name=".content.VpnFilterService"
+            android:exported="true"
+            android:permission="android.permission.BIND_VPN_SERVICE"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Local on-device DNS content filtering VPN for family device management" />
+            <intent-filter>
+                <action android:name="android.net.VpnService" />
+            </intent-filter>
+        </service>
     </application>
 
 </manifest>
