@@ -56,14 +56,18 @@ data class RewardLedger(
 )
 
 /**
- * A user-defined command: "when (a completion pattern is seen in [triggerPackageName]) -> unlock
- * [targetPackageName] for [unlockMinutes] minutes". [targetPackageName] is suspended by default
- * (like a [RewardApp]) and only opens while one of its rules has an active unlock window.
- * [lastGrantedEpochDay] makes firing idempotent per calendar day; [unlockUntilMillis] is this
- * rule's own currently-active unlock expiry (a target with multiple rules unlocks if any of them
- * is currently active). [habitName] is null for "any/all habits complete" (the original
- * whole-tracker pattern match), or a specific habit name from [DetectedHabit] to gate on just
- * that one habit instead.
+ * A user-defined command: "[targetPackageName] is blocked until (a completion pattern is seen in
+ * [triggerPackageName]), then it unlocks for [unlockMinutes] minutes". [targetPackageName] is
+ * suspended by default (like a [RewardApp]) and only opens while one of its rules has an active
+ * unlock window. [lastGrantedEpochDay] makes firing idempotent per calendar day; [unlockUntilMillis]
+ * is this rule's own currently-active unlock expiry (a target with multiple rules unlocks if any of
+ * them is currently active).
+ *
+ * [habitName] holds the raw, possibly multi-habit condition: null/blank means "any/all habits
+ * complete" (the original whole-tracker pattern match); otherwise it's one or more habit names
+ * from [DetectedHabit], joined with [HABIT_NAME_DELIMITER], ALL of which must be done today for
+ * the rule to fire. Use [requiredHabitNames]/[encodeRequiredHabitNames] rather than touching
+ * [habitName] directly.
  */
 @Entity(tableName = "habit_rules")
 data class HabitRule(
@@ -76,6 +80,19 @@ data class HabitRule(
     val unlockUntilMillis: Long = 0,
     val habitName: String? = null,
 )
+
+/** Non-printable separator, so it can't collide with a real habit name typed by the user. */
+private const val HABIT_NAME_DELIMITER = "\u001F"
+
+/** Decodes [HabitRule.habitName] into the list of habit names that must ALL be done today for this
+ * rule to fire. Empty means "any/all habits complete". */
+fun HabitRule.requiredHabitNames(): List<String> =
+    habitName?.split(HABIT_NAME_DELIMITER)?.map { it.trim() }?.filter { it.isNotBlank() } ?: emptyList()
+
+/** Encodes a list of required habit names for storage in [HabitRule.habitName]. An empty/blank-only
+ * list encodes to null, meaning "any/all habits complete". */
+fun encodeRequiredHabitNames(names: List<String>): String? =
+    names.map { it.trim() }.filter { it.isNotBlank() }.takeIf { it.isNotEmpty() }?.joinToString(HABIT_NAME_DELIMITER)
 
 /**
  * A single habit row detected by [HabitTrackerScanner] scanning the tracker app's accessibility

@@ -4,6 +4,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.provider.Settings
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -12,7 +13,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Accessibility
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Timelapse
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -40,6 +43,7 @@ import au.com.tbmcgregor.bwparker.familyguard.focus.HabitRule
 import au.com.tbmcgregor.bwparker.familyguard.focus.HabitRuleManager
 import au.com.tbmcgregor.bwparker.familyguard.focus.MindfulApp
 import au.com.tbmcgregor.bwparker.familyguard.focus.MindfulAppManager
+import au.com.tbmcgregor.bwparker.familyguard.focus.requiredHabitNames
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -308,14 +312,15 @@ private fun TimeBudgetInputDialog(
 }
 
 /**
- * Steps of the "add a rule" wizard: pick the trigger app, then which habit within it (any/all, or
- * one specific detected habit), then the app it unlocks, then minutes.
+ * Steps of the "add a rule" wizard: pick the trigger app, then which habit(s) within it gate the
+ * block (any/all, or one-or-more specific detected habits that must ALL be done), then the app
+ * that stays blocked until that condition is met, then how long it unlocks for.
  */
 private sealed class HabitRuleWizardStep {
     object PickTrigger : HabitRuleWizardStep()
     data class PickCondition(val trigger: InstalledAppInfo) : HabitRuleWizardStep()
-    data class PickTarget(val trigger: InstalledAppInfo, val habitName: String?) : HabitRuleWizardStep()
-    data class Confirm(val trigger: InstalledAppInfo, val habitName: String?, val target: InstalledAppInfo) :
+    data class PickTarget(val trigger: InstalledAppInfo, val habitNames: List<String>) : HabitRuleWizardStep()
+    data class Confirm(val trigger: InstalledAppInfo, val habitNames: List<String>, val target: InstalledAppInfo) :
         HabitRuleWizardStep()
 }
 
@@ -345,16 +350,16 @@ fun HabitRulesSection(context: Context) {
         is HabitRuleWizardStep.PickCondition -> HabitConditionPickerDialog(
             detectedHabits = detectedHabits,
             onDismiss = { wizardStep = null },
-            onSelect = { habitName -> wizardStep = HabitRuleWizardStep.PickTarget(step.trigger, habitName) },
+            onSelect = { habitNames -> wizardStep = HabitRuleWizardStep.PickTarget(step.trigger, habitNames) },
         )
         is HabitRuleWizardStep.PickTarget -> AppPickerDialog(
             apps = installedApps,
             onDismiss = { wizardStep = null },
-            onSelect = { app -> wizardStep = HabitRuleWizardStep.Confirm(step.trigger, step.habitName, app) },
+            onSelect = { app -> wizardStep = HabitRuleWizardStep.Confirm(step.trigger, step.habitNames, app) },
         )
         is HabitRuleWizardStep.Confirm -> HabitRuleMinutesDialog(
             triggerLabel = step.trigger.label,
-            habitName = step.habitName,
+            habitNames = step.habitNames,
             targetLabel = step.target.label,
             onDismiss = { wizardStep = null },
             onConfirm = { minutes ->
@@ -363,7 +368,7 @@ fun HabitRulesSection(context: Context) {
                         step.trigger.packageName,
                         step.target.packageName,
                         minutes,
-                        step.habitName,
+                        step.habitNames,
                     )
                     refreshTrigger++
                 }
@@ -376,10 +381,11 @@ fun HabitRulesSection(context: Context) {
     SectionCard(
         title = "Habit Rules (Command Builder)",
         icon = Icons.Default.PlayArrow,
-        subtitle = "Build as many \"when (a habit is done in app A) -> unlock (app B) for (X) " +
-            "minutes\" commands as you like -- gate on any/all habits, or one specific habit " +
-            "auto-detected from the tracker's screen. The target app stays suspended until its " +
-            "condition is met for the day; the unlock window then counts down automatically.",
+        subtitle = "Build as many \"(app B) is blocked until (habit(s) done in app A), then unlocks " +
+            "for (X) minutes\" commands as you like -- gate on any/all habits, or require one or " +
+            "more specific habits (ALL of them must be done) auto-detected from the tracker's " +
+            "screen. The target app stays blocked until its condition is met for the day; the " +
+            "unlock window then counts down automatically.",
     ) {
         Button(onClick = {
             coroutineScope.launch {
@@ -403,17 +409,20 @@ fun HabitRulesSection(context: Context) {
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
+                        val required = rule.requiredHabitNames()
+                        val conditionLabel = if (required.isEmpty()) "all habits" else required.joinToString(" AND ")
                         Text(
-                            "When \"${rule.habitName ?: "all habits"}\" done in ${rule.triggerPackageName}",
+                            "${rule.targetPackageName} blocked until \"$conditionLabel\" done in " +
+                                rule.triggerPackageName,
                             style = MaterialTheme.typography.bodyMedium,
                         )
                         Text(
-                            "-> unlock ${rule.targetPackageName} for ${rule.unlockMinutes} min",
+                            "-> then unlocked for ${rule.unlockMinutes} min",
                             style = MaterialTheme.typography.bodySmall,
                         )
                         val unlocked = rule.unlockUntilMillis > now
                         StatusText(
-                            if (unlocked) "Unlocked (until you use it up)" else "Locked, waiting on today's habit",
+                            if (unlocked) "Unlocked (until you use it up)" else "Blocked, waiting on today's habit(s)",
                             isGood = unlocked,
                         )
                     }
@@ -471,46 +480,80 @@ fun HabitRulesSection(context: Context) {
 private fun HabitConditionPickerDialog(
     detectedHabits: List<DetectedHabit>,
     onDismiss: () -> Unit,
-    onSelect: (habitName: String?) -> Unit,
+    onSelect: (habitNames: List<String>) -> Unit,
 ) {
+    var selected by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var customNames by remember { mutableStateOf<List<String>>(emptyList()) }
     var customName by remember { mutableStateOf("") }
 
-    androidx.compose.material3.AlertDialog(
+    fun toggle(name: String) {
+        selected = if (name in selected) selected - name else selected + name
+    }
+
+    AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Which habit should trigger this?") },
+        title = { Text("Which habit(s) must be done to unlock the target app?") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = { onSelect(null) }, modifier = Modifier.fillMaxWidth()) {
+                OutlinedButton(onClick = { onSelect(emptyList()) }, modifier = Modifier.fillMaxWidth()) {
                     Text("Any/all habits complete")
                 }
+                Text(
+                    "Or require one or more specific habits below -- ALL selected habits must be " +
+                        "done today for the app to unlock:",
+                    style = MaterialTheme.typography.bodySmall,
+                )
                 if (detectedHabits.isNotEmpty()) {
-                    Text(
-                        "Or a specific habit auto-detected from the tracker's screen:",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
                     detectedHabits.forEach { habit ->
-                        OutlinedButton(onClick = { onSelect(habit.name) }, modifier = Modifier.fillMaxWidth()) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { toggle(habit.name) },
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Checkbox(checked = habit.name in selected, onCheckedChange = { toggle(habit.name) })
                             Text(habit.name)
                         }
                     }
                 } else {
                     Text(
-                        "No habits detected yet -- open the tracker app first, or type a name to " +
-                            "match manually below:",
+                        "No habits detected yet -- open the tracker app first, or type name(s) below:",
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
-                OutlinedTextField(
-                    value = customName,
-                    onValueChange = { customName = it },
-                    label = { Text("Custom habit name (optional)") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                if (customName.isNotBlank()) {
-                    Button(onClick = { onSelect(customName) }, modifier = Modifier.fillMaxWidth()) {
-                        Text("Use \"$customName\"")
+                customNames.forEach { name ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("+ $name", style = MaterialTheme.typography.bodySmall)
+                        TextButton(onClick = { customNames = customNames - name }) { Text("Remove") }
                     }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                    OutlinedTextField(
+                        value = customName,
+                        onValueChange = { customName = it },
+                        label = { Text("Custom habit name") },
+                        singleLine = true,
+                        modifier = Modifier.weight(1f),
+                    )
+                    TextButton(onClick = {
+                        val trimmed = customName.trim()
+                        if (trimmed.isNotBlank() && trimmed !in customNames) customNames = customNames + trimmed
+                        customName = ""
+                    }) {
+                        Text("Add")
+                    }
+                }
+                val required = (selected + customNames).toList()
+                Button(
+                    onClick = { onSelect(required) },
+                    enabled = required.isNotEmpty(),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(if (required.size <= 1) "Continue" else "Continue (requires all ${required.size})")
                 }
             }
         },
@@ -524,21 +567,21 @@ private fun HabitConditionPickerDialog(
 @Composable
 private fun HabitRuleMinutesDialog(
     triggerLabel: String,
-    habitName: String?,
+    habitNames: List<String>,
     targetLabel: String,
     onDismiss: () -> Unit,
     onConfirm: (unlockMinutes: Int) -> Unit,
 ) {
     var minutesText by remember { mutableStateOf("30") }
-    val conditionLabel = habitName ?: "all habits"
+    val conditionLabel = if (habitNames.isEmpty()) "all habits" else habitNames.joinToString(" AND ")
 
-    androidx.compose.material3.AlertDialog(
+    AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("When \"$conditionLabel\" is done in $triggerLabel...") },
+        title = { Text("$targetLabel is blocked until \"$conditionLabel\" done in $triggerLabel...") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    "...unlock $targetLabel for how many minutes?",
+                    "...then unlock $targetLabel for how many minutes?",
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 OutlinedTextField(

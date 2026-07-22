@@ -9,11 +9,12 @@ import au.com.tbmcgregor.bwparker.familyguard.data.AppDatabase
 import java.time.LocalDate
 
 /**
- * A small command system: "when (a habit/completion pattern shows up in app A) -> unlock app B
- * for N minutes", with as many independent rules as you like. Detection itself is still the same
- * on-screen-text heuristic [FocusGuardAccessibilityService] already uses for the single legacy
- * [HabitGateManager] gate -- this class just lets that trigger fan out to many
- * trigger-app/target-app/duration combinations instead of one hardcoded one.
+ * A small command system: "app B is blocked until (habit(s) are done in app A), then it unlocks
+ * for N minutes", with as many independent rules as you like, and as many required habits per rule
+ * as you like (all of them must be done for that rule to fire -- see [HabitRule.requiredHabitNames]).
+ * Detection itself is still the same on-screen heuristic [FocusGuardAccessibilityService] already
+ * uses -- this class just lets that trigger fan out to many trigger-app/target-app/duration
+ * combinations instead of one hardcoded one.
  *
  * Every [targetPackageName] referenced by a rule is treated like a [RewardApp]: suspended by
  * default, and only unsuspended while at least one of its rules has an active unlock window.
@@ -29,19 +30,20 @@ class HabitRuleManager(context: Context) {
 
     suspend fun rules(): List<HabitRule> = dao.getAll()
 
-    /** [habitName] null means "any/all habits complete" (the original whole-tracker pattern). */
+    /** [requiredHabitNames] empty means "any/all habits complete" (the original whole-tracker
+     * pattern); otherwise the rule only fires once every listed habit is done today. */
     suspend fun addRule(
         triggerPackageName: String,
         targetPackageName: String,
         unlockMinutes: Int,
-        habitName: String? = null,
+        requiredHabitNames: List<String> = emptyList(),
     ) {
         dao.insert(
             HabitRule(
                 triggerPackageName = triggerPackageName,
                 targetPackageName = targetPackageName,
                 unlockMinutes = unlockMinutes,
-                habitName = habitName,
+                habitName = encodeRequiredHabitNames(requiredHabitNames),
             ),
         )
         reapplyAll()
@@ -80,9 +82,14 @@ class HabitRuleManager(context: Context) {
         val now = System.currentTimeMillis()
         var grantedCount = 0
         candidates.forEach { rule ->
-            val fires = when (val habitName = rule.habitName?.lowercase()) {
-                null -> allComplete
-                else -> doneHabitNames.any { it.contains(habitName) || habitName.contains(it) }
+            val required = rule.requiredHabitNames()
+            val fires = if (required.isEmpty()) {
+                allComplete
+            } else {
+                required.all { requiredName ->
+                    val needle = requiredName.lowercase()
+                    doneHabitNames.any { it.contains(needle) || needle.contains(it) }
+                }
             }
             if (!fires) return@forEach
             val newUntil = maxOf(rule.unlockUntilMillis, now) + rule.unlockMinutes * 60_000L
