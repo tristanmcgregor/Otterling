@@ -195,35 +195,60 @@ class HabitRuleManager(context: Context) {
         dao.getAll().groupBy { it.targetPackageName }.forEach { (packageName, allRulesForTarget) ->
             val activeRules = allRulesForTarget.filter { it.enabled }
             val unlocked = activeRules.isEmpty() ||
-                activeRules.any { isRuleUnlocked(it, now, nowMinuteOfDay, nowDayOfWeek, doneHabitNamesToday) }
+                isTargetUnlocked(activeRules, now, nowMinuteOfDay, nowDayOfWeek, doneHabitNamesToday)
             setSuspended(packageName, suspended = !unlocked)
         }
     }
 
-    private fun isRuleUnlocked(
-        rule: HabitRule,
+    /**
+     * A target is blocked if ANY of its currently-in-window windowed rules has an unmet condition
+     * -- that takes priority over everything else. The old logic OR'd every rule's own
+     * "unlocked?" verdict together, where an out-of-window (or simply non-windowed-and-not-yet-
+     * triggered) rule trivially counts as "unlocked" by default; with two or more windowed rules
+     * on the same target whose windows overlap or nest (e.g. a hard "no phone before 9am" window
+     * sitting inside a broader all-day "unless Bible AM done" window), that let the broader rule's
+     * satisfied condition silently override the narrower one's currently-active block. Splitting
+     * windowed rules out and requiring ALL of them (that are currently in-window) to be satisfied
+     * fixes that, while non-windowed "unlock for N minutes" rules keep their original semantics
+     * among themselves -- any ONE of several independent habit-unlock paths for the same target is
+     * still enough, as long as no currently-active window rule is vetoing it.
+     */
+    private fun isTargetUnlocked(
+        rules: List<HabitRule>,
         now: Long,
         nowMinuteOfDay: Int,
         nowDayOfWeek: DayOfWeek,
         doneHabitNamesToday: Set<String>,
     ): Boolean {
-        val start = rule.windowStartMinute
-        val end = rule.windowEndMinute
-        if (start != null && end != null) {
-            // A day this rule's window doesn't apply to behaves as if the window never started.
-            if (nowDayOfWeek !in rule.daysOfWeekSet()) return true
-            if (!isWithinWindow(nowMinuteOfDay, start, end)) return true
-            val required = rule.requiredHabitNames()
-            // Empty here means "no habit condition at all" for a windowed rule (see HabitRule) --
-            // unlike the non-windowed "any/all habits complete" pattern, there's no condition to
-            // ever satisfy, so it's simply blocked for the entire window, every day.
-            if (required.isEmpty()) return false
-            return required.all { requiredName ->
-                val needle = requiredName.lowercase()
-                doneHabitNamesToday.any { it.contains(needle) || needle.contains(it) }
-            }
+        val (windowed, nonWindowed) = rules.partition { it.isTimeWindowed() }
+        val windowedBlock = windowed.any { rule ->
+            isCurrentlyInWindow(rule, nowMinuteOfDay, nowDayOfWeek) &&
+                !isWindowedRuleSatisfied(rule, doneHabitNamesToday)
         }
-        return rule.unlockUntilMillis > now
+        if (windowedBlock) return false
+        if (nonWindowed.isEmpty()) return true
+        return nonWindowed.any { it.unlockUntilMillis > now }
+    }
+
+    /** A day/time this windowed rule's window doesn't cover (including a day not in
+     * [HabitRule.daysOfWeekSet]) behaves as if the window simply hasn't started. */
+    private fun isCurrentlyInWindow(rule: HabitRule, nowMinuteOfDay: Int, nowDayOfWeek: DayOfWeek): Boolean {
+        val start = rule.windowStartMinute ?: return false
+        val end = rule.windowEndMinute ?: return false
+        if (nowDayOfWeek !in rule.daysOfWeekSet()) return false
+        return isWithinWindow(nowMinuteOfDay, start, end)
+    }
+
+    private fun isWindowedRuleSatisfied(rule: HabitRule, doneHabitNamesToday: Set<String>): Boolean {
+        val required = rule.requiredHabitNames()
+        // Empty here means "no habit condition at all" for a windowed rule (see HabitRule) --
+        // unlike the non-windowed "any/all habits complete" pattern, there's no condition to ever
+        // satisfy, so it's simply blocked for the entire window, every day.
+        if (required.isEmpty()) return false
+        return required.all { requiredName ->
+            val needle = requiredName.lowercase()
+            doneHabitNamesToday.any { it.contains(needle) || needle.contains(it) }
+        }
     }
 
     /** [end] of 0 means "through to midnight" (i.e. wraps around); handles overnight windows like

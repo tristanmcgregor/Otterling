@@ -126,4 +126,7 @@ interface HabitProofDao {
 
     @Query("SELECT * FROM habit_proof_logs ORDER BY dateEpochDay DESC, submittedAtMillis DESC LIMIT :limit")
     suspend fun recentLogs(limit: Int): List<HabitProofLog>
+
+    @Query("DELETE FROM habit_proof_logs WHERE habitName = :habitName AND dateEpochDay = :dateEpochDay")
+    suspend fun deleteLog(habitName: String, dateEpochDay: Long)
 }

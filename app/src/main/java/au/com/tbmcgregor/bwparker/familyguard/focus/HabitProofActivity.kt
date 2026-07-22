@@ -1,5 +1,6 @@
 package au.com.tbmcgregor.bwparker.familyguard.focus
 
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
@@ -54,11 +55,17 @@ private sealed interface ProofMatchState {
  * via [ImageMatcher] -- only a visual match is recorded and allowed to satisfy any [HabitRule]. A
  * non-match shows an inline "doesn't match" message and lets you retake; dismissing without a
  * match just leaves the habit un-trusted, re-prompted on the next scan.
+ *
+ * `singleTask` launch mode (see manifest) means a repeat [launch] call while an instance already
+ * exists -- even backgrounded via Home, not just currently visible -- brings that same instance
+ * back to front via [onNewIntent] instead of silently no-op'ing or stacking a duplicate. That
+ * matters here: earlier this relied on a static "isShowing" flag reset only in onDestroy, which
+ * got permanently stuck true (blocking every future prompt) the moment a user backgrounded the
+ * activity without resolving it, since backgrounding alone doesn't destroy an activity.
  */
 class HabitProofActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        isShowing = true
         val habitName = intent.getStringExtra(EXTRA_HABIT_NAME)
         if (habitName == null) {
             finish()
@@ -124,23 +131,24 @@ class HabitProofActivity : ComponentActivity() {
         return runCatching { BitmapFactory.decodeFile(file.absolutePath, opts) }.getOrNull()
     }
 
-    override fun onDestroy() {
-        isShowing = false
-        super.onDestroy()
+    /** With `singleTask`, a repeat [launch] reuses this instance and delivers here instead of
+     * onCreate -- rebuild it against the (possibly different) habit name in the new intent. */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        recreate()
     }
 
     companion object {
         const val EXTRA_HABIT_NAME = "extra_habit_name"
 
-        @Volatile private var isShowing = false
-
-        /** Safe to call repeatedly (e.g. from a scan loop) -- no-ops while already showing so a
-         * fast-firing scan can't stack duplicate prompts. */
+        /** Safe to call repeatedly (e.g. from a scan loop) -- `singleTask` + these flags mean this
+         * either creates the prompt fresh, or brings an already-existing instance (foreground or
+         * backgrounded) back to front rather than stacking a duplicate or silently no-op'ing. */
         fun launch(context: android.content.Context, habitName: String) {
-            if (isShowing) return
-            val intent = android.content.Intent(context, HabitProofActivity::class.java)
+            val intent = Intent(context, HabitProofActivity::class.java)
                 .putExtra(EXTRA_HABIT_NAME, habitName)
-                .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
             context.startActivity(intent)
         }
     }

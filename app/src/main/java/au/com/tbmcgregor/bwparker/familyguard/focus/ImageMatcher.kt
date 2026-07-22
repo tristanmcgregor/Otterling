@@ -17,8 +17,17 @@ import java.io.File
 object ImageMatcher {
     private const val GRID_SIZE = 9 // 9x8 samples -> 8x8 = 64 pairwise comparisons -> fits a Long
 
-    /** True if [candidateFile] is visually similar enough to [referenceFile] to approve. */
-    fun isMatch(candidateFile: File, referenceFile: File, thresholdBits: Int = 20): Boolean {
+    /**
+     * True if [candidateFile] is visually similar enough to [referenceFile] to approve.
+     *
+     * [thresholdBits] is the max allowed Hamming distance out of 64 bits: 0 = pixel-identical,
+     * ~32 = statistically unrelated images. The default is deliberately lenient -- a proof photo
+     * of "the same scene" taken at a different angle/time/lighting can easily differ by a couple
+     * dozen bits, and the point is only to reject obviously-unrelated photos (a screenshot, a wall,
+     * a random object), not to demand a near-duplicate of the reference. Lower it if it's letting
+     * unrelated photos through; raise it if it's rejecting genuine ones.
+     */
+    fun isMatch(candidateFile: File, referenceFile: File, thresholdBits: Int = 30): Boolean {
         val candidate = decodeShrunk(candidateFile) ?: return false
         val reference = decodeShrunk(referenceFile) ?: return false
         return hammingDistance(dHash(candidate), dHash(reference)) <= thresholdBits

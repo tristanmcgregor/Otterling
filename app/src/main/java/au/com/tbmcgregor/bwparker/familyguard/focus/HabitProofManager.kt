@@ -54,13 +54,27 @@ class HabitProofManager(context: Context) {
 
     suspend fun recentLogs(limit: Int = 50): List<HabitProofLog> = dao.recentLogs(limit)
 
+    /** Removes one day's approved proof -- e.g. it was approved by mistake, or you want to force
+     * re-proving. Caller is responsible for re-running [HabitRuleManager.reapplyAll] afterwards,
+     * since removing today's log can put a target app back into a blocked state. */
+    suspend fun deleteLog(habitName: String, dateEpochDay: Long) {
+        dao.deleteLog(habitName.trim(), dateEpochDay)
+    }
+
+    /** A requirement flagged "required" but missing its reference photo can never actually be
+     * matched against anything -- a relic of an old build that allowed enabling proof without one,
+     * or a still-in-progress toggle. Treated as not-yet-really-required until a reference photo is
+     * (re-)set, so it neither blocks nor triggers [HabitProofActivity] until then. */
+    private fun List<HabitProofRequirement>.actuallyRequired() =
+        filter { it.required && !it.referencePhotoPath.isNullOrBlank() }
+
     /**
      * Filters [doneNamesLowercase] (already-lowercased habit names the scanner saw ticked today)
      * down to only those that either don't require proof, or already have a same-day proof log --
      * i.e. the set [HabitRuleManager] should actually trust when evaluating rule conditions.
      */
     suspend fun filterSatisfied(doneNamesLowercase: Set<String>): Set<String> {
-        val requirements = dao.getAllRequirements().filter { it.required }
+        val requirements = dao.getAllRequirements().actuallyRequired()
         if (requirements.isEmpty() || doneNamesLowercase.isEmpty()) return doneNamesLowercase
         val today = LocalDate.now().toEpochDay()
         val loggedToday = dao.logsForDate(today).map { it.habitName.lowercase() }.toSet()
@@ -72,7 +86,7 @@ class HabitProofManager(context: Context) {
      * proof but don't have one yet today -- i.e. should prompt [HabitProofActivity]. */
     suspend fun namesNeedingProof(doneNamesRaw: List<String>): List<String> {
         if (doneNamesRaw.isEmpty()) return emptyList()
-        val requirements = dao.getAllRequirements().filter { it.required }
+        val requirements = dao.getAllRequirements().actuallyRequired()
         if (requirements.isEmpty()) return emptyList()
         val today = LocalDate.now().toEpochDay()
         val loggedToday = dao.logsForDate(today).map { it.habitName.lowercase() }.toSet()
