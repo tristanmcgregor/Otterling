@@ -73,6 +73,14 @@ class VpnFilterService : VpnService() {
     private val scope = CoroutineScope(SupervisorJob() + relayExecutor.asCoroutineDispatcher() + exceptionHandler)
     private var tunInterface: ParcelFileDescriptor? = null
     private var workerJob: Job? = null
+    // One "generation" per (re)establish of the tunnel: every DNS/TCP/UDP coroutine spawned while
+    // handling packets off a given tun instance is a child of this scope, not the service-lifetime
+    // [scope] above. Without this, cancelling workerJob on reestablish() only stopped the tun-read
+    // loop itself -- every connection it had already spawned (each with its own coroutines, e.g.
+    // TcpRelayManager's window-wait poll loop) kept running forever against a torn-down tunnel,
+    // leaking coroutines/threads and burning CPU indefinitely every time the VPN got toggled or
+    // its bypass list changed.
+    private var connectionScope: CoroutineScope? = null
     private val running = AtomicBoolean(false)
 
     override fun onCreate() {
@@ -93,6 +101,8 @@ class VpnFilterService : VpnService() {
      * takes effect without fully stopping the service / dropping the always-on registration. */
     private fun reestablish() {
         workerJob?.cancel()
+        connectionScope?.cancel() // stops every relay coroutine from the old tunnel generation
+        connectionScope = null
         tunInterface?.let { runCatching { it.close() } }
         tunInterface = null
         running.set(true)
@@ -135,8 +145,12 @@ class VpnFilterService : VpnService() {
             running.set(false)
             return
         }
+        val generationScope = CoroutineScope(
+            SupervisorJob(scope.coroutineContext[Job]) + relayExecutor.asCoroutineDispatcher() + exceptionHandler,
+        )
+        connectionScope = generationScope
         workerJob = scope.launch {
-            runCatching { runPacketLoop(tun, blocklist) }
+            runCatching { runPacketLoop(tun, blocklist, generationScope) }
                 .onFailure { Log.e(TAG, "Packet loop crashed", it) }
         }
     }
@@ -153,7 +167,7 @@ class VpnFilterService : VpnService() {
         }
     }
 
-    private fun runPacketLoop(tun: ParcelFileDescriptor, blocklist: DomainBlocklistManager) {
+    private fun runPacketLoop(tun: ParcelFileDescriptor, blocklist: DomainBlocklistManager, relayScope: CoroutineScope) {
         val input = FileInputStream(tun.fileDescriptor)
         val output = FileOutputStream(tun.fileDescriptor)
         val writeLock = Mutex()
@@ -172,18 +186,19 @@ class VpnFilterService : VpnService() {
         val isBlockedDestination: (String) -> Boolean = { ip -> ip in KNOWN_DOH_IPS }
 
         val tcpRelay = TcpRelayManager(
-            scope = scope,
+            scope = relayScope,
             protect = { socket -> protect(socket) },
             writeToTun = writeToTun,
             isBlockedDestination = isBlockedDestination,
         )
         val udpRelay = UdpRelayManager(
-            scope = scope,
+            scope = relayScope,
             protect = { socket -> protect(socket) },
             writeToTun = writeToTun,
             isBlockedDestination = isBlockedDestination,
         )
 
+        var consecutiveEmptyReads = 0
         while (running.get()) {
             // A fresh buffer per read -- the previous one may still be in flight on a background
             // coroutine, since DNS/TCP/UDP handling all happen off this loop.
@@ -194,7 +209,29 @@ class VpnFilterService : VpnService() {
                 if (running.get()) Log.w(TAG, "tun read failed", error)
                 break
             }
-            if (length <= 0) continue
+            if (length < 0) {
+                // EOF: the tun fd is done (torn down elsewhere) -- exit rather than spin on it.
+                if (running.get()) Log.w(TAG, "tun read hit EOF")
+                break
+            }
+            if (length == 0) {
+                // A blocking read on the tun fd should never return 0 without any data -- but on
+                // some devices/transient network states (observed: right after the VPN starts, or
+                // during a network handover) it does exactly that instead of actually blocking.
+                // Measured on-device: ~55,000 of these per second with no backoff here, each one
+                // still allocating the buffer above -- a busy-spin that pegged a CPU core
+                // continuously and was the actual cause of severe battery drain (not merely a
+                // once-the-VPN-has-run-a-while problem: it started from the moment the tunnel came
+                // up). Back off briefly so this state is nearly free instead of CPU-melting, and
+                // recovers immediately once real packets start arriving again.
+                consecutiveEmptyReads++
+                if (consecutiveEmptyReads == 1 || consecutiveEmptyReads % 1000 == 0) {
+                    Log.w(TAG, "tun read returned 0 with no data ($consecutiveEmptyReads consecutive) -- backing off")
+                }
+                Thread.sleep(EMPTY_READ_BACKOFF_MS)
+                continue
+            }
+            consecutiveEmptyReads = 0
 
             val packet = IpPacket.parse(buffer, length)
             if (packet == null) {
@@ -209,7 +246,7 @@ class VpnFilterService : VpnService() {
                         // (this alone used to be enough to make apps that fire off many DNS
                         // lookups in quick succession, e.g. Spotify resolving several
                         // edge/access-point hostnames at once, see lookups time out).
-                        scope.launch { handleDnsPacket(packet, writeToTun, blocklist) }
+                        relayScope.launch { handleDnsPacket(packet, writeToTun, blocklist) }
                     } else {
                         udpRelay.handle(packet)
                     }
@@ -270,6 +307,7 @@ class VpnFilterService : VpnService() {
 
     override fun onDestroy() {
         running.set(false)
+        connectionScope?.cancel()
         scope.cancel() // tears down every in-flight TCP/UDP relay connection too, not just the read loop
         relayExecutor.shutdownNow()
         tunInterface?.let { runCatching { it.close() } }
@@ -314,6 +352,9 @@ class VpnFilterService : VpnService() {
         // by many more packets, was capping real download throughput to a small fraction of the
         // underlying link's actual speed even once flow control/window scaling were fixed.
         private const val MTU = 16384
+        // See runPacketLoop's zero-length-read handling: how long to back off when the tun fd
+        // returns 0 bytes without blocking, instead of busy-spinning on it.
+        private const val EMPTY_READ_BACKOFF_MS = 20L
 
         /** Public DoH/DoT resolver IPs -- refused (RST/dropped) so apps can't dodge filtering by
          *  hardcoding their own DNS instead of using the (filtered) system resolver set above. */

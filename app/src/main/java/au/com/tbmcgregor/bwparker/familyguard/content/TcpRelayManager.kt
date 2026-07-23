@@ -229,16 +229,25 @@ class TcpRelayManager(
      * its most recent ACK. Polls rather than using a signal, since a window update is just an
      * ordinary incoming ACK processed on a different coroutine ([consumeInbox]) with no natural
      * place to hang a callback; the poll interval is short enough not to add noticeable latency.
+     *
+     * Bounded by [WINDOW_STALL_TIMEOUT_MS]: if the client's TCP stack never reopens the window
+     * (backgrounded/killed app, network drop, or any other reason it stops ACKing), this used to
+     * spin every [WINDOW_POLL_DELAY_MS] forever -- one connection stuck like this is a rounding
+     * error, but stuck connections accumulate over a long-running VPN session (normal phone usage
+     * opens hundreds of TCP flows a day), and each one burning CPU nonstop is exactly what turns
+     * into severe battery drain over hours. Returns false instead of hanging so the caller can
+     * give up on the connection.
      */
-    private suspend fun waitForWindow(connection: Connection, neededBytes: Int) {
+    private suspend fun waitForWindow(connection: Connection, neededBytes: Int): Boolean {
         val waitStart = System.currentTimeMillis()
         while (true) {
             val inFlight = (connection.serverSeq - connection.clientAcked) and SEQ_MASK
             val available = connection.clientWindow - inFlight
             if (available >= neededBytes) {
                 connection.windowWaitMillis += System.currentTimeMillis() - waitStart
-                return
+                return true
             }
+            if (System.currentTimeMillis() - waitStart > WINDOW_STALL_TIMEOUT_MS) return false
             delay(WINDOW_POLL_DELAY_MS)
         }
     }
@@ -255,7 +264,15 @@ class TcpRelayManager(
                 if (read < 0) break
                 connection.bytesFromSocket += read
                 connection.readCount++
-                waitForWindow(connection, read)
+                if (!waitForWindow(connection, read)) {
+                    Log.w(
+                        TAG,
+                        "${connection.key.dstIp}:${connection.key.dstPort} window never reopened after " +
+                            "${WINDOW_STALL_TIMEOUT_MS}ms -- abandoning stalled connection",
+                    )
+                    closeConnection(connection, sendRst = true)
+                    return
+                }
                 val writeStart = System.currentTimeMillis()
                 writeToTun(
                     connection.templatePacket.buildTcpSegment(
@@ -333,5 +350,6 @@ class TcpRelayManager(
         const val SEQ_MASK = 0xFFFFFFFFL
         const val WRAP_THRESHOLD = 0x80000000L
         const val WINDOW_POLL_DELAY_MS = 10L
+        const val WINDOW_STALL_TIMEOUT_MS = 30_000L
     }
 }
