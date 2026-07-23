@@ -14,8 +14,8 @@ import org.json.JSONObject
 
 /**
  * Talks directly to HabitShare's own backend (the same one the HabitShare app itself uses) to
- * read exact done/not-done status for the day, instead of guessing from a screenshot's pixel
- * colors. This is an *unofficial*, reverse-engineered API (see
+ * read exact done/not-done status for the day -- the sole source of habit completion data. This
+ * is an *unofficial*, reverse-engineered API (see
  * https://github.com/cykirk/habitshare-api-python) -- not published or supported by HabitShare,
  * so it could change without notice. It logs in with the same username/password the user already
  * uses inside the HabitShare app ([HabitShareAccountManager]) and only ever talks to

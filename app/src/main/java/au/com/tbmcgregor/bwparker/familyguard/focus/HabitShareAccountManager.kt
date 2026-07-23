@@ -10,7 +10,7 @@ import java.security.GeneralSecurityException
 /**
  * Securely stores the user's own HabitShare login (username/password, plus the auth token once
  * issued) so [HabitShareApiClient] can poll HabitShare's own server directly for exact
- * done/not-done status instead of relying on the on-screen screenshot heuristic. Nothing here is
+ * done/not-done status, which is the sole source of habit completion data. Nothing here is
  * ever sent anywhere except HabitShare's own servers -- this is the same account the user already
  * signs into inside the HabitShare app itself.
  *

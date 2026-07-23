@@ -4,14 +4,13 @@ import android.content.Context
 import android.util.Log
 
 /**
- * Feeds [HabitShareApiClient] results through the exact same pipeline the on-screen scanner
- * ([FocusGuardAccessibilityService.scanHabitTracker]) uses -- [DetectedHabitManager.recordScan]
- * (so Settings' "detected habits" list and proof requirements keep working unchanged) and
+ * Feeds [HabitShareApiClient] results through the habit pipeline -- [DetectedHabitManager.recordScan]
+ * (so Settings' "detected habits" list and proof requirements keep working) and
  * [HabitRuleManager.evaluateTrigger] (so non-windowed "unlock for N minutes" rules still grant).
- * Called periodically from [au.com.tbmcgregor.bwparker.familyguard.monitoring.ProtectionEnforcementService]
- * whenever a HabitShare account is connected, independent of whether HabitShare is on-screen --
- * this is what makes the API the primary, always-fresh source of truth once configured, rather
- * than only updating when the tracker app happens to be open.
+ * The REST API is the sole source of habit completion data. Called periodically from
+ * [au.com.tbmcgregor.bwparker.familyguard.monitoring.ProtectionEnforcementService] whenever a
+ * HabitShare account is connected, keeping completion status always fresh rather than only
+ * updating when the tracker app happens to be open.
  */
 class HabitShareSyncManager(context: Context) {
     private val apiClient = HabitShareApiClient(context)
@@ -27,7 +26,7 @@ class HabitShareSyncManager(context: Context) {
         if (rows.isEmpty()) return
         detectedHabitManager.recordScan(rows)
         // Non-windowed "unlock for N minutes" rules fire here...
-        habitRuleManager.evaluateTrigger(HabitTrackerScanner.HABITSHARE_PACKAGE_NAME, emptyList(), rows)
+        habitRuleManager.evaluateTrigger(HabitTrackerScanner.HABITSHARE_PACKAGE_NAME, rows)
         // ...but time-windowed rules are driven purely by reapplyAll (evaluateTrigger skips them),
         // and it otherwise only runs on the enforcement service's slow ~5-min loop. Call it here so
         // a habit ticked in HabitShare lifts/asserts a windowed block within one 30s sync instead

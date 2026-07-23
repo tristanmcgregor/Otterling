@@ -587,8 +587,8 @@ fun HabitShareSettingsScreen(context: Context, onBack: () -> Unit) {
 
 /**
  * Connect / disconnect the user's own HabitShare login. When connected, [HabitShareSyncManager]
- * reads exact done/not-done status directly from HabitShare's server every 30s instead of relying
- * on the on-screen scan.
+ * reads exact done/not-done status directly from HabitShare's server every 30s. This is the only
+ * source of habit completion data -- habits aren't read until an account is connected.
  */
 @Composable
 fun HabitShareAccountSection(context: Context) {
@@ -606,7 +606,7 @@ fun HabitShareAccountSection(context: Context) {
         title = "HabitShare Account",
         icon = Icons.Default.CloudSync,
         subtitle = "Connect your HabitShare login so completions are read straight from " +
-            "HabitShare's own server -- far more reliable than reading them off the screen.",
+            "HabitShare's own server. This is the only way habits are detected.",
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -617,7 +617,7 @@ fun HabitShareAccountSection(context: Context) {
                 if (connected) "Connected" else "Not connected",
                 style = MaterialTheme.typography.bodyLarge,
             )
-            StatusText(if (connected) "Live sync" else "Screen scan", isGood = connected)
+            StatusText(if (connected) "Live sync" else "Not connected", isGood = connected)
         }
         if (connected) {
             Text("Signed in as $username", style = MaterialTheme.typography.bodySmall)

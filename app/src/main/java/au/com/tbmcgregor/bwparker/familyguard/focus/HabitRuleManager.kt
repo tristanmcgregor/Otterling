@@ -20,9 +20,9 @@ import kotlinx.coroutines.sync.withLock
  * A rule can optionally be time-windowed (see [HabitRule.isTimeWindowed]) so it only enforces
  * blocking during a specific time-of-day range, e.g. "block unless 'Bible AM' done, but only from
  * midnight to 9pm" alongside a second rule for "Bible PM" covering 9pm to midnight. Detection
- * itself is still the same on-screen heuristic [FocusGuardAccessibilityService] already uses --
- * this class just lets that trigger fan out to many trigger-app/target-app/duration/window
- * combinations instead of one hardcoded one. Any habit name marked in [HabitProofManager] as
+ * itself comes from the HabitShare REST API (see [HabitShareSyncManager]) -- this class just lets
+ * that trigger fan out to many trigger-app/target-app/duration/window combinations instead of one
+ * hardcoded one. Any habit name marked in [HabitProofManager] as
  * requiring proof only counts as "done" here once a same-day [HabitProofLog] also exists --
  * see [HabitProofManager.filterSatisfied].
  *
@@ -150,18 +150,16 @@ class HabitRuleManager(context: Context) {
     }
 
     /**
-     * Called by the accessibility service once it has scanned [triggerPackageName]'s screen into
-     * [texts] (whole-screen text, for the "all complete" pattern) and [detectedHabitRows] (name +
-     * done-today pairs from [HabitTrackerScanner], for single-habit rules). Grants (at most once
-     * per calendar day, per rule) every enabled, non-time-windowed rule whose trigger matches and
-     * whose condition is met, and returns how many fired -- useful for a "you just unlocked N
-     * app(s)" toast. Idempotent: safe to call on every scan. Time-windowed rules are deliberately
-     * excluded here -- they're continuously re-derived by [reapplyAll] instead, since "done" can
-     * happen hours before the window that cares about it even starts.
+     * Called with the latest [detectedHabitRows] (habit name + done-today pairs sourced from the
+     * HabitShare REST API via [HabitShareSyncManager]). Grants (at most once per calendar day, per
+     * rule) every enabled, non-time-windowed rule whose trigger matches and whose condition is met,
+     * and returns how many fired -- useful for a "you just unlocked N app(s)" toast. Idempotent:
+     * safe to call on every sync. Time-windowed rules are deliberately excluded here -- they're
+     * continuously re-derived by [reapplyAll] instead, since "done" can happen hours before the
+     * window that cares about it even starts.
      */
     suspend fun evaluateTrigger(
         triggerPackageName: String,
-        texts: List<String>,
         detectedHabitRows: List<Pair<String, Boolean>>,
     ): Int = evaluationMutex.withLock {
         val today = LocalDate.now().toEpochDay()
@@ -169,9 +167,13 @@ class HabitRuleManager(context: Context) {
             .filter { it.lastGrantedEpochDay != today && !it.isTimeWindowed() }
         if (candidates.isEmpty()) return@withLock 0
 
-        val allComplete = looksLikeAllComplete(texts)
         val rawDoneNames = detectedHabitRows.filter { it.second }.map { it.first.lowercase() }.toSet()
         val doneHabitNames = proofManager.filterSatisfied(rawDoneNames)
+        // "All habits complete" (a non-windowed rule with no named habits) is derived directly from
+        // the API rows: it fires only when there's at least one detected habit and every detected
+        // row is both done and proof-satisfied.
+        val allComplete = detectedHabitRows.isNotEmpty() &&
+            detectedHabitRows.all { it.second && it.first.lowercase() in doneHabitNames }
 
         val now = System.currentTimeMillis()
         var grantedCount = 0
@@ -290,17 +292,6 @@ class HabitRuleManager(context: Context) {
             Log.e(TAG, "Not authorized to suspend $packageName", error)
         } catch (error: IllegalArgumentException) {
             Log.e(TAG, "Cannot suspend $packageName (not installed?)", error)
-        }
-    }
-
-    /** Matches common "3/3" or "3 of 3" completion-counter phrasing where done == total > 0. */
-    private fun looksLikeAllComplete(texts: List<String>): Boolean {
-        val pattern = Regex("""(\d+)\s*(?:/|of)\s*(\d+)""", RegexOption.IGNORE_CASE)
-        return texts.any { text ->
-            val match = pattern.find(text) ?: return@any false
-            val (done, total) = match.destructured
-            val totalValue = total.toIntOrNull() ?: return@any false
-            totalValue > 0 && done.toIntOrNull() == totalValue
         }
     }
 
