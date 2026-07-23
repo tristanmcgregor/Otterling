@@ -109,8 +109,11 @@ class VpnFilterManager(private val context: Context) {
     private fun restoreSuppressedPrivateDns() {
         val savedHost = prefs.getString(KEY_SAVED_PRIVATE_DNS_HOST, null) ?: return
         prefs.edit().remove(KEY_SAVED_PRIVATE_DNS_HOST).apply()
-        val profile = PrivateDnsFilterManager.FilterProfile.entries.find { it.host == savedHost } ?: return
-        privateDnsFilterManager.enable(profile)
+        // Restore whatever host the user actually had -- not just one that happens to match one
+        // of our own two FilterProfile entries. This used to silently discard any custom Private
+        // DNS host the user had configured themselves (anything other than our two presets),
+        // leaving Private DNS stuck on opportunistic forever after the VPN was ever toggled on.
+        privateDnsFilterManager.enableHost(savedHost)
     }
 
     /** Call on boot -- re-locks the always-on VPN if it was previously turned on. */

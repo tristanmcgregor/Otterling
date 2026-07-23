@@ -68,7 +68,14 @@ class AccessibilityGuardActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        isShowing = false
+        // A config change (e.g. rotation) destroys and immediately recreates this activity --
+        // `isChangingConfigurations` is true for that case. Without this guard, `isShowing`
+        // would briefly read false in the gap between this onDestroy() and the next onCreate(),
+        // which a concurrently-polling caller (ProtectionEnforcementService's periodic check)
+        // could observe and launch a redundant duplicate on top of the one already recreating.
+        if (!isChangingConfigurations) {
+            isShowing = false
+        }
         super.onDestroy()
     }
 

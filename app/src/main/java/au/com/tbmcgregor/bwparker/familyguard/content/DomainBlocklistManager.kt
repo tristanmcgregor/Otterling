@@ -46,6 +46,15 @@ class DomainBlocklistManager(private val context: Context) {
     fun refresh(): Result<Int> = runCatching {
         val domains = HashSet<String>()
         sourceUrls().forEach { url -> downloadHostsFile(url, domains) }
+        // A source returning HTTP 200 with a body that doesn't parse to any hosts-file entries
+        // (format change, captive portal page, empty response, etc.) isn't an exception, so it
+        // used to sail through to writeText() below and silently replace a real blocklist with
+        // an empty one -- turning off all content filtering until the next successful refresh,
+        // with no error surfaced anywhere. Treat "parsed to zero" as a failure instead and keep
+        // whatever was already on disk.
+        check(domains.isNotEmpty()) {
+            "Refresh produced 0 domains (source format changed or empty response) -- keeping existing blocklist"
+        }
         blocklistFile.writeText(domains.joinToString("\n"))
         cachedDomains = domains
         prefs.edit().putLong(KEY_LAST_UPDATED, System.currentTimeMillis()).apply()

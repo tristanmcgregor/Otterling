@@ -22,7 +22,11 @@ class HabitShareAccountManager(private val context: Context) {
     private val masterKey = MasterKey.Builder(context)
         .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
         .build()
-    private var prefs: SharedPreferences = createPrefs()
+    // Recover-on-failure here too, not just in `safely{}` below -- this runs at field-init time,
+    // before `prefs` exists, so a corrupt/undecryptable file at construction time used to crash
+    // whatever screen constructs this (HabitShare settings, the 30s sync loop, etc.) instead of
+    // falling back to "not connected" as intended. See PinAuthManager for the identical fix.
+    private var prefs: SharedPreferences = createPrefsOrRecover()
 
     private fun createPrefs(): SharedPreferences = EncryptedSharedPreferences.create(
         context,
@@ -32,10 +36,22 @@ class HabitShareAccountManager(private val context: Context) {
         EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
     )
 
-    private fun recoverFromCorruption(error: Exception) {
+    private fun createPrefsOrRecover(): SharedPreferences = try {
+        createPrefs()
+    } catch (error: SecurityException) {
+        deleteAndRecreate(error)
+    } catch (error: GeneralSecurityException) {
+        deleteAndRecreate(error)
+    }
+
+    private fun deleteAndRecreate(error: Exception): SharedPreferences {
         Log.e(TAG, "HabitShare account prefs undecryptable, resetting to disconnected state", error)
         context.deleteSharedPreferences(PREFS_NAME)
-        prefs = createPrefs()
+        return createPrefs()
+    }
+
+    private fun recoverFromCorruption(error: Exception) {
+        prefs = deleteAndRecreate(error)
     }
 
     private fun <T> safely(default: T, block: () -> T): T = try {

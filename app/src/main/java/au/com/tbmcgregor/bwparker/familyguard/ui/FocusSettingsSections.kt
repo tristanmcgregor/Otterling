@@ -975,16 +975,24 @@ private fun ProofRequirementRow(
         if (required) {
             Column(modifier = Modifier.padding(start = 40.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 references.forEach { ref ->
-                    val bitmap = remember(ref.absolutePath, ref.lastModified()) {
-                        runCatching {
-                            BitmapFactory.Options().apply { inSampleSize = 4 }
-                                .let { opts -> BitmapFactory.decodeFile(ref.absolutePath, opts) }
-                        }.getOrNull()
+                    // Decoding is real file + JPEG-decode I/O -- doing it inline inside `remember{}`
+                    // ran it synchronously on the main/composition thread for every reference photo
+                    // row, every time this recomposed. Loading it asynchronously via LaunchedEffect
+                    // keeps composition itself non-blocking; the row just shows no image for one
+                    // frame while it decodes.
+                    var bitmap by remember(ref.absolutePath, ref.lastModified()) { mutableStateOf<android.graphics.Bitmap?>(null) }
+                    LaunchedEffect(ref.absolutePath, ref.lastModified()) {
+                        bitmap = withContext(Dispatchers.IO) {
+                            runCatching {
+                                BitmapFactory.Options().apply { inSampleSize = 4 }
+                                    .let { opts -> BitmapFactory.decodeFile(ref.absolutePath, opts) }
+                            }.getOrNull()
+                        }
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (bitmap != null) {
+                        bitmap?.let { loadedBitmap ->
                             Image(
-                                bitmap = bitmap.asImageBitmap(),
+                                bitmap = loadedBitmap.asImageBitmap(),
                                 contentDescription = "Reference photo for $habitName",
                                 modifier = Modifier.height(56.dp),
                             )
@@ -1008,11 +1016,14 @@ private fun ProofRequirementRow(
 
 @Composable
 private fun HabitProofLogRow(log: HabitProofLog, onRemove: () -> Unit) {
-    val bitmap = remember(log.photoPath) {
-        runCatching {
-            BitmapFactory.Options().apply { inSampleSize = 4 }
-                .let { opts -> BitmapFactory.decodeFile(log.photoPath, opts) }
-        }.getOrNull()
+    var bitmap by remember(log.photoPath) { mutableStateOf<android.graphics.Bitmap?>(null) }
+    LaunchedEffect(log.photoPath) {
+        bitmap = withContext(Dispatchers.IO) {
+            runCatching {
+                BitmapFactory.Options().apply { inSampleSize = 4 }
+                    .let { opts -> BitmapFactory.decodeFile(log.photoPath, opts) }
+            }.getOrNull()
+        }
     }
     var confirmingRemove by remember(log) { mutableStateOf(false) }
 
@@ -1029,10 +1040,10 @@ private fun HabitProofLogRow(log: HabitProofLog, onRemove: () -> Unit) {
             if (log.note.isNotBlank()) {
                 Text(log.note, style = MaterialTheme.typography.bodySmall)
             }
-            if (bitmap != null) {
+            bitmap?.let { loadedBitmap ->
                 androidx.compose.foundation.layout.Spacer(Modifier.height(8.dp))
                 Image(
-                    bitmap = bitmap.asImageBitmap(),
+                    bitmap = loadedBitmap.asImageBitmap(),
                     contentDescription = "Proof photo for ${log.habitName}",
                     modifier = Modifier.fillMaxWidth().height(160.dp),
                 )

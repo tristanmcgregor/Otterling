@@ -190,7 +190,17 @@ class IpPacket private constructor(
             if (dataOffset < TCP_HEADER_SIZE) return null
             val flags = buffer[ihl + 13].toInt() and 0xFF
             val window = readUInt16(buffer, ihl + 14)
-            val windowScale = if (flags and TCP_SYN != 0) parseWindowScaleOption(buffer, ihl + TCP_HEADER_SIZE, dataOffset - TCP_HEADER_SIZE) else null
+            // `dataOffset` is a claim made by the packet itself about how many header+options
+            // bytes follow -- nothing stops a malformed/truncated segment from claiming more
+            // option bytes than were actually captured in this read (`length`). `payload` below
+            // already guards the same way; options parsing needs the identical guard, otherwise
+            // it walks past the real segment into whatever this ByteArray happens to hold there.
+            val optionsLength = dataOffset - TCP_HEADER_SIZE
+            val windowScale = if (flags and TCP_SYN != 0 && ihl + dataOffset <= length) {
+                parseWindowScaleOption(buffer, ihl + TCP_HEADER_SIZE, optionsLength)
+            } else {
+                null
+            }
             val payloadStart = ihl + dataOffset
             val payload = if (payloadStart > length) ByteArray(0) else buffer.copyOfRange(payloadStart, length)
             return IpPacket(

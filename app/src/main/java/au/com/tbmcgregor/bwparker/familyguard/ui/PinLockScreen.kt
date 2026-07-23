@@ -44,7 +44,11 @@ fun PinLockScreen(
 
     fun submit() {
         if (hasPin) {
-            if (pinAuthManager.verifyPin(pin)) {
+            val lockoutMs = pinAuthManager.lockoutRemainingMillis()
+            if (lockoutMs > 0) {
+                errorMessage = "Too many wrong PINs -- try again in ${(lockoutMs / 1000) + 1}s"
+                pin = ""
+            } else if (pinAuthManager.verifyPin(pin)) {
                 onUnlocked()
             } else {
                 errorMessage = "Incorrect PIN"

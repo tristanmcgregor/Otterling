@@ -6,6 +6,7 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.random.Random
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.channels.Channel
@@ -80,6 +81,12 @@ class TcpRelayManager(
         @Volatile var tunWriteMillis: Long = 0
         @Volatile var readCount: Int = 0
         val startedAtMillis: Long = System.currentTimeMillis()
+
+        // Guards [closeConnection] against running twice for the same connection -- the socket
+        // read loop and the tun-side inbox consumer run on independent coroutines and can both
+        // hit an error (e.g. one closes the socket, which makes the other's next read/write throw)
+        // at nearly the same time, each independently deciding to close+RST.
+        val closed = AtomicBoolean(false)
     }
 
     private val connections = ConcurrentHashMap<FlowKey, Connection>()
@@ -144,6 +151,19 @@ class TcpRelayManager(
             connections.remove(connection.key)
             runCatching { socket.close() }
             writeToTun(rstFor(synPacket))
+            return
+        }
+
+        // The client may have already aborted (RST) while `connect()` above was blocking --
+        // `handle()` removes the connection from `connections` and closes its inbox as soon as
+        // that happens, but at that point there was no socket yet for it to close. Without this
+        // check, a connect() that happens to succeed just after the client gave up would still
+        // send a SYN-ACK the client never asked for anymore, then spin up `relayFromSocket`
+        // against a real, fully-connected destination socket that nothing will ever close again
+        // (a repeat RST from the client just gets ignored, since this key is no longer registered)
+        // -- a genuine leaked socket + coroutine for the lifetime of that remote connection.
+        if (connections[connection.key] !== connection) {
+            runCatching { socket.close() }
             return
         }
 
@@ -302,6 +322,7 @@ class TcpRelayManager(
     }
 
     private suspend fun closeConnection(connection: Connection, sendRst: Boolean) {
+        if (!connection.closed.compareAndSet(false, true)) return
         connections.remove(connection.key)
         connection.inbox.close()
         val elapsedMs = System.currentTimeMillis() - connection.startedAtMillis

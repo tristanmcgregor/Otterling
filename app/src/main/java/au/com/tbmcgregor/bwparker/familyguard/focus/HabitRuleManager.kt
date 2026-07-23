@@ -9,6 +9,8 @@ import au.com.tbmcgregor.bwparker.familyguard.data.AppDatabase
 import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.LocalTime
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /**
  * A small command system: "app B is blocked until (habit(s) are done in app A), then it unlocks
@@ -37,6 +39,17 @@ class HabitRuleManager(context: Context) {
     private val devicePolicyManager: DevicePolicyManager? =
         context.getSystemService(DevicePolicyManager::class.java)
     private val adminComponent = ComponentName(context, DeviceAdminReceiverImpl::class.java)
+
+    // Accessibility content-changed events can fire in a quick burst, and each scan calls
+    // evaluateTrigger() from its own coroutine without waiting for a prior one to finish. Without
+    // serializing here, two overlapping calls could both read the same rule (lastGrantedEpochDay
+    // != today, unlockUntilMillis = X) before either had written its grant, both decide to fire,
+    // and race to write -- a classic lost-update: whichever write lands second silently clobbers
+    // the first, and depending on timing that can leave the grant computed from a stale base
+    // instead of correctly extending once. Guarding the whole read-decide-write sequence makes
+    // concurrent scans of the same trigger safe to fire from, matching the "idempotent, safe to
+    // call on every scan" guarantee this class already documents.
+    private val evaluationMutex = Mutex()
 
     suspend fun rules(): List<HabitRule> = dao.getAll()
 
@@ -148,11 +161,11 @@ class HabitRuleManager(context: Context) {
         triggerPackageName: String,
         texts: List<String>,
         detectedHabitRows: List<Pair<String, Boolean>>,
-    ): Int {
+    ): Int = evaluationMutex.withLock {
         val today = LocalDate.now().toEpochDay()
         val candidates = dao.forTrigger(triggerPackageName)
             .filter { it.lastGrantedEpochDay != today && !it.isTimeWindowed() }
-        if (candidates.isEmpty()) return 0
+        if (candidates.isEmpty()) return@withLock 0
 
         val allComplete = looksLikeAllComplete(texts)
         val rawDoneNames = detectedHabitRows.filter { it.second }.map { it.first.lowercase() }.toSet()
@@ -176,7 +189,7 @@ class HabitRuleManager(context: Context) {
             grantedCount++
         }
         if (grantedCount > 0) reapplyAll()
-        return grantedCount
+        grantedCount
     }
 
     /** Re-derives suspended state for every target app from scratch. Call periodically -- this is

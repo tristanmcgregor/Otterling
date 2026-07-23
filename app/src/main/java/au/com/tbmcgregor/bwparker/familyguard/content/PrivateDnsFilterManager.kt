@@ -42,11 +42,18 @@ class PrivateDnsFilterManager(private val context: Context) {
         if (isSupported) devicePolicyManager?.getGlobalPrivateDnsHost(adminComponent) else null
 
     /** Blocking call -- performs a connectivity check to the resolver. Call off the main thread. */
-    fun enable(profile: FilterProfile): Result {
+    fun enable(profile: FilterProfile): Result = enableHost(profile.host)
+
+    /**
+     * Same as [enable] but takes a raw host rather than one of our own [FilterProfile]s -- needed
+     * to restore a user's own pre-existing custom Private DNS host (one that isn't either of our
+     * two profiles) after we've temporarily suppressed it. Blocking; call off the main thread.
+     */
+    fun enableHost(host: String): Result {
         if (!isSupported) return Result.UnsupportedApiLevel
         val dpm = devicePolicyManager ?: return Result.Failed("DevicePolicyManager unavailable")
         return try {
-            when (dpm.setGlobalPrivateDnsModeSpecifiedHost(adminComponent, profile.host)) {
+            when (dpm.setGlobalPrivateDnsModeSpecifiedHost(adminComponent, host)) {
                 DevicePolicyManager.PRIVATE_DNS_SET_NO_ERROR -> Result.Success
                 DevicePolicyManager.PRIVATE_DNS_SET_ERROR_HOST_NOT_SERVING ->
                     Result.Failed("Resolver didn't respond to DNS-over-TLS (network may block port 853)")
