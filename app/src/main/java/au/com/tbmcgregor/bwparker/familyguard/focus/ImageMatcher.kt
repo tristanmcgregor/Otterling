@@ -1,46 +1,147 @@
 package au.com.tbmcgregor.bwparker.familyguard.focus
 
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.util.Log
+import com.google.mediapipe.framework.image.BitmapImageBuilder
+import com.google.mediapipe.tasks.components.containers.Embedding
+import com.google.mediapipe.tasks.core.BaseOptions
+import com.google.mediapipe.tasks.vision.core.RunningMode
+import com.google.mediapipe.tasks.vision.imageembedder.ImageEmbedder
 import java.io.File
 
 /**
- * Fully on-device, no-network visual-similarity check used to approve/reject a habit's daily
- * proof photo against its stored reference photo (see [HabitProofRequirement.referencePhotoPath]).
- * Uses a difference hash (dHash): downscale to a small grayscale grid and record which way
- * brightness slopes between adjacent pixels, then compare two images by Hamming distance between
- * their hashes. This is a coarse "does this look like roughly the same scene" check --
- * composition, lighting, colors -- not identity or object recognition, and it isn't meant to be
- * adversarially secure against someone determined to fool it. It's meant to stop the laziest form
- * of cheating: submitting a random/unrelated photo instead of one of you actually doing the habit.
+ * On-device, no-network visual-similarity check used to approve/reject a habit's daily proof photo
+ * against its stored reference photo(s). Primary path uses a MobileNet-V3 image embedder
+ * (MediaPipe, model bundled in `assets/mobilenet_embedder.tflite`): it turns each image into a
+ * semantic feature vector and compares two images by cosine similarity. Unlike the old difference
+ * hash, this captures *what's in the scene* rather than just its coarse brightness gradient, so it
+ * both rejects unrelated photos and tolerates the same scene at a different angle/lighting far
+ * better. If the embedder can't be initialised for any reason, it falls back to the legacy dHash so
+ * proof never hard-breaks.
+ *
+ * This is anti-laziness, not adversarially secure: someone determined can still photograph the
+ * reference itself. It exists to stop submitting a random/unrelated photo instead of one of you
+ * actually doing the habit.
  */
 object ImageMatcher {
-    private const val GRID_SIZE = 9 // 9x8 samples -> 8x8 = 64 pairwise comparisons -> fits a Long
+    private const val TAG = "ImageMatcher"
+    private const val MODEL_ASSET = "mobilenet_embedder.tflite"
+
+    /** How strict the match must be. Higher [minCosine] = stricter (fewer false accepts, more
+     * false rejects). [fallbackMaxBits] is the equivalent for the dHash fallback (lower = stricter,
+     * out of 64). */
+    enum class Sensitivity(val minCosine: Double, val fallbackMaxBits: Int) {
+        LENIENT(0.42, 26),
+        NORMAL(0.55, 20),
+        STRICT(0.68, 14),
+    }
+
+    private val embedderLock = Any()
+    @Volatile private var embedder: ImageEmbedder? = null
+    @Volatile private var embedderInitFailed = false
+
+    /** Best-effort eager init so the first real proof check isn't slowed by model load. Safe to
+     * call from a background thread; no-op if already initialised or previously failed. */
+    fun warmUp(context: Context) {
+        ensureEmbedder(context)
+    }
+
+    private fun ensureEmbedder(context: Context): ImageEmbedder? {
+        embedder?.let { return it }
+        if (embedderInitFailed) return null
+        synchronized(embedderLock) {
+            embedder?.let { return it }
+            if (embedderInitFailed) return null
+            return try {
+                val baseOptions = BaseOptions.builder()
+                    .setModelAssetPath(MODEL_ASSET)
+                    .build()
+                val options = ImageEmbedder.ImageEmbedderOptions.builder()
+                    .setBaseOptions(baseOptions)
+                    .setRunningMode(RunningMode.IMAGE)
+                    .setL2Normalize(true)
+                    .setQuantize(false)
+                    .build()
+                ImageEmbedder.createFromOptions(context.applicationContext, options).also {
+                    embedder = it
+                }
+            } catch (t: Throwable) {
+                Log.w(TAG, "Image embedder init failed; falling back to dHash", t)
+                embedderInitFailed = true
+                null
+            }
+        }
+    }
 
     /**
-     * True if [candidateFile] is visually similar enough to [referenceFile] to approve.
-     *
-     * [thresholdBits] is the max allowed Hamming distance out of 64 bits: 0 = pixel-identical,
-     * ~32 = statistically unrelated images. The default is deliberately lenient -- a proof photo
-     * of "the same scene" taken at a different angle/time/lighting can easily differ by a couple
-     * dozen bits, and the point is only to reject obviously-unrelated photos (a screenshot, a wall,
-     * a random object), not to demand a near-duplicate of the reference. Lower it if it's letting
-     * unrelated photos through; raise it if it's rejecting genuine ones.
+     * True if [candidateFile] visually matches any of [referenceFiles] closely enough per
+     * [sensitivity]. Returns false if there are no readable references or the candidate can't be
+     * decoded. Call from a background thread -- decoding + embedding are blocking.
      */
-    fun isMatch(candidateFile: File, referenceFile: File, thresholdBits: Int = 30): Boolean {
-        val candidate = decodeShrunk(candidateFile) ?: return false
-        val reference = decodeShrunk(referenceFile) ?: return false
-        return hammingDistance(dHash(candidate), dHash(reference)) <= thresholdBits
+    fun isMatch(
+        context: Context,
+        candidateFile: File,
+        referenceFiles: List<File>,
+        sensitivity: Sensitivity = Sensitivity.NORMAL,
+    ): Boolean {
+        val readable = referenceFiles.filter { it.exists() && it.length() > 0 }
+        if (readable.isEmpty() || !candidateFile.exists()) return false
+
+        val emb = ensureEmbedder(context)
+        if (emb != null) {
+            val best = bestCosine(emb, candidateFile, readable)
+            if (best != null) {
+                Log.d(TAG, "best cosine=$best threshold=${sensitivity.minCosine} for ${candidateFile.name}")
+                return best >= sensitivity.minCosine
+            }
+            // Embedding computation failed for this pair -- fall through to dHash.
+        }
+        return matchViaDHash(candidateFile, readable, sensitivity.fallbackMaxBits)
     }
 
-    private fun decodeShrunk(file: File): Bitmap? {
-        val opts = BitmapFactory.Options().apply { inSampleSize = 4 }
-        return runCatching { BitmapFactory.decodeFile(file.absolutePath, opts) }.getOrNull()
+    /** Highest cosine similarity of [candidateFile] against any of [references], or null if none
+     * could be embedded. */
+    private fun bestCosine(emb: ImageEmbedder, candidateFile: File, references: List<File>): Double? {
+        val candidateEmbedding = embed(emb, candidateFile) ?: return null
+        var best = Double.NEGATIVE_INFINITY
+        var found = false
+        for (ref in references) {
+            val refEmbedding = embed(emb, ref) ?: continue
+            val cosine = runCatching {
+                ImageEmbedder.cosineSimilarity(candidateEmbedding, refEmbedding)
+            }.getOrNull() ?: continue
+            best = maxOf(best, cosine)
+            found = true
+        }
+        return if (found) best else null
     }
 
-    /** Bit `i` is set if the pixel at position `i` is brighter than its right-hand neighbor in a
-     * [GRID_SIZE] x (GRID_SIZE-1) grayscale grid -- robust to small brightness/exposure shifts
-     * since it only cares about *relative* brightness between neighbors, not absolute values. */
+    private fun embed(emb: ImageEmbedder, file: File): Embedding? {
+        val bitmap = decodeShrunk(file, maxDim = 512) ?: return null
+        return try {
+            val mpImage = BitmapImageBuilder(bitmap).build()
+            val result = synchronized(embedderLock) { emb.embed(mpImage) }
+            result.embeddingResult().embeddings().firstOrNull()
+        } catch (t: Throwable) {
+            Log.w(TAG, "embed failed for ${file.name}", t)
+            null
+        }
+    }
+
+    // ---- Legacy dHash fallback ---------------------------------------------------------------
+
+    private const val GRID_SIZE = 9
+
+    private fun matchViaDHash(candidateFile: File, references: List<File>, maxBits: Int): Boolean {
+        val candidate = decodeShrunk(candidateFile, maxDim = 512)?.let(::dHash) ?: return false
+        return references.any { ref ->
+            val refHash = decodeShrunk(ref, maxDim = 512)?.let(::dHash) ?: return@any false
+            hammingDistance(candidate, refHash) <= maxBits
+        }
+    }
+
     private fun dHash(bitmap: Bitmap): Long {
         val width = GRID_SIZE
         val height = GRID_SIZE - 1
@@ -66,4 +167,18 @@ object ImageMatcher {
     }
 
     private fun hammingDistance(a: Long, b: Long): Int = java.lang.Long.bitCount(a xor b)
+
+    // ---- Shared helpers ----------------------------------------------------------------------
+
+    private fun decodeShrunk(file: File, maxDim: Int): Bitmap? {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        runCatching { BitmapFactory.decodeFile(file.absolutePath, bounds) }
+        val largest = maxOf(bounds.outWidth, bounds.outHeight)
+        var sample = 1
+        if (largest > maxDim) {
+            while (largest / (sample * 2) >= maxDim) sample *= 2
+        }
+        val opts = BitmapFactory.Options().apply { inSampleSize = sample }
+        return runCatching { BitmapFactory.decodeFile(file.absolutePath, opts) }.getOrNull()
+    }
 }

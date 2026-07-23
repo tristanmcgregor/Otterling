@@ -117,20 +117,4 @@ public final class FocusLockXPCClient {
             }
         }, onError: .denied("Could not reach FocusLockHelperd"))
     }
-
-    public func getGuardianSetupPublicKey() async -> String? {
-        await withXPCContinuation({ resume, onError in
-            proxy(errorHandler: onError).getGuardianSetupPublicKey { key in
-                resume(key)
-            }
-        }, onError: nil)
-    }
-
-    public func applyGuardianSetupCiphertext(_ base64Ciphertext: String) async -> FocusLockResult {
-        await withXPCContinuation({ resume, onError in
-            proxy(errorHandler: onError).applyGuardianSetupCiphertext(base64Ciphertext) { data in
-                resume(FocusLockCodec.decode(FocusLockResult.self, from: data) ?? .denied("Malformed reply"))
-            }
-        }, onError: .denied("Could not reach FocusLockHelperd"))
-    }
 }

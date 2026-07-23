@@ -39,6 +39,11 @@ android {
         compose = true
     }
 
+    androidResources {
+        // Keep the .tflite embedder model uncompressed so MediaPipe can memory-map it from assets.
+        noCompress += "tflite"
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true
@@ -72,6 +77,10 @@ dependencies {
     implementation("androidx.work:work-runtime:2.11.2")
     implementation("androidx.work:work-runtime-ktx:2.11.2")
     implementation("androidx.security:security-crypto:1.1.0")
+
+    // On-device image embeddings for habit photo-proof verification (MobileNet-V3 TFLite model
+    // bundled in assets/mobilenet_embedder.tflite).
+    implementation("com.google.mediapipe:tasks-vision:0.10.35")
 
     testImplementation("junit:junit:4.13.2")
 

@@ -1,6 +1,5 @@
 import Foundation
 import FocusLockShared
-import Security
 
 /// Command-line override tool. Functionally this is just a thin wrapper around the same XPC
 /// calls the GUI makes -- the actual Guardian-account enforcement lives in the daemon
@@ -26,10 +25,6 @@ func printUsage() {
       focuslockctl enable-dns
       focuslockctl disable-dns                     (Guardian admin account only)
 
-      focuslockctl guardian-pubkey
-      focuslockctl guardian-link <relay-server-base-url> <phone-pubkey-base64>
-      focuslockctl guardian-claim <relay-server-base-url> <token>
-
     Protected apps (e.g. an accountability app) can't be quit -- the daemon relaunches them
     within seconds -- or deleted -- their bundle is locked with the filesystem-level immutable
     flag, which only root can clear, so a Standard account can't touch it even with sudo.
@@ -38,12 +33,8 @@ func printUsage() {
     (1.1.1.3 / 1.0.0.3) and blocks alternate/DoH resolvers so it can't be sidestepped by just
     picking a different one.
 
-    guardian-link builds a one-time setup URL to send to your Guardian: they open it, choose a
-    Mac account password and a phone PIN, and their browser encrypts each separately against this
-    Mac's and the phone's public key before it ever reaches the relay server -- so whoever runs
-    that server (even you) only ever sees ciphertext. guardian-claim then fetches and decrypts
-    the Mac's half and applies it directly; you never see the plaintext either. The phone claims
-    its own half independently, from the app.
+    The Guardian account password is set manually in System Settings (see GUARDIAN_SETUP.md);
+    the phone PIN is set manually on the device.
     """)
 }
 
@@ -131,65 +122,6 @@ Task {
     case "disable-dns":
         printResult(await client.disableDNSEnforcement())
 
-    case "guardian-pubkey":
-        if let key = await client.getGuardianSetupPublicKey() {
-            print(key)
-        } else {
-            print("Could not read/create this Mac's Guardian setup keypair.")
-        }
-
-    case "guardian-link":
-        guard arguments.count >= 4 else { printUsage(); finished = true; exit(1) }
-        let serverBase = arguments[2].hasSuffix("/") ? String(arguments[2].dropLast()) : arguments[2]
-        let phonePubKey = arguments[3]
-        guard let macPubKey = await client.getGuardianSetupPublicKey() else {
-            print("Could not read/create this Mac's Guardian setup keypair.")
-            finished = true
-            exit(1)
-        }
-        let token = randomURLSafeToken()
-        // NOT using URLComponents.queryItems here: it leaves `+` and `/` unescaped in query
-        // values (they're technically legal raw query characters per RFC 3986), but Flask/
-        // Werkzeug -- like most form-decoders -- treats a literal `+` in a query string as an
-        // encoded space. Standard base64 (used for both keys) is full of `+`/`/`, so that silently
-        // corrupted the public keys before they ever reached the browser, breaking `atob()` there.
-        // Percent-encoding every non-alphanumeric byte sidesteps that ambiguity entirely.
-        let url = "\(serverBase)/setup/\(token)?mac_pub=\(percentEncodeQueryValue(macPubKey))&phone_pub=\(percentEncodeQueryValue(phonePubKey))"
-        print("Send this link to your Guardian (expires in 30 minutes, single use):")
-        print(url)
-        print("")
-        print("Once they've submitted it, run:")
-        print("  focuslockctl guardian-claim \(serverBase) \(token)")
-
-    case "guardian-claim":
-        guard arguments.count >= 4 else { printUsage(); finished = true; exit(1) }
-        let serverBase = arguments[2].hasSuffix("/") ? String(arguments[2].dropLast()) : arguments[2]
-        let token = arguments[3]
-        guard let url = URL(string: "\(serverBase)/drop/\(token)/mac") else {
-            print("Invalid server URL.")
-            finished = true
-            exit(1)
-        }
-        do {
-            let (data, response) = try await URLSession.shared.data(from: url)
-            guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-                print("Nothing to claim yet -- has the Guardian submitted the link?")
-                finished = true
-                exit(1)
-            }
-            guard
-                let json = try? JSONSerialization.jsonObject(with: data) as? [String: String],
-                let ciphertext = json["ciphertext"]
-            else {
-                print("Malformed response from relay server.")
-                finished = true
-                exit(1)
-            }
-            printResult(await client.applyGuardianSetupCiphertext(ciphertext))
-        } catch {
-            print("Failed to reach relay server: \(error.localizedDescription)")
-        }
-
     default:
         printUsage()
     }
@@ -201,23 +133,4 @@ while !finished {
         exit(1)
     }
     RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.05))
-}
-
-/// Percent-encodes every byte outside RFC 3986's unreserved set (letters, digits, `-._~`). Unlike
-/// `URLComponents`/`addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)`, this also
-/// escapes `+` and `/` -- both legal in a raw query string but ambiguous once a form-decoder on
-/// the other end (e.g. Flask) is involved, since `+` conventionally means "space" there.
-func percentEncodeQueryValue(_ value: String) -> String {
-    var allowed = CharacterSet.alphanumerics
-    allowed.insert(charactersIn: "-._~")
-    return value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
-}
-
-func randomURLSafeToken() -> String {
-    var bytes = [UInt8](repeating: 0, count: 32)
-    _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
-    return Data(bytes).base64EncodedString()
-        .replacingOccurrences(of: "+", with: "-")
-        .replacingOccurrences(of: "/", with: "_")
-        .replacingOccurrences(of: "=", with: "")
 }

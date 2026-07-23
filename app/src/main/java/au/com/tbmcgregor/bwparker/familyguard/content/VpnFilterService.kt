@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.VpnService
 import android.os.ParcelFileDescriptor
 import android.util.Log
@@ -80,10 +81,22 @@ class VpnFilterService : VpnService() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (running.compareAndSet(false, true)) {
+        if (intent?.getBooleanExtra(EXTRA_REESTABLISH, false) == true) {
+            reestablish()
+        } else if (running.compareAndSet(false, true)) {
             startVpn()
         }
         return START_STICKY
+    }
+
+    /** Tears down the current tunnel and builds a fresh one so a changed bypass list (or blocklist)
+     * takes effect without fully stopping the service / dropping the always-on registration. */
+    private fun reestablish() {
+        workerJob?.cancel()
+        tunInterface?.let { runCatching { it.close() } }
+        tunInterface = null
+        running.set(true)
+        startVpn()
     }
 
     private fun startVpn() {
@@ -106,6 +119,9 @@ class VpnFilterService : VpnService() {
             // Data Saver / "restrict background data" (e.g. Spotify) get silently network-blocked
             // by netd over this VPN even though the underlying Wi-Fi/cellular network is unmetered.
             .setMetered(false)
+        // Apps the user has exempted (e.g. Android Auto) get routed over the normal network instead
+        // of captured here -- some apps simply break under any VPN.
+        applyBypassApps(builder)
 
         tunInterface = try {
             builder.establish()
@@ -122,6 +138,18 @@ class VpnFilterService : VpnService() {
         workerJob = scope.launch {
             runCatching { runPacketLoop(tun, blocklist) }
                 .onFailure { Log.e(TAG, "Packet loop crashed", it) }
+        }
+    }
+
+    private fun applyBypassApps(builder: Builder) {
+        val bypass = VpnBypassManager(applicationContext).bypassPackages()
+        bypass.forEach { pkg ->
+            try {
+                builder.addDisallowedApplication(pkg)
+                Log.i(TAG, "VPN bypass: $pkg routed outside the tunnel")
+            } catch (error: PackageManager.NameNotFoundException) {
+                Log.w(TAG, "VPN bypass app not installed, skipping: $pkg", error)
+            }
         }
     }
 
@@ -296,12 +324,22 @@ class VpnFilterService : VpnService() {
             "208.67.222.222", "208.67.220.220", // OpenDNS
         )
 
+        private const val EXTRA_REESTABLISH = "reestablish"
+
         fun start(context: Context) {
             context.startForegroundService(Intent(context, VpnFilterService::class.java))
         }
 
         fun stop(context: Context) {
             context.stopService(Intent(context, VpnFilterService::class.java))
+        }
+
+        /** Rebuilds the tunnel in place so a changed bypass/blocklist takes effect immediately,
+         * without dropping the always-on registration. No-op if the service isn't running. */
+        fun reestablish(context: Context) {
+            context.startForegroundService(
+                Intent(context, VpnFilterService::class.java).putExtra(EXTRA_REESTABLISH, true),
+            )
         }
     }
 }

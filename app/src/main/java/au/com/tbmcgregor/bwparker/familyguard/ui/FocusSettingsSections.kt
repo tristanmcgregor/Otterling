@@ -64,6 +64,8 @@ import au.com.tbmcgregor.bwparker.familyguard.focus.DetectedHabitManager
 import au.com.tbmcgregor.bwparker.familyguard.focus.HabitProofLog
 import au.com.tbmcgregor.bwparker.familyguard.focus.HabitProofManager
 import au.com.tbmcgregor.bwparker.familyguard.focus.HabitProofRequirement
+import au.com.tbmcgregor.bwparker.familyguard.focus.ImageMatcher
+import au.com.tbmcgregor.bwparker.familyguard.focus.ProofSettings
 import au.com.tbmcgregor.bwparker.familyguard.focus.HabitRule
 import au.com.tbmcgregor.bwparker.familyguard.focus.HabitRuleManager
 import au.com.tbmcgregor.bwparker.familyguard.focus.HabitShareApiClient
@@ -529,9 +531,11 @@ fun HabitShareVerificationSection(context: Context) {
     val coroutineScope = rememberCoroutineScope()
     val detectedHabitManager = remember { DetectedHabitManager(context) }
     val habitProofManager = remember { HabitProofManager(context) }
+    val proofSettings = remember { ProofSettings(context) }
     var refreshTrigger by remember { mutableIntStateOf(0) }
     var detectedHabits by remember { mutableStateOf<List<DetectedHabit>>(emptyList()) }
     var proofRequirements by remember { mutableStateOf<List<HabitProofRequirement>>(emptyList()) }
+    var sensitivity by remember { mutableStateOf(proofSettings.sensitivity()) }
 
     LaunchedEffect(refreshTrigger) {
         detectedHabits = detectedHabitManager.latest()
@@ -543,8 +547,33 @@ fun HabitShareVerificationSection(context: Context) {
         icon = Icons.Default.PhotoCamera,
         subtitle = "Tick a habit to require photo proof. When required, ticking it in HabitShare " +
             "isn't enough on its own -- it only counts toward unblocking an app once you've also " +
-            "taken a same-day photo that visually matches the reference photo you set here.",
+            "taken a same-day photo that visually matches a reference photo you set here.",
     ) {
+        Text("Match strictness", style = MaterialTheme.typography.bodyLarge)
+        Text(
+            "How closely a daily photo must match a reference. Stricter rejects more (harder to " +
+                "cheat); more lenient accepts more (fewer genuine photos refused).",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            ImageMatcher.Sensitivity.entries.forEach { option ->
+                val label = when (option) {
+                    ImageMatcher.Sensitivity.LENIENT -> "Lenient"
+                    ImageMatcher.Sensitivity.NORMAL -> "Normal"
+                    ImageMatcher.Sensitivity.STRICT -> "Strict"
+                }
+                if (option == sensitivity) {
+                    Button(onClick = {}) { Text(label) }
+                } else {
+                    OutlinedButton(onClick = {
+                        sensitivity = option
+                        proofSettings.setSensitivity(option)
+                    }) { Text(label) }
+                }
+            }
+        }
+        HorizontalDivider()
+
         if (detectedHabits.isEmpty()) {
             Text(
                 "No habits detected yet. Open HabitShare (or connect your account above) so your " +
@@ -873,22 +902,15 @@ fun HabitRulesSection(context: Context) {
     }
 }
 
-/** Path a reference photo for [habitName] always lives at -- stable per habit name so retaking it
- * just overwrites the same file, and so the same file survives being referenced from wherever this
- * row is shown (the rule-builder wizard, and the standalone detected-habits tuning list). */
-private fun referencePhotoFile(context: Context, habitName: String): File {
-    val dir = File(context.filesDir, "habit_proofs").apply { mkdirs() }
-    val safeName = habitName.replace(Regex("[^A-Za-z0-9]"), "_").take(60)
-    return File(dir, "reference_$safeName.jpg")
-}
-
 /**
  * "Requires image proof" checkbox for one habit: turning it on immediately opens the camera to
- * take the one-time reference photo (required before it can be turned on at all -- there's nothing
- * to compare against otherwise); turning it off clears the requirement. Shown both in the
- * rule-builder condition picker (per the user's request to set this up while adding a habit to a
- * rule) and in the standalone detected-habits tuning list, sharing the same underlying
- * [HabitProofRequirement] since multiple rules can gate on the same habit name.
+ * take a reference photo (required before it can be turned on at all -- there's nothing to compare
+ * against otherwise); turning it off clears the requirement and all reference photos. You can add
+ * several reference photos (e.g. different angles/lighting) -- a daily proof only has to match any
+ * one of them, which makes genuine matches far more forgiving without loosening the threshold.
+ * Shown both in the rule-builder condition picker and in the standalone detected-habits tuning
+ * list, sharing the same underlying [HabitProofRequirement] since multiple rules can gate on the
+ * same habit name.
  */
 @Composable
 private fun ProofRequirementRow(
@@ -898,53 +920,86 @@ private fun ProofRequirementRow(
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
-    val referencePath = requirement?.referencePhotoPath
-    // A row flagged required but missing its reference photo (e.g. a relic of an older build that
-    // allowed enabling proof without one) can never actually be satisfied -- show it unchecked so
-    // the checkbox accurately reflects "not really configured yet" and re-checking it walks
-    // through taking a reference photo again.
-    val required = requirement?.required == true && !referencePath.isNullOrBlank()
-    val targetFile = remember(habitName) { referencePhotoFile(context, habitName) }
-    val targetUri = remember(targetFile) {
-        FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", targetFile)
+    var refVersion by remember(habitName) { mutableIntStateOf(0) }
+    val references = remember(habitName, refVersion, requirement?.referencePhotoPath) {
+        HabitProofManager.referenceFiles(context, habitName, requirement?.referencePhotoPath)
+    }
+    // A row flagged required but with no readable reference photo (e.g. a relic of an older build)
+    // can never be satisfied -- show it unchecked so re-checking walks through capturing one again.
+    val required = requirement?.required == true && references.isNotEmpty()
+
+    var pendingCapture by remember { mutableStateOf<File?>(null) }
+    val takeReferencePhoto = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
+        val target = pendingCapture
+        pendingCapture = null
+        if (success && target != null) {
+            refVersion++
+            onSetRequirement(true, target.absolutePath)
+        }
     }
 
-    val takeReferencePhoto = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
-        if (success) onSetRequirement(true, targetFile.absolutePath)
+    fun captureReference() {
+        val target = HabitProofManager.newReferenceFile(context, habitName)
+        pendingCapture = target
+        val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", target)
+        takeReferencePhoto.launch(uri)
     }
 
     Column(modifier = modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier.fillMaxWidth().clickable {
-                if (required) onSetRequirement(false, null) else takeReferencePhoto.launch(targetUri)
+                if (required) {
+                    HabitProofManager.clearReferences(context, habitName)
+                    refVersion++
+                    onSetRequirement(false, null)
+                } else {
+                    captureReference()
+                }
             },
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Checkbox(
                 checked = required,
                 onCheckedChange = { checked ->
-                    if (checked) takeReferencePhoto.launch(targetUri) else onSetRequirement(false, null)
+                    if (checked) {
+                        captureReference()
+                    } else {
+                        HabitProofManager.clearReferences(context, habitName)
+                        refVersion++
+                        onSetRequirement(false, null)
+                    }
                 },
             )
             Text("Requires image proof (must match a reference photo)", style = MaterialTheme.typography.bodySmall)
         }
-        if (required && referencePath != null) {
-            val bitmap = remember(referencePath) {
-                runCatching {
-                    BitmapFactory.Options().apply { inSampleSize = 4 }
-                        .let { opts -> BitmapFactory.decodeFile(referencePath, opts) }
-                }.getOrNull()
-            }
-            Row(modifier = Modifier.padding(start = 40.dp), verticalAlignment = Alignment.CenterVertically) {
-                if (bitmap != null) {
-                    Image(
-                        bitmap = bitmap.asImageBitmap(),
-                        contentDescription = "Reference photo for $habitName",
-                        modifier = Modifier.height(56.dp),
-                    )
+        if (required) {
+            Column(modifier = Modifier.padding(start = 40.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                references.forEach { ref ->
+                    val bitmap = remember(ref.absolutePath, ref.lastModified()) {
+                        runCatching {
+                            BitmapFactory.Options().apply { inSampleSize = 4 }
+                                .let { opts -> BitmapFactory.decodeFile(ref.absolutePath, opts) }
+                        }.getOrNull()
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (bitmap != null) {
+                            Image(
+                                bitmap = bitmap.asImageBitmap(),
+                                contentDescription = "Reference photo for $habitName",
+                                modifier = Modifier.height(56.dp),
+                            )
+                        }
+                        TextButton(onClick = {
+                            HabitProofManager.deleteReference(ref)
+                            refVersion++
+                            val remaining = HabitProofManager.referenceFiles(context, habitName)
+                            if (remaining.isEmpty()) onSetRequirement(false, null)
+                            else onSetRequirement(true, remaining.first().absolutePath)
+                        }) { Text("Remove") }
+                    }
                 }
-                TextButton(onClick = { takeReferencePhoto.launch(targetUri) }) {
-                    Text("Retake reference photo")
+                TextButton(onClick = { captureReference() }) {
+                    Text("Add another reference photo")
                 }
             }
         }

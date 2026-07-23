@@ -15,17 +15,8 @@ This doc is the one-time setup to get there, plus the honest limits of the model
    types in themselves** -- don't let them tell it to you even temporarily.
 4. Finish creation while logged in as your current (still-admin) account.
 
-### 1b. Setting/resetting the Guardian password remotely
-
-If the Guardian isn't physically present (or you want a way to have them reset the password
-later without visiting), `focuslockctl guardian-link`/`guardian-claim` do this over a one-time
-link instead -- see `server/README.md` at the repo root for the full flow. In short: you run
-`focuslockctl guardian-link <relay-url> <phone-pubkey>` to get a link, send it to the Guardian,
-they open it and type a password (creating the account if it doesn't exist yet, or resetting it if
-it does) and a phone PIN, and their browser encrypts each separately before it ever reaches the
-relay server -- so even if you administer that server yourself, you only ever see ciphertext.
-`focuslockctl guardian-claim` then fetches and applies the Mac's half; the phone app claims its own
-half independently. You never see the plaintext at any point in this flow.
+The Guardian sets and resets this password manually here in System Settings, and sets the phone
+app's PIN by typing it in on the device directly.
 
 ## 2. Demote your own account to Standard
 

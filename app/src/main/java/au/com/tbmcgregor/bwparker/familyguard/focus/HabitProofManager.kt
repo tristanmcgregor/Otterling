@@ -2,6 +2,7 @@ package au.com.tbmcgregor.bwparker.familyguard.focus
 
 import android.content.Context
 import au.com.tbmcgregor.bwparker.familyguard.data.AppDatabase
+import java.io.File
 import java.time.LocalDate
 
 /**
@@ -92,5 +93,38 @@ class HabitProofManager(context: Context) {
         val loggedToday = dao.logsForDate(today).map { it.habitName.lowercase() }.toSet()
         val requiredLower = requirements.map { it.habitName.lowercase() }.toSet()
         return doneNamesRaw.filter { it.lowercase() in requiredLower && it.lowercase() !in loggedToday }
+    }
+
+    companion object {
+        /** Per-habit directory holding every reference photo captured for it. Multiple references
+         * (e.g. different angles) make genuine matches far more forgiving without loosening the
+         * similarity threshold, which is the biggest single win against false rejects. */
+        fun referenceDir(context: Context, habitName: String): File {
+            val safeName = habitName.trim().replace(Regex("[^A-Za-z0-9]"), "_").take(60)
+            return File(File(context.filesDir, "habit_refs"), safeName).apply { mkdirs() }
+        }
+
+        /** All readable reference photos for [habitName], newest first. Migrates a legacy single
+         * reference at [legacyPrimaryPath] into the per-habit dir if the dir is otherwise empty. */
+        fun referenceFiles(context: Context, habitName: String, legacyPrimaryPath: String? = null): List<File> {
+            val dir = referenceDir(context, habitName)
+            val inDir = dir.listFiles { f -> f.isFile && f.length() > 0 }?.toList().orEmpty()
+            if (inDir.isNotEmpty()) return inDir.sortedByDescending { it.lastModified() }
+            val legacy = legacyPrimaryPath?.let(::File)
+            return if (legacy != null && legacy.exists() && legacy.length() > 0) listOf(legacy) else emptyList()
+        }
+
+        /** A fresh file path to capture the next reference photo into. */
+        fun newReferenceFile(context: Context, habitName: String): File =
+            File(referenceDir(context, habitName), "ref_${System.currentTimeMillis()}.jpg")
+
+        /** Deletes every reference photo for [habitName]. */
+        fun clearReferences(context: Context, habitName: String) {
+            referenceDir(context, habitName).listFiles()?.forEach { it.delete() }
+        }
+
+        fun deleteReference(file: File) {
+            runCatching { file.delete() }
+        }
     }
 }

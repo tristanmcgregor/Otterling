@@ -36,6 +36,7 @@ class FocusGuardAccessibilityService : AccessibilityService() {
     private var tickJob: Job? = null
     private var currentPackage: String? = null
     private var triggerPackages: Set<String> = emptySet()
+    private var lastReelsBounceMillis = 0L
 
     private lateinit var mindfulAppManager: MindfulAppManager
     private lateinit var budgetManager: AppTimeBudgetManager
@@ -68,6 +69,49 @@ class FocusGuardAccessibilityService : AccessibilityService() {
         if (packageName in triggerPackages) {
             scope.launch { scanHabitTracker(packageName) }
         }
+
+        // Facebook stays usable; only its full-screen Reels player gets bounced. Checked on every
+        // content change (not just app switch) because you can swipe into Reels without leaving
+        // Facebook, so there's no window-state-change event to key off.
+        if (packageName in FACEBOOK_PACKAGES) {
+            blockReelsIfPresent()
+        }
+    }
+
+    /** Presses Back to leave the Reels player the moment it's detected, keeping the rest of
+     * Facebook available. Debounced so a single detection doesn't fire a burst of Back presses
+     * before the UI has had a chance to transition away. */
+    private fun blockReelsIfPresent() {
+        val now = System.currentTimeMillis()
+        if (now - lastReelsBounceMillis < REELS_BOUNCE_DEBOUNCE_MS) return
+        val root = rootInActiveWindow ?: return
+        val screenHeight = resources.displayMetrics.heightPixels
+        if (!hasReelsTitleAtTop(root, screenHeight)) return
+        lastReelsBounceMillis = now
+        Log.d(TAG, "Facebook Reels title detected at top -- bouncing")
+        performGlobalAction(GLOBAL_ACTION_BACK)
+        Toast.makeText(applicationContext, "Reels is blocked.", Toast.LENGTH_SHORT).show()
+    }
+
+    /**
+     * True if a "Reels" title sits near the very top of the screen -- the header the Reels player
+     * shows. Deliberately position-gated so it ignores the feed's inline reel previews (mid/lower
+     * screen) and the bottom-nav "Reels" tab, which would otherwise make this fire on the normal
+     * feed too. Matches text or content-description equal to "Reels" (allowing a small amount of
+     * surrounding text, e.g. "Reels").
+     */
+    private fun hasReelsTitleAtTop(node: AccessibilityNodeInfo, screenHeight: Int): Boolean {
+        val label = node.text?.toString()?.trim() ?: node.contentDescription?.toString()?.trim()
+        if (label != null && REELS_TITLE_PATTERN.matches(label)) {
+            val bounds = Rect()
+            node.getBoundsInScreen(bounds)
+            if (!bounds.isEmpty && bounds.top < screenHeight * REELS_TITLE_TOP_FRACTION) return true
+        }
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            if (hasReelsTitleAtTop(child, screenHeight)) return true
+        }
+        return false
     }
 
     private fun onForegroundChanged(packageName: String) {
@@ -350,5 +394,15 @@ class FocusGuardAccessibilityService : AccessibilityService() {
         const val GREEN_DOMINANCE_THRESHOLD = 15
         val SUB_FEATURE_HINTS = listOf("shorts", "reel")
         val HABIT_ROW_NAME_PATTERN = Regex("""^(.+?),\s*Streak:""")
+
+        // Facebook (main app + Lite) -- Reels blocking is scoped to these so the rest of the app
+        // keeps working normally.
+        val FACEBOOK_PACKAGES = setOf("com.facebook.katana", "com.facebook.lite")
+        const val REELS_BOUNCE_DEBOUNCE_MS = 1_200L
+        // The Reels player shows a "Reels" title in the top bar; only a title within this fraction
+        // of the screen height from the top counts, so the feed's inline previews / bottom tab
+        // don't trigger it.
+        const val REELS_TITLE_TOP_FRACTION = 0.15
+        val REELS_TITLE_PATTERN = Regex("""^reels$""", RegexOption.IGNORE_CASE)
     }
 }

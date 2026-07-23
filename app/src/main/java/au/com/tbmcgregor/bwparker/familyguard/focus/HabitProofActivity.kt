@@ -77,6 +77,8 @@ class HabitProofActivity : ComponentActivity() {
         val file = File(dir, "${safeName}_${System.currentTimeMillis()}.jpg")
         val photoUri: Uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
         val manager = HabitProofManager(applicationContext)
+        // Load the embedding model in the background so the first comparison isn't slowed by it.
+        lifecycleScope.launch(Dispatchers.Default) { ImageMatcher.warmUp(applicationContext) }
 
         setContent {
             var matchState by remember { mutableStateOf<ProofMatchState>(ProofMatchState.Idle) }
@@ -88,13 +90,17 @@ class HabitProofActivity : ComponentActivity() {
                 matchState = ProofMatchState.Checking
                 lifecycleScope.launch {
                     preview = withContext(Dispatchers.IO) { decodeShrunk(file) }
-                    val referencePath = manager.requirement(habitName)?.referencePhotoPath
-                    if (referencePath == null) {
+                    val requirement = manager.requirement(habitName)
+                    val references = withContext(Dispatchers.IO) {
+                        HabitProofManager.referenceFiles(applicationContext, habitName, requirement?.referencePhotoPath)
+                    }
+                    if (references.isEmpty()) {
                         referenceMissing = true
                         return@launch
                     }
+                    val sensitivity = ProofSettings(applicationContext).sensitivity()
                     val matches = withContext(Dispatchers.Default) {
-                        ImageMatcher.isMatch(file, File(referencePath))
+                        ImageMatcher.isMatch(applicationContext, file, references, sensitivity)
                     }
                     if (matches) {
                         manager.recordProof(habitName, file.absolutePath)
@@ -194,7 +200,9 @@ private fun HabitProofScreen(
             }
             ProofMatchState.NoMatch -> {
                 Text(
-                    "Doesn't match your reference photo -- try again.",
+                    "That doesn't look close enough to your reference photo. Frame it more like the " +
+                        "reference and retake. (You can add more reference angles, or lower the match " +
+                        "strictness, under HabitShare settings.)",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.error,
                     textAlign = TextAlign.Center,
