@@ -395,6 +395,164 @@ private sealed class HabitRuleWizardStep {
 }
 
 /**
+ * Reusable rule wizard. Render it only while a wizard is requested; a null [ruleToEdit] creates a
+ * new rule, while Settings may pass an existing rule to preserve its edit behavior.
+ */
+@Composable
+fun HabitRuleWizardHost(
+    context: Context,
+    ruleToEdit: HabitRule? = null,
+    onDismiss: () -> Unit,
+    onSaved: () -> Unit,
+) {
+    val coroutineScope = rememberCoroutineScope()
+    val ruleManager = remember { HabitRuleManager(context) }
+    val detectedHabitManager = remember { DetectedHabitManager(context) }
+    val proofManager = remember { HabitProofManager(context) }
+    var installedApps by remember { mutableStateOf<List<InstalledAppInfo>>(emptyList()) }
+    var detectedHabits by remember { mutableStateOf<List<DetectedHabit>>(emptyList()) }
+    var proofRequirements by remember { mutableStateOf<List<HabitProofRequirement>>(emptyList()) }
+    var wizardStep by remember { mutableStateOf<HabitRuleWizardStep?>(null) }
+
+    LaunchedEffect(ruleToEdit?.id) {
+        installedApps = withContext(Dispatchers.IO) { loadInstalledApps(context) }
+        detectedHabits = detectedHabitManager.latest()
+        proofRequirements = proofManager.requirements()
+        val edit = ruleToEdit?.let { rule ->
+            HabitRuleEditContext(
+                editingId = rule.id,
+                initialHabitNames = rule.requiredHabitNames(),
+                initialWindowStart = rule.windowStartMinute,
+                initialWindowEnd = rule.windowEndMinute,
+                initialDaysOfWeekMask = rule.daysOfWeekMask,
+                initialTargetPackageName = rule.targetPackageName,
+                initialUnlockMinutes = rule.unlockMinutes.takeIf { it > 0 } ?: 30,
+            )
+        }
+        wizardStep = HabitRuleWizardStep.PickCondition(edit, habitShareAppInfo(installedApps))
+    }
+
+    when (val step = wizardStep) {
+        is HabitRuleWizardStep.PickCondition -> HabitConditionPickerDialog(
+            detectedHabits = detectedHabits,
+            initialHabitNames = step.edit?.initialHabitNames ?: emptyList(),
+            proofRequirements = proofRequirements,
+            onSetProofRequirement = { habitName, required, referencePhotoPath ->
+                coroutineScope.launch {
+                    proofManager.setRequirement(habitName, required, referencePhotoPath)
+                    proofRequirements = proofManager.requirements()
+                }
+            },
+            onDismiss = onDismiss,
+            onSelect = { habitNames ->
+                wizardStep = if (habitNames.isEmpty()) {
+                    HabitRuleWizardStep.PickTarget(
+                        step.edit, step.trigger, habitNames, null, null, DayOfWeek.entries.toSet(),
+                    )
+                } else {
+                    HabitRuleWizardStep.PickWindow(step.edit, step.trigger, habitNames)
+                }
+            },
+            onSelectTimeOnly = {
+                wizardStep = HabitRuleWizardStep.PickWindow(step.edit, step.trigger, emptyList())
+            },
+        )
+        is HabitRuleWizardStep.PickWindow -> HabitWindowPickerDialog(
+            habitNames = step.habitNames,
+            initialWindowStart = step.edit?.initialWindowStart,
+            initialWindowEnd = step.edit?.initialWindowEnd,
+            initialDaysOfWeek = step.edit?.initialDaysOfWeekMask?.let(::decodeDaysOfWeek),
+            onDismiss = onDismiss,
+            onSelect = { start, end, days ->
+                wizardStep = HabitRuleWizardStep.PickTarget(
+                    step.edit, step.trigger, step.habitNames, start, end, days,
+                )
+            },
+        )
+        is HabitRuleWizardStep.PickTarget -> AppPickerDialog(
+            apps = installedApps,
+            initialQuery = installedApps
+                .find { it.packageName == step.edit?.initialTargetPackageName }?.label.orEmpty(),
+            onDismiss = onDismiss,
+            onSelect = { target ->
+                wizardStep = HabitRuleWizardStep.Confirm(
+                    step.edit,
+                    step.trigger,
+                    step.habitNames,
+                    step.windowStartMinute,
+                    step.windowEndMinute,
+                    step.daysOfWeek,
+                    target,
+                )
+            },
+        )
+        is HabitRuleWizardStep.Confirm -> {
+            val start = step.windowStartMinute
+            val end = step.windowEndMinute
+            val editingId = step.edit?.editingId
+            val save: suspend (Int) -> Unit = { minutes ->
+                if (editingId == null) {
+                    ruleManager.addRule(
+                        step.trigger.packageName,
+                        step.target.packageName,
+                        minutes,
+                        step.habitNames,
+                        start,
+                        end,
+                        step.daysOfWeek,
+                    )
+                } else {
+                    ruleManager.updateRule(
+                        editingId,
+                        step.trigger.packageName,
+                        step.target.packageName,
+                        minutes,
+                        step.habitNames,
+                        start,
+                        end,
+                        step.daysOfWeek,
+                    )
+                }
+            }
+            if (start != null && end != null) {
+                HabitRuleWindowConfirmDialog(
+                    triggerLabel = step.trigger.label,
+                    habitNames = step.habitNames,
+                    windowStartMinute = start,
+                    windowEndMinute = end,
+                    daysOfWeek = step.daysOfWeek,
+                    targetLabel = step.target.label,
+                    isEditing = editingId != null,
+                    onDismiss = onDismiss,
+                    onConfirm = {
+                        coroutineScope.launch {
+                            save(0)
+                            onSaved()
+                        }
+                    },
+                )
+            } else {
+                HabitRuleMinutesDialog(
+                    triggerLabel = step.trigger.label,
+                    habitNames = step.habitNames,
+                    targetLabel = step.target.label,
+                    initialMinutes = step.edit?.initialUnlockMinutes ?: 30,
+                    isEditing = editingId != null,
+                    onDismiss = onDismiss,
+                    onConfirm = { minutes ->
+                        coroutineScope.launch {
+                            save(minutes)
+                            onSaved()
+                        }
+                    },
+                )
+            }
+        }
+        null -> Unit
+    }
+}
+
+/**
  * Full-screen HabitShare settings hub reached from the main Settings list. Groups everything
  * habit-related that used to be scattered inline: the account connection, per-habit image
  * verification, and the rule command-builder.
@@ -614,7 +772,8 @@ fun HabitRulesSection(context: Context) {
     var detectedHabits by remember { mutableStateOf<List<DetectedHabit>>(emptyList()) }
     var proofRequirements by remember { mutableStateOf<List<HabitProofRequirement>>(emptyList()) }
     var proofLogs by remember { mutableStateOf<List<HabitProofLog>>(emptyList()) }
-    var wizardStep by remember { mutableStateOf<HabitRuleWizardStep?>(null) }
+    var wizardOpen by remember { mutableStateOf(false) }
+    var wizardRule by remember { mutableStateOf<HabitRule?>(null) }
     var showDetected by remember { mutableStateOf(false) }
     var showProofLog by remember { mutableStateOf(false) }
 
@@ -631,138 +790,16 @@ fun HabitRulesSection(context: Context) {
     fun appLabel(packageName: String): String =
         installedApps.find { it.packageName == packageName }?.label ?: packageName
 
-    when (val step = wizardStep) {
-        is HabitRuleWizardStep.PickCondition -> HabitConditionPickerDialog(
-            detectedHabits = detectedHabits,
-            initialHabitNames = step.edit?.initialHabitNames ?: emptyList(),
-            proofRequirements = proofRequirements,
-            onSetProofRequirement = { habitName, required, referencePhotoPath ->
-                coroutineScope.launch {
-                    habitProofManager.setRequirement(habitName, required, referencePhotoPath)
-                    proofRequirements = habitProofManager.requirements()
-                }
-            },
-            onDismiss = { wizardStep = null },
-            onSelect = { habitNames ->
-                // Time windows only make sense (and are only checkable outside a live scan) when
-                // gating on specific habit(s), not the "any/all habits" whole-tracker pattern.
-                wizardStep = if (habitNames.isEmpty()) {
-                    HabitRuleWizardStep.PickTarget(step.edit, step.trigger, habitNames, null, null, DayOfWeek.entries.toSet())
-                } else {
-                    HabitRuleWizardStep.PickWindow(step.edit, step.trigger, habitNames)
-                }
-            },
-            onSelectTimeOnly = {
-                // No habit condition at all -- always blocked for a chosen time window (e.g. "no
-                // phone before 9am"). Goes straight to the window picker; there's no "always"
-                // option for this path since an unconditional, un-windowed rule would just be a
-                // permanent block with no way to ever unlock it.
-                wizardStep = HabitRuleWizardStep.PickWindow(step.edit, step.trigger, emptyList())
+    if (wizardOpen) {
+        HabitRuleWizardHost(
+            context = context,
+            ruleToEdit = wizardRule,
+            onDismiss = { wizardOpen = false },
+            onSaved = {
+                wizardOpen = false
+                refreshTrigger++
             },
         )
-        is HabitRuleWizardStep.PickWindow -> HabitWindowPickerDialog(
-            habitNames = step.habitNames,
-            initialWindowStart = step.edit?.initialWindowStart,
-            initialWindowEnd = step.edit?.initialWindowEnd,
-            initialDaysOfWeek = step.edit?.initialDaysOfWeekMask?.let(::decodeDaysOfWeek),
-            onDismiss = { wizardStep = null },
-            onSelect = { start, end, daysOfWeek ->
-                wizardStep = HabitRuleWizardStep.PickTarget(step.edit, step.trigger, step.habitNames, start, end, daysOfWeek)
-            },
-        )
-        is HabitRuleWizardStep.PickTarget -> AppPickerDialog(
-            apps = installedApps,
-            initialQuery = installedApps.find { it.packageName == step.edit?.initialTargetPackageName }?.label ?: "",
-            onDismiss = { wizardStep = null },
-            onSelect = { app ->
-                wizardStep = HabitRuleWizardStep.Confirm(
-                    step.edit,
-                    step.trigger,
-                    step.habitNames,
-                    step.windowStartMinute,
-                    step.windowEndMinute,
-                    step.daysOfWeek,
-                    app,
-                )
-            },
-        )
-        is HabitRuleWizardStep.Confirm -> {
-            val windowStart = step.windowStartMinute
-            val windowEnd = step.windowEndMinute
-            val editingId = step.edit?.editingId
-            if (windowStart != null && windowEnd != null) {
-                HabitRuleWindowConfirmDialog(
-                    triggerLabel = step.trigger.label,
-                    habitNames = step.habitNames,
-                    windowStartMinute = windowStart,
-                    windowEndMinute = windowEnd,
-                    daysOfWeek = step.daysOfWeek,
-                    targetLabel = step.target.label,
-                    isEditing = editingId != null,
-                    onDismiss = { wizardStep = null },
-                    onConfirm = {
-                        coroutineScope.launch {
-                            if (editingId != null) {
-                                habitRuleManager.updateRule(
-                                    id = editingId,
-                                    triggerPackageName = step.trigger.packageName,
-                                    targetPackageName = step.target.packageName,
-                                    unlockMinutes = 0,
-                                    requiredHabitNames = step.habitNames,
-                                    windowStartMinute = windowStart,
-                                    windowEndMinute = windowEnd,
-                                    daysOfWeek = step.daysOfWeek,
-                                )
-                            } else {
-                                habitRuleManager.addRule(
-                                    triggerPackageName = step.trigger.packageName,
-                                    targetPackageName = step.target.packageName,
-                                    unlockMinutes = 0,
-                                    requiredHabitNames = step.habitNames,
-                                    windowStartMinute = windowStart,
-                                    windowEndMinute = windowEnd,
-                                    daysOfWeek = step.daysOfWeek,
-                                )
-                            }
-                            refreshTrigger++
-                        }
-                        wizardStep = null
-                    },
-                )
-            } else {
-                HabitRuleMinutesDialog(
-                    triggerLabel = step.trigger.label,
-                    habitNames = step.habitNames,
-                    targetLabel = step.target.label,
-                    initialMinutes = step.edit?.initialUnlockMinutes ?: 30,
-                    isEditing = editingId != null,
-                    onDismiss = { wizardStep = null },
-                    onConfirm = { minutes ->
-                        coroutineScope.launch {
-                            if (editingId != null) {
-                                habitRuleManager.updateRule(
-                                    id = editingId,
-                                    triggerPackageName = step.trigger.packageName,
-                                    targetPackageName = step.target.packageName,
-                                    unlockMinutes = minutes,
-                                    requiredHabitNames = step.habitNames,
-                                )
-                            } else {
-                                habitRuleManager.addRule(
-                                    step.trigger.packageName,
-                                    step.target.packageName,
-                                    minutes,
-                                    step.habitNames,
-                                )
-                            }
-                            refreshTrigger++
-                        }
-                        wizardStep = null
-                    },
-                )
-            }
-        }
-        null -> {}
     }
 
     SectionCard(
@@ -775,13 +812,8 @@ fun HabitRulesSection(context: Context) {
             "unlock window then counts down automatically.",
     ) {
         Button(onClick = {
-            coroutineScope.launch {
-                if (installedApps.isEmpty()) {
-                    installedApps = withContext(Dispatchers.IO) { loadInstalledApps(context) }
-                }
-                detectedHabits = detectedHabitManager.latest()
-                wizardStep = HabitRuleWizardStep.PickCondition(edit = null, trigger = habitShareAppInfo(installedApps))
-            }
+            wizardRule = null
+            wizardOpen = true
         }) {
             Text("Add rule")
         }
@@ -798,24 +830,8 @@ fun HabitRulesSection(context: Context) {
                         targetLabel = appLabel(rule.targetPackageName),
                         now = now,
                         onEdit = {
-                            coroutineScope.launch {
-                                if (installedApps.isEmpty()) {
-                                    installedApps = withContext(Dispatchers.IO) { loadInstalledApps(context) }
-                                }
-                                detectedHabits = detectedHabitManager.latest()
-                                wizardStep = HabitRuleWizardStep.PickCondition(
-                                    edit = HabitRuleEditContext(
-                                        editingId = rule.id,
-                                        initialHabitNames = rule.requiredHabitNames(),
-                                        initialWindowStart = rule.windowStartMinute,
-                                        initialWindowEnd = rule.windowEndMinute,
-                                        initialDaysOfWeekMask = rule.daysOfWeekMask,
-                                        initialTargetPackageName = rule.targetPackageName,
-                                        initialUnlockMinutes = rule.unlockMinutes.takeIf { it > 0 } ?: 30,
-                                    ),
-                                    trigger = habitShareAppInfo(installedApps),
-                                )
-                            }
+                            wizardRule = rule
+                            wizardOpen = true
                         },
                         onEnabledChange = { enabled ->
                             coroutineScope.launch {

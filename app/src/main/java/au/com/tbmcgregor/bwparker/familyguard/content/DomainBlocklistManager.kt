@@ -13,6 +13,7 @@ import java.net.URL
 class DomainBlocklistManager(private val context: Context) {
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     private val blocklistFile = File(context.filesDir, "blocked_domains.txt")
+    private val customBlocklist = CustomBlocklistManager(context)
 
     @Volatile
     private var cachedDomains: Set<String>? = null
@@ -20,10 +21,11 @@ class DomainBlocklistManager(private val context: Context) {
     /** True if [hostname] or any of its parent domains is on the blocklist. */
     fun isBlocked(hostname: String): Boolean {
         val domains = loadedDomains()
-        if (domains.isEmpty()) return false
+        val customDomains = customBlocklist.domains()
+        if (domains.isEmpty() && customDomains.isEmpty()) return false
         var candidate = hostname.lowercase().trimEnd('.')
         while (candidate.isNotEmpty()) {
-            if (candidate in domains) return true
+            if (candidate in domains || candidate in customDomains) return true
             val dotIndex = candidate.indexOf('.')
             if (dotIndex == -1) break
             candidate = candidate.substring(dotIndex + 1)

@@ -6,6 +6,7 @@ import android.content.Context
 import android.util.Log
 import au.com.tbmcgregor.bwparker.familyguard.admin.DeviceAdminReceiverImpl
 import au.com.tbmcgregor.bwparker.familyguard.data.AppDatabase
+import au.com.tbmcgregor.bwparker.familyguard.tamper.TamperEventLogger
 import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.LocalTime
@@ -36,6 +37,7 @@ class HabitRuleManager(context: Context) {
     private val dao = AppDatabase.getInstance(context).habitRuleDao()
     private val detectedHabitDao = AppDatabase.getInstance(context).detectedHabitDao()
     private val proofManager = HabitProofManager(context)
+    private val tamperEventLogger = TamperEventLogger(context)
     private val devicePolicyManager: DevicePolicyManager? =
         context.getSystemService(DevicePolicyManager::class.java)
     private val adminComponent = ComponentName(context, DeviceAdminReceiverImpl::class.java)
@@ -186,6 +188,12 @@ class HabitRuleManager(context: Context) {
             if (!fires) return@forEach
             val newUntil = maxOf(rule.unlockUntilMillis, now) + rule.unlockMinutes * 60_000L
             dao.update(rule.copy(lastGrantedEpochDay = today, unlockUntilMillis = newUntil))
+            val condition = required.takeIf { it.isNotEmpty() }?.joinToString()
+                ?: "all habits"
+            tamperEventLogger.log(
+                type = "HABIT_UNLOCK",
+                details = "Unlocked ${rule.targetPackageName} for ${rule.unlockMinutes} minutes after $condition.",
+            )
             grantedCount++
         }
         if (grantedCount > 0) reapplyAll()

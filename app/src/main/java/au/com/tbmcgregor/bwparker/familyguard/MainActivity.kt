@@ -59,6 +59,8 @@ import au.com.tbmcgregor.bwparker.familyguard.tamper.TamperEvent
 import au.com.tbmcgregor.bwparker.familyguard.tamper.TamperEventLogger
 import au.com.tbmcgregor.bwparker.familyguard.ui.AccessibilityServiceSection
 import au.com.tbmcgregor.bwparker.familyguard.ui.AppPickerDialog
+import au.com.tbmcgregor.bwparker.familyguard.ui.BlockedWebsitesSettingsSection
+import au.com.tbmcgregor.bwparker.familyguard.ui.DashboardScreen
 import au.com.tbmcgregor.bwparker.familyguard.ui.HabitShareSettingsScreen
 import au.com.tbmcgregor.bwparker.familyguard.ui.InstalledAppInfo
 import au.com.tbmcgregor.bwparker.familyguard.ui.MindfulAppsSection
@@ -98,7 +100,10 @@ class MainActivity : ComponentActivity() {
                     val pinAuthManager = remember { PinAuthManager(applicationContext) }
 
                     when (screen) {
-                        Screen.Home -> HomeScreen(onOpenSettings = { screen = Screen.PinEntry })
+                        Screen.Home -> DashboardScreen(
+                            context = applicationContext,
+                            onOpenSettings = { screen = Screen.PinEntry },
+                        )
                         Screen.PinEntry -> PinLockScreen(
                             pinAuthManager = pinAuthManager,
                             onUnlocked = { screen = Screen.Settings },
@@ -116,6 +121,7 @@ class MainActivity : ComponentActivity() {
                             UninstallProtectionSection()
                             ContentFilterSection()
                             VpnFilterSection(applicationContext)
+                            BlockedWebsitesSettingsSection(applicationContext)
                             AccessibilityServiceSection(applicationContext)
                             MindfulAppsSection(applicationContext)
                             TimeBudgetsSection(applicationContext)
