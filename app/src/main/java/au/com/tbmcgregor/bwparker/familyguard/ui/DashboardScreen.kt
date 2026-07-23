@@ -312,11 +312,13 @@ private fun RecentActivity(data: DashboardData, now: Long) {
         }
         (tamperItems + proofItems).sortedByDescending { it.timestamp }.take(30)
     }
+    var expanded by remember { mutableStateOf(false) }
     SectionCard(title = "Recent activity", icon = Icons.Default.History) {
         if (items.isEmpty()) {
             Text("No recent activity.", style = MaterialTheme.typography.bodySmall)
         } else {
-            items.forEachIndexed { index, item ->
+            val visible = if (expanded) items else items.take(RECENT_ACTIVITY_COLLAPSED_LIMIT)
+            visible.forEachIndexed { index, item ->
                 if (index > 0) HorizontalDivider()
                 Text(item.title, style = MaterialTheme.typography.titleSmall)
                 Text(item.details, style = MaterialTheme.typography.bodySmall)
@@ -326,9 +328,16 @@ private fun RecentActivity(data: DashboardData, now: Long) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+            if (items.size > RECENT_ACTIVITY_COLLAPSED_LIMIT) {
+                TextButton(onClick = { expanded = !expanded }) {
+                    Text(if (expanded) "Show less" else "Show more (${items.size - RECENT_ACTIVITY_COLLAPSED_LIMIT})")
+                }
+            }
         }
     }
 }
+
+private const val RECENT_ACTIVITY_COLLAPSED_LIMIT = 3
 
 @Composable
 fun BlockedWebsitesSettingsSection(context: Context) {
