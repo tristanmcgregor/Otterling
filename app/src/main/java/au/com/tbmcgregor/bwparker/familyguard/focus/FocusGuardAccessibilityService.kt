@@ -21,23 +21,29 @@ import kotlinx.coroutines.withContext
  * One shared accessibility service backing all the self-improvement features: it watches which
  * app is in the foreground and (a) shows [FrictionActivity] before "mindful" apps and (b) ticks
  * [AppTimeBudgetManager] counters and heuristically detects YouTube-Shorts-style sub-features for
- * time budgets, plus bounces the Facebook Reels player. Habit detection itself is handled entirely
- * by the HabitShare REST API (see [HabitShareSyncManager]), not this service. Must be enabled
+ * time budgets, plus bounces the Facebook Reels player. Habit completion data comes entirely from
+ * the HabitShare REST API (see [HabitShareSyncManager]); this service doesn't read the screen for
+ * it, but it does use its foreground-app knowledge to poll that API once a second *while HabitShare
+ * itself is open* (see [startHabitPolling]) so a habit ticked in HabitShare unblocks its gated app
+ * almost immediately, instead of waiting up to the background sync interval. Must be enabled
  * manually by the user in Settings > Accessibility -- there's no way to grant this programmatically.
  */
 class FocusGuardAccessibilityService : AccessibilityService() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var tickJob: Job? = null
+    private var habitPollJob: Job? = null
     private var currentPackage: String? = null
     private var lastReelsBounceMillis = 0L
 
     private lateinit var mindfulAppManager: MindfulAppManager
     private lateinit var budgetManager: AppTimeBudgetManager
+    private lateinit var habitShareSyncManager: HabitShareSyncManager
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         mindfulAppManager = MindfulAppManager(applicationContext)
         budgetManager = AppTimeBudgetManager(applicationContext)
+        habitShareSyncManager = HabitShareSyncManager(applicationContext)
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -99,6 +105,15 @@ class FocusGuardAccessibilityService : AccessibilityService() {
 
     private fun onForegroundChanged(packageName: String) {
         tickJob?.cancel()
+        // Poll HabitShare's API every second only while HabitShare is the foreground app -- this is
+        // when a habit is most likely being ticked, and it's the one moment fast feedback matters
+        // (an app gated on that habit should unblock right away). Leaving HabitShare cancels it, so
+        // the once-a-second network calls are bounded to actual in-app time; the background sync
+        // still covers everything else.
+        habitPollJob?.cancel()
+        if (packageName == HabitTrackerScanner.HABITSHARE_PACKAGE_NAME) {
+            startHabitPolling()
+        }
         scope.launch {
             val mindfulApp = mindfulAppManager.apps().find { it.packageName == packageName }
             if (mindfulApp != null && !mindfulAppManager.isWithinGracePeriod(packageName)) {
@@ -112,6 +127,23 @@ class FocusGuardAccessibilityService : AccessibilityService() {
                     return@launch
                 }
                 startTicking(packageName)
+            }
+        }
+    }
+
+    /**
+     * Once-a-second HabitShare sync, running only while HabitShare is foreground. Each iteration
+     * awaits the sync before delaying, so a slow (or timing-out) network call can never stack up
+     * overlapping requests -- the effective rate is at most one in flight at a time. [syncIfConnected]
+     * is a cheap no-op when no account is connected, and reuses the cached auth token, so a poll is
+     * just a single GET. The loop exits as soon as the user leaves HabitShare.
+     */
+    private fun startHabitPolling() {
+        habitPollJob = scope.launch {
+            while (isActive && currentPackage == HabitTrackerScanner.HABITSHARE_PACKAGE_NAME) {
+                runCatching { habitShareSyncManager.syncIfConnected() }
+                    .onFailure { Log.w(TAG, "HabitShare fast-poll sync failed", it) }
+                delay(HABIT_POLL_MILLIS)
             }
         }
     }
@@ -177,6 +209,7 @@ class FocusGuardAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         tickJob?.cancel()
+        habitPollJob?.cancel()
         scope.cancel()
         super.onDestroy()
     }
@@ -185,6 +218,7 @@ class FocusGuardAccessibilityService : AccessibilityService() {
         const val TAG = "FocusGuardAccessibility"
         const val TICK_MILLIS = 5_000L
         const val TICK_SECONDS = 5
+        const val HABIT_POLL_MILLIS = 1_000L
         val SUB_FEATURE_HINTS = listOf("shorts", "reel")
 
         // Facebook (main app + Lite) -- Reels blocking is scoped to these so the rest of the app
