@@ -4,9 +4,11 @@ import android.content.Context
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -15,11 +17,14 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.LockClock
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -33,6 +38,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -44,11 +50,13 @@ import au.com.tbmcgregor.bwparker.familyguard.focus.AppTimeBudgetManager
 import au.com.tbmcgregor.bwparker.familyguard.focus.AppUsageCounter
 import au.com.tbmcgregor.bwparker.familyguard.focus.DetectedHabit
 import au.com.tbmcgregor.bwparker.familyguard.focus.DetectedHabitManager
+import au.com.tbmcgregor.bwparker.familyguard.focus.HabitProofActivity
 import au.com.tbmcgregor.bwparker.familyguard.focus.HabitProofLog
 import au.com.tbmcgregor.bwparker.familyguard.focus.HabitProofManager
 import au.com.tbmcgregor.bwparker.familyguard.focus.HabitProofRequirement
 import au.com.tbmcgregor.bwparker.familyguard.focus.HabitRule
 import au.com.tbmcgregor.bwparker.familyguard.focus.HabitRuleManager
+import au.com.tbmcgregor.bwparker.familyguard.focus.HabitShareSyncManager
 import au.com.tbmcgregor.bwparker.familyguard.focus.daysOfWeekSet
 import au.com.tbmcgregor.bwparker.familyguard.focus.isTimeWindowed
 import au.com.tbmcgregor.bwparker.familyguard.focus.requiredHabitNames
@@ -63,6 +71,7 @@ import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 private data class DashboardData(
@@ -86,7 +95,9 @@ fun DashboardScreen(context: Context, onOpenSettings: () -> Unit) {
     var loadError by remember { mutableStateOf<String?>(null) }
     var showRuleWizard by remember { mutableStateOf(false) }
     var showDomainDialog by remember { mutableStateOf(false) }
+    var habitsRefreshing by remember { mutableStateOf(false) }
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    val scope = rememberCoroutineScope()
 
     LaunchedEffect(refresh) {
         loadError = null
@@ -159,7 +170,16 @@ fun DashboardScreen(context: Context, onOpenSettings: () -> Unit) {
                 }
                 RulesOverview(snapshot, now)
                 TimeBudgetOverview(snapshot)
-                TodayHabits(snapshot)
+                TodayHabits(context, snapshot, habitsRefreshing) {
+                    habitsRefreshing = true
+                    scope.launch {
+                        withContext(Dispatchers.IO) {
+                            runCatching { HabitShareSyncManager(context).syncIfConnected() }
+                        }
+                        habitsRefreshing = false
+                        refresh++
+                    }
+                }
                 RecentActivity(snapshot, now)
             }
         }
@@ -274,21 +294,46 @@ private fun TimeBudgetOverview(data: DashboardData) {
 }
 
 @Composable
-private fun TodayHabits(data: DashboardData) {
+private fun TodayHabits(
+    context: Context,
+    data: DashboardData,
+    isRefreshing: Boolean,
+    onRefresh: () -> Unit,
+) {
     SectionCard(title = "Today's habits", icon = Icons.Default.CheckCircle) {
         val today = LocalDate.now().toEpochDay()
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.End,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Spacer(modifier = Modifier.weight(1f))
+            if (isRefreshing) {
+                CircularProgressIndicator(modifier = Modifier.size(20.dp))
+            } else {
+                IconButton(onClick = onRefresh, enabled = !isRefreshing) {
+                    Icon(Icons.Default.Refresh, contentDescription = "Refresh habits")
+                }
+            }
+        }
         if (data.habits.isEmpty()) {
             Text("No habits detected yet. Open or connect HabitShare.", style = MaterialTheme.typography.bodySmall)
         } else {
             data.habits.forEach { habit ->
                 val current = habit.copy(doneToday = habit.doneToday && habit.dateEpochDay == today)
+                val status = habitStatus(current.name, data, current)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(habit.name, modifier = Modifier.weight(1f))
-                    Text(habitStatus(current.name, data, current))
+                    Text(status)
+                    if (status == "Done, proof pending") {
+                        TextButton(onClick = { HabitProofActivity.launch(context, habit.name) }) {
+                            Text("Verify")
+                        }
+                    }
                 }
             }
         }
