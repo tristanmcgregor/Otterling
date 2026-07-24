@@ -6,12 +6,16 @@ import android.graphics.BitmapFactory
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -20,9 +24,13 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -32,10 +40,12 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Smartphone
 import androidx.compose.material.icons.filled.Timelapse
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -48,7 +58,11 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -376,35 +390,19 @@ private fun habitShareAppInfo(installedApps: List<InstalledAppInfo>): InstalledA
     installedApps.find { it.packageName == HabitTrackerScanner.HABITSHARE_PACKAGE_NAME }
         ?: InstalledAppInfo(HabitTrackerScanner.HABITSHARE_PACKAGE_NAME, "HabitShare")
 
-private sealed class HabitRuleWizardStep {
-    data class PickCondition(val edit: HabitRuleEditContext?, val trigger: InstalledAppInfo) : HabitRuleWizardStep()
-    data class PickWindow(
-        val edit: HabitRuleEditContext?,
-        val trigger: InstalledAppInfo,
-        val habitNames: List<String>,
-    ) : HabitRuleWizardStep()
-    data class PickTarget(
-        val edit: HabitRuleEditContext?,
-        val trigger: InstalledAppInfo,
-        val habitNames: List<String>,
-        val windowStartMinute: Int?,
-        val windowEndMinute: Int?,
-        val daysOfWeek: Set<DayOfWeek>,
-    ) : HabitRuleWizardStep()
-    data class Confirm(
-        val edit: HabitRuleEditContext?,
-        val trigger: InstalledAppInfo,
-        val habitNames: List<String>,
-        val windowStartMinute: Int?,
-        val windowEndMinute: Int?,
-        val daysOfWeek: Set<DayOfWeek>,
-        val target: InstalledAppInfo,
-    ) : HabitRuleWizardStep()
-}
-
 /**
- * Reusable rule wizard. Render it only while a wizard is requested; a null [ruleToEdit] creates a
- * new rule, while Settings may pass an existing rule to preserve its edit behavior.
+ * Reusable rule wizard, rendered as a single full-screen 3-step "Create Rule" stepper matching the
+ * Figma design. Render it only while a wizard is requested; a null [ruleToEdit] creates a new rule,
+ * while an existing rule pre-fills every step and switches Save to [HabitRuleManager.updateRule].
+ *
+ * Functionality preserved from the old multi-dialog chain:
+ *  - the trigger app is always HabitShare ([habitShareAppInfo]) -- never chosen by the user;
+ *  - the target app is picked from [loadInstalledApps] and is searchable (step 1);
+ *  - required habits are a multi-select of [DetectedHabitManager.latest] (step 2); selecting none
+ *    yields a time-only rule;
+ *  - BOTH scheduling modes remain reachable (step 3): a time window saves with unlockMinutes = 0,
+ *    while leaving the window off collects an unlock duration (minutes, default 30) and saves with
+ *    a null window. Days-of-week default to all 7 and are encoded via the existing mask helpers.
  */
 @Composable
 fun HabitRuleWizardHost(
@@ -416,147 +414,427 @@ fun HabitRuleWizardHost(
     val coroutineScope = rememberCoroutineScope()
     val ruleManager = remember { HabitRuleManager(context) }
     val detectedHabitManager = remember { DetectedHabitManager(context) }
-    val proofManager = remember { HabitProofManager(context) }
     var installedApps by remember { mutableStateOf<List<InstalledAppInfo>>(emptyList()) }
     var detectedHabits by remember { mutableStateOf<List<DetectedHabit>>(emptyList()) }
-    var proofRequirements by remember { mutableStateOf<List<HabitProofRequirement>>(emptyList()) }
-    var wizardStep by remember { mutableStateOf<HabitRuleWizardStep?>(null) }
+    var ready by remember { mutableStateOf(false) }
+
+    var step by remember { mutableIntStateOf(1) }
+    var targetApp by remember { mutableStateOf<InstalledAppInfo?>(null) }
+    var selectedHabits by remember { mutableStateOf<Set<String>>(emptySet()) }
+    // Habit names on an edited rule that aren't in the currently-detected list (e.g. typed by the
+    // old custom-name flow) are still offered as pills so editing preserves them.
+    var extraHabitNames by remember { mutableStateOf<List<String>>(emptyList()) }
+    var windowEnabled by remember { mutableStateOf(false) }
+    var startText by remember { mutableStateOf("00:00") }
+    var endText by remember { mutableStateOf("21:00") }
+    var minutesText by remember { mutableStateOf("30") }
+    var selectedDays by remember { mutableStateOf(DayOfWeek.entries.toSet()) }
+    var query by remember { mutableStateOf("") }
+    var editingId by remember { mutableStateOf<Long?>(null) }
 
     LaunchedEffect(ruleToEdit?.id) {
         installedApps = withContext(Dispatchers.IO) { loadInstalledApps(context) }
         detectedHabits = detectedHabitManager.latest()
-        proofRequirements = proofManager.requirements()
-        val edit = ruleToEdit?.let { rule ->
-            HabitRuleEditContext(
-                editingId = rule.id,
-                initialHabitNames = rule.requiredHabitNames(),
-                initialWindowStart = rule.windowStartMinute,
-                initialWindowEnd = rule.windowEndMinute,
-                initialDaysOfWeekMask = rule.daysOfWeekMask,
-                initialTargetPackageName = rule.targetPackageName,
-                initialUnlockMinutes = rule.unlockMinutes.takeIf { it > 0 } ?: 30,
-            )
+        ruleToEdit?.let { rule ->
+            editingId = rule.id
+            targetApp = installedApps.find { it.packageName == rule.targetPackageName }
+                ?: InstalledAppInfo(rule.targetPackageName, rule.targetPackageName)
+            val names = rule.requiredHabitNames()
+            selectedHabits = names.toSet()
+            val detectedNames = detectedHabits.map { it.name }.toSet()
+            extraHabitNames = names.filterNot { it in detectedNames }
+            val start = rule.windowStartMinute
+            val end = rule.windowEndMinute
+            if (start != null && end != null) {
+                windowEnabled = true
+                startText = formatMinuteOfDay(start)
+                endText = formatMinuteOfDay(end)
+            }
+            selectedDays = decodeDaysOfWeek(rule.daysOfWeekMask)
+            minutesText = (rule.unlockMinutes.takeIf { it > 0 } ?: 30).toString()
         }
-        wizardStep = HabitRuleWizardStep.PickCondition(edit, habitShareAppInfo(installedApps))
+        ready = true
     }
 
-    when (val step = wizardStep) {
-        is HabitRuleWizardStep.PickCondition -> HabitConditionPickerDialog(
-            detectedHabits = detectedHabits,
-            initialHabitNames = step.edit?.initialHabitNames ?: emptyList(),
-            proofRequirements = proofRequirements,
-            onSetProofRequirement = { habitName, required, referencePhotoPath ->
-                coroutineScope.launch {
-                    proofManager.setRequirement(habitName, required, referencePhotoPath)
-                    proofRequirements = proofManager.requirements()
-                }
-            },
-            onDismiss = onDismiss,
-            onSelect = { habitNames ->
-                wizardStep = if (habitNames.isEmpty()) {
-                    HabitRuleWizardStep.PickTarget(
-                        step.edit, step.trigger, habitNames, null, null, DayOfWeek.entries.toSet(),
-                    )
-                } else {
-                    HabitRuleWizardStep.PickWindow(step.edit, step.trigger, habitNames)
-                }
-            },
-            onSelectTimeOnly = {
-                wizardStep = HabitRuleWizardStep.PickWindow(step.edit, step.trigger, emptyList())
-            },
-        )
-        is HabitRuleWizardStep.PickWindow -> HabitWindowPickerDialog(
-            habitNames = step.habitNames,
-            initialWindowStart = step.edit?.initialWindowStart,
-            initialWindowEnd = step.edit?.initialWindowEnd,
-            initialDaysOfWeek = step.edit?.initialDaysOfWeekMask?.let(::decodeDaysOfWeek),
-            onDismiss = onDismiss,
-            onSelect = { start, end, days ->
-                wizardStep = HabitRuleWizardStep.PickTarget(
-                    step.edit, step.trigger, step.habitNames, start, end, days,
-                )
-            },
-        )
-        is HabitRuleWizardStep.PickTarget -> AppPickerDialog(
-            apps = installedApps,
-            initialQuery = installedApps
-                .find { it.packageName == step.edit?.initialTargetPackageName }?.label.orEmpty(),
-            onDismiss = onDismiss,
-            onSelect = { target ->
-                wizardStep = HabitRuleWizardStep.Confirm(
-                    step.edit,
-                    step.trigger,
-                    step.habitNames,
-                    step.windowStartMinute,
-                    step.windowEndMinute,
-                    step.daysOfWeek,
-                    target,
-                )
-            },
-        )
-        is HabitRuleWizardStep.Confirm -> {
-            val start = step.windowStartMinute
-            val end = step.windowEndMinute
-            val editingId = step.edit?.editingId
-            val save: suspend (Int) -> Unit = { minutes ->
-                if (editingId == null) {
-                    ruleManager.addRule(
-                        step.trigger.packageName,
-                        step.target.packageName,
-                        minutes,
-                        step.habitNames,
-                        start,
-                        end,
-                        step.daysOfWeek,
-                    )
-                } else {
-                    ruleManager.updateRule(
-                        editingId,
-                        step.trigger.packageName,
-                        step.target.packageName,
-                        minutes,
-                        step.habitNames,
-                        start,
-                        end,
-                        step.daysOfWeek,
-                    )
-                }
-            }
-            if (start != null && end != null) {
-                HabitRuleWindowConfirmDialog(
-                    triggerLabel = step.trigger.label,
-                    habitNames = step.habitNames,
-                    windowStartMinute = start,
-                    windowEndMinute = end,
-                    daysOfWeek = step.daysOfWeek,
-                    targetLabel = step.target.label,
-                    isEditing = editingId != null,
-                    onDismiss = onDismiss,
-                    onConfirm = {
-                        coroutineScope.launch {
-                            save(0)
-                            onSaved()
-                        }
-                    },
+    val habitOptions = remember(detectedHabits, extraHabitNames) {
+        (detectedHabits.map { it.name } + extraHabitNames).distinct()
+    }
+    val windowStart = if (windowEnabled) parseTimeToMinuteOfDay(startText) else null
+    val windowEnd = if (windowEnabled) parseTimeToMinuteOfDay(endText) else null
+    val minutes = minutesText.toIntOrNull()
+    val title = if (editingId != null) "Edit Rule" else "Create Rule"
+
+    val canAdvance = when (step) {
+        1 -> targetApp != null
+        3 -> if (windowEnabled) windowStart != null && windowEnd != null else (minutes != null && minutes > 0)
+        else -> true
+    }
+
+    fun save() {
+        val target = targetApp ?: return
+        val trigger = habitShareAppInfo(installedApps)
+        val habitNames = habitOptions.filter { it in selectedHabits }
+        val id = editingId
+        coroutineScope.launch {
+            val start = if (windowEnabled) windowStart else null
+            val end = if (windowEnabled) windowEnd else null
+            val unlockMinutes = if (windowEnabled) 0 else (minutes ?: 30)
+            if (id == null) {
+                ruleManager.addRule(
+                    trigger.packageName, target.packageName, unlockMinutes, habitNames, start, end, selectedDays,
                 )
             } else {
-                HabitRuleMinutesDialog(
-                    triggerLabel = step.trigger.label,
-                    habitNames = step.habitNames,
-                    targetLabel = step.target.label,
-                    initialMinutes = step.edit?.initialUnlockMinutes ?: 30,
-                    isEditing = editingId != null,
-                    onDismiss = onDismiss,
-                    onConfirm = { minutes ->
-                        coroutineScope.launch {
-                            save(minutes)
-                            onSaved()
-                        }
-                    },
+                ruleManager.updateRule(
+                    id, trigger.packageName, target.packageName, unlockMinutes, habitNames, start, end, selectedDays,
                 )
             }
+            onSaved()
         }
-        null -> Unit
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false),
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = MaterialTheme.colorScheme.background,
+        ) {
+            Column(modifier = Modifier.fillMaxSize().statusBarsPadding()) {
+                Box(modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 8.dp)) {
+                    IconButton(
+                        onClick = { if (step > 1) step-- else onDismiss() },
+                        modifier = Modifier.align(Alignment.CenterStart),
+                    ) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                    Text(
+                        title,
+                        style = MaterialTheme.typography.titleLarge,
+                        modifier = Modifier.align(Alignment.Center),
+                    )
+                    Text(
+                        "Step $step/3",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.align(Alignment.CenterEnd).padding(end = 16.dp),
+                    )
+                }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+
+                Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                    if (!ready) {
+                        CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+                    } else {
+                        when (step) {
+                            1 -> WizardStepTarget(
+                                apps = installedApps,
+                                query = query,
+                                onQueryChange = { query = it },
+                                selectedPackage = targetApp?.packageName,
+                                onSelect = { app ->
+                                    targetApp = app
+                                    step = 2
+                                },
+                            )
+                            2 -> WizardStepHabits(
+                                habitOptions = habitOptions,
+                                selected = selectedHabits,
+                                onToggle = { name ->
+                                    selectedHabits = if (name in selectedHabits) selectedHabits - name else selectedHabits + name
+                                },
+                            )
+                            else -> WizardStepSchedule(
+                                windowEnabled = windowEnabled,
+                                onWindowEnabledChange = { windowEnabled = it },
+                                startText = startText,
+                                onStartChange = { startText = it },
+                                endText = endText,
+                                onEndChange = { endText = it },
+                                minutesText = minutesText,
+                                onMinutesChange = { minutesText = it },
+                                selectedDays = selectedDays,
+                                onToggleDay = { day ->
+                                    val updated = if (day in selectedDays) selectedDays - day else selectedDays + day
+                                    if (updated.isNotEmpty()) selectedDays = updated
+                                },
+                            )
+                        }
+                    }
+                }
+
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = MaterialTheme.colorScheme.background,
+                    shadowElevation = 8.dp,
+                ) {
+                    Column(modifier = Modifier.navigationBarsPadding().padding(16.dp)) {
+                        Button(
+                            onClick = { if (step < 3) step++ else save() },
+                            enabled = ready && canAdvance,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(if (step < 3) "Continue" else "Save Rule")
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** Step title + supporting subtitle shared by every wizard step. */
+@Composable
+private fun WizardHeading(title: String, subtitle: String) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(title, style = MaterialTheme.typography.headlineSmall)
+        Text(
+            subtitle,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+/** Step 1: searchable installed-app list; tapping a row selects the target and advances. */
+@Composable
+private fun WizardStepTarget(
+    apps: List<InstalledAppInfo>,
+    query: String,
+    onQueryChange: (String) -> Unit,
+    selectedPackage: String?,
+    onSelect: (InstalledAppInfo) -> Unit,
+) {
+    val filtered = remember(apps, query) {
+        if (query.isBlank()) {
+            apps
+        } else {
+            apps.filter {
+                it.label.contains(query, ignoreCase = true) || it.packageName.contains(query, ignoreCase = true)
+            }
+        }
+    }
+    Column(modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp)) {
+        Spacer(Modifier.height(16.dp))
+        WizardHeading("Which app to block?", "Select the target application")
+        Spacer(Modifier.height(16.dp))
+        OutlinedTextField(
+            value = query,
+            onValueChange = onQueryChange,
+            placeholder = { Text("Search apps...") },
+            singleLine = true,
+            shape = MaterialTheme.shapes.medium,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Spacer(Modifier.height(12.dp))
+        LazyColumn(
+            modifier = Modifier.fillMaxWidth().weight(1f),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            items(filtered, key = { it.packageName }) { app ->
+                AppRow(app = app, selected = app.packageName == selectedPackage, onClick = { onSelect(app) })
+            }
+            if (filtered.isEmpty()) {
+                item {
+                    Text("No apps match your search.", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+            item { Spacer(Modifier.height(8.dp)) }
+        }
+    }
+}
+
+/** A single installed-app row: leading rounded icon badge + app label. */
+@Composable
+private fun AppRow(app: InstalledAppInfo, selected: Boolean, onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        shape = MaterialTheme.shapes.medium,
+        color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier.padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Default.Smartphone,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+            Text(app.label, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
+        }
+    }
+}
+
+/** Step 2: wrap of habit pills; tapping toggles selection. Selecting none = time-only rule. */
+@Composable
+private fun WizardStepHabits(
+    habitOptions: List<String>,
+    selected: Set<String>,
+    onToggle: (String) -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 20.dp),
+    ) {
+        Spacer(Modifier.height(16.dp))
+        WizardHeading("Require habits", "Select habits that must be done")
+        Spacer(Modifier.height(16.dp))
+        if (habitOptions.isEmpty()) {
+            Text(
+                "No habits detected yet. Connect your HabitShare account (or open HabitShare) so " +
+                    "your habits appear here. You can still continue to create a time-only rule.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                habitOptions.forEach { name ->
+                    val isSelected = name in selected
+                    SelectablePill(
+                        text = if (isSelected) "$name  ✓" else name,
+                        selected = isSelected,
+                        onClick = { onToggle(name) },
+                    )
+                }
+            }
+            Spacer(Modifier.height(16.dp))
+            Text(
+                "All selected habits must be done to unlock the app. Select none for a time-only rule.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/** Clickable toggle pill mirroring the Figma habit chips: Success variant + ✓ when selected. */
+@Composable
+private fun SelectablePill(text: String, selected: Boolean, onClick: () -> Unit) {
+    val container = if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceVariant
+    val content = if (selected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(50),
+        color = container,
+        contentColor = content,
+    ) {
+        Text(
+            text,
+            style = MaterialTheme.typography.labelLarge,
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+        )
+    }
+}
+
+/** Step 3: schedule card. The time-window toggle switches between the windowed path (unlockMinutes
+ * = 0) and the unlock-duration path (window null, N minutes), keeping both rule modes reachable. */
+@Composable
+private fun WizardStepSchedule(
+    windowEnabled: Boolean,
+    onWindowEnabledChange: (Boolean) -> Unit,
+    startText: String,
+    onStartChange: (String) -> Unit,
+    endText: String,
+    onEndChange: (String) -> Unit,
+    minutesText: String,
+    onMinutesChange: (String) -> Unit,
+    selectedDays: Set<DayOfWeek>,
+    onToggleDay: (DayOfWeek) -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 20.dp),
+    ) {
+        Spacer(Modifier.height(16.dp))
+        WizardHeading("When does this apply?", "Set the schedule for this rule")
+        Spacer(Modifier.height(16.dp))
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = MaterialTheme.shapes.extraLarge,
+            color = MaterialTheme.colorScheme.surface,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
+            shadowElevation = 2.dp,
+        ) {
+            Column(
+                modifier = Modifier.padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("Time window", style = MaterialTheme.typography.titleSmall)
+                    Switch(checked = windowEnabled, onCheckedChange = onWindowEnabledChange)
+                }
+                if (windowEnabled) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        OutlinedTextField(
+                            value = startText,
+                            onValueChange = onStartChange,
+                            label = { Text("Start") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Text("to")
+                        OutlinedTextField(
+                            value = endText,
+                            onValueChange = onEndChange,
+                            label = { Text("End") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                    if (parseTimeToMinuteOfDay(startText) == null || parseTimeToMinuteOfDay(endText) == null) {
+                        Text(
+                            "Enter times as HH:mm, e.g. 21:00 (use 00:00 as the end for midnight).",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                } else {
+                    OutlinedTextField(
+                        value = minutesText,
+                        onValueChange = onMinutesChange,
+                        label = { Text("Unlock duration (minutes)") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Text(
+                        "With no time window, the app unlocks for this many minutes once the required habits are done.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+                Text("Days of week", style = MaterialTheme.typography.titleSmall)
+                DayOfWeekPicker(selectedDays = selectedDays, onToggle = onToggleDay)
+            }
+        }
+        Spacer(Modifier.height(16.dp))
     }
 }
 
@@ -1198,215 +1476,6 @@ private fun HabitRuleRow(
     }
 }
 
-@Composable
-private fun HabitConditionPickerDialog(
-    detectedHabits: List<DetectedHabit>,
-    initialHabitNames: List<String> = emptyList(),
-    proofRequirements: List<HabitProofRequirement> = emptyList(),
-    onSetProofRequirement: (habitName: String, required: Boolean, referencePhotoPath: String?) -> Unit = { _, _, _ -> },
-    onDismiss: () -> Unit,
-    onSelect: (habitNames: List<String>) -> Unit,
-    onSelectTimeOnly: () -> Unit,
-) {
-    val detectedNames = remember(detectedHabits) { detectedHabits.map { it.name }.toSet() }
-    var selected by remember {
-        mutableStateOf(initialHabitNames.filter { it in detectedNames }.toSet())
-    }
-    var customNames by remember {
-        mutableStateOf(initialHabitNames.filterNot { it in detectedNames })
-    }
-    var customName by remember { mutableStateOf("") }
-
-    fun toggle(name: String) {
-        selected = if (name in selected) selected - name else selected + name
-    }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Which habit(s) must be done to unlock the target app?") },
-        text = {
-            Column(
-                modifier = Modifier
-                    .heightIn(max = 420.dp)
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                OutlinedButton(onClick = { onSelect(emptyList()) }, modifier = Modifier.fillMaxWidth()) {
-                    Text("Any/all habits complete")
-                }
-                OutlinedButton(onClick = onSelectTimeOnly, modifier = Modifier.fillMaxWidth()) {
-                    Text("No habit needed -- just block during specific hours")
-                }
-                Text(
-                    "Or require one or more specific habits below -- ALL selected habits must be " +
-                        "done today for the app to unlock:",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-                if (detectedHabits.isNotEmpty()) {
-                    detectedHabits.forEach { habit ->
-                        Column(modifier = Modifier.fillMaxWidth()) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable { toggle(habit.name) },
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Checkbox(checked = habit.name in selected, onCheckedChange = { toggle(habit.name) })
-                                Text(habit.name, modifier = Modifier.weight(1f))
-                                if (habit.name in selected) {
-                                    Pill("Selected", PillVariant.Success)
-                                }
-                            }
-                            ProofRequirementRow(
-                                habitName = habit.name,
-                                requirement = proofRequirements.find { it.habitName.equals(habit.name, ignoreCase = true) },
-                                onSetRequirement = { required, referencePhotoPath ->
-                                    onSetProofRequirement(habit.name, required, referencePhotoPath)
-                                },
-                                modifier = Modifier.padding(start = 40.dp),
-                            )
-                        }
-                    }
-                } else {
-                    Text(
-                        "No habits detected yet -- open the tracker app first, or type name(s) below:",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
-                customNames.forEach { name ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text("+ $name", style = MaterialTheme.typography.bodySmall)
-                        TextButton(onClick = { customNames = customNames - name }) { Text("Remove") }
-                    }
-                }
-                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                    OutlinedTextField(
-                        value = customName,
-                        onValueChange = { customName = it },
-                        label = { Text("Custom habit name") },
-                        singleLine = true,
-                        modifier = Modifier.weight(1f),
-                    )
-                    TextButton(onClick = {
-                        val trimmed = customName.trim()
-                        if (trimmed.isNotBlank() && trimmed !in customNames) customNames = customNames + trimmed
-                        customName = ""
-                    }) {
-                        Text("Add")
-                    }
-                }
-                val required = (selected + customNames).toList()
-                Button(
-                    onClick = { onSelect(required) },
-                    enabled = required.isNotEmpty(),
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text(if (required.size <= 1) "Continue" else "Continue (requires all ${required.size})")
-                }
-            }
-        },
-        confirmButton = {},
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
-        },
-    )
-}
-
-@Composable
-private fun HabitWindowPickerDialog(
-    habitNames: List<String>,
-    initialWindowStart: Int? = null,
-    initialWindowEnd: Int? = null,
-    initialDaysOfWeek: Set<DayOfWeek>? = null,
-    onDismiss: () -> Unit,
-    onSelect: (windowStartMinute: Int?, windowEndMinute: Int?, daysOfWeek: Set<DayOfWeek>) -> Unit,
-) {
-    // A "time only" rule (no habit condition) has no "Always" option -- an unwindowed rule with no
-    // condition to ever satisfy would just be a permanent, un-liftable block -- so it always shows
-    // the time fields directly instead of asking "always vs. windowed" first.
-    val timeOnly = habitNames.isEmpty()
-    var showCustom by remember { mutableStateOf(timeOnly || (initialWindowStart != null && initialWindowEnd != null)) }
-    var startText by remember { mutableStateOf(initialWindowStart?.let { formatMinuteOfDay(it) } ?: "00:00") }
-    var endText by remember { mutableStateOf(initialWindowEnd?.let { formatMinuteOfDay(it) } ?: if (timeOnly) "09:00" else "21:00") }
-    var selectedDays by remember { mutableStateOf(initialDaysOfWeek ?: DayOfWeek.entries.toSet()) }
-    val conditionLabel = habitNames.joinToString(" AND ")
-    val start = parseTimeToMinuteOfDay(startText)
-    val end = parseTimeToMinuteOfDay(endText)
-
-    fun toggleDay(day: DayOfWeek) {
-        val updated = if (day in selectedDays) selectedDays - day else selectedDays + day
-        // Don't allow deselecting down to zero days -- that's not a meaningful "never" choice,
-        // and matches encodeDaysOfWeek() treating an empty set as "every day" anyway.
-        if (updated.isNotEmpty()) selectedDays = updated
-    }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(if (timeOnly) "When should this app be blocked?" else "When should blocking on \"$conditionLabel\" apply?") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (!timeOnly) {
-                    OutlinedButton(onClick = { onSelect(null, null, selectedDays) }, modifier = Modifier.fillMaxWidth()) {
-                        Text("Always (no time restriction)")
-                    }
-                    OutlinedButton(onClick = { showCustom = true }, modifier = Modifier.fillMaxWidth()) {
-                        Text("Only during a specific time window")
-                    }
-                }
-                if (showCustom) {
-                    Text(
-                        if (timeOnly) {
-                            "Blocks the app every day from the start time until the end time, " +
-                                "unconditionally -- no habit needs to be done. Use 00:00 as the " +
-                                "end time to mean \"through to midnight\" -- e.g. start 21:00, " +
-                                "end 00:00 covers 9pm-midnight."
-                        } else {
-                            "Blocks (while \"$conditionLabel\" isn't done yet today) from the start " +
-                                "time until the end time. Use 00:00 as the end time to mean " +
-                                "\"through to midnight\" -- e.g. start 21:00, end 00:00 covers 9pm-midnight."
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                    OutlinedTextField(
-                        value = startText,
-                        onValueChange = { startText = it },
-                        label = { Text("Start time (24h, e.g. 21:00)") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    OutlinedTextField(
-                        value = endText,
-                        onValueChange = { endText = it },
-                        label = { Text("End time (24h, e.g. 00:00 for midnight)") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    if (start == null || end == null) {
-                        Text("Enter times as HH:mm, e.g. 21:00", style = MaterialTheme.typography.bodySmall)
-                    }
-                    Text("Which days?", style = MaterialTheme.typography.bodySmall)
-                    DayOfWeekPicker(selectedDays = selectedDays, onToggle = ::toggleDay)
-                    Button(
-                        onClick = { if (start != null && end != null) onSelect(start, end, selectedDays) },
-                        enabled = start != null && end != null,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text("Continue")
-                    }
-                }
-            }
-        },
-        confirmButton = {},
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
-        },
-    )
-}
-
 /** Compact Mon-Sun toggle row for restricting a windowed rule to specific days -- at least one
  * day must stay selected (see [HabitWindowPickerDialog.toggleDay]). Rendered as a row of circular
  * toggle buttons matching the Figma design. */
@@ -1440,46 +1509,6 @@ private fun formatDaysOfWeek(days: Set<DayOfWeek>): String {
         .joinToString(", ") { it.name.take(1) + it.name.drop(1).take(2).lowercase() }
 }
 
-@Composable
-private fun HabitRuleWindowConfirmDialog(
-    triggerLabel: String,
-    habitNames: List<String>,
-    windowStartMinute: Int,
-    windowEndMinute: Int,
-    daysOfWeek: Set<DayOfWeek>,
-    targetLabel: String,
-    isEditing: Boolean = false,
-    onDismiss: () -> Unit,
-    onConfirm: () -> Unit,
-) {
-    val conditionLabel = habitNames.joinToString(" AND ")
-    val daysLabel = formatDaysOfWeek(daysOfWeek)
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(if (isEditing) "Confirm changes" else "Confirm rule") },
-        text = {
-            Text(
-                if (habitNames.isEmpty()) {
-                    "$targetLabel will be blocked $daysLabel from ${formatMinuteOfDay(windowStartMinute)} " +
-                        "to ${formatMinuteOfDay(windowEndMinute)}, unconditionally -- no habit needed. " +
-                        "No time restriction outside that window (or on other days)."
-                } else {
-                    "$targetLabel will be blocked $daysLabel from ${formatMinuteOfDay(windowStartMinute)} to " +
-                        "${formatMinuteOfDay(windowEndMinute)} unless \"$conditionLabel\" is done in " +
-                        "$triggerLabel that day. No time restriction outside that window (or on other days)."
-                },
-                style = MaterialTheme.typography.bodyMedium,
-            )
-        },
-        confirmButton = {
-            Button(onClick = onConfirm) { Text(if (isEditing) "Save changes" else "Save rule") }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
-        },
-    )
-}
-
 private fun parseTimeToMinuteOfDay(text: String): Int? {
     val match = Regex("""^\s*(\d{1,2}):(\d{2})\s*$""").find(text) ?: return null
     val hour = match.groupValues[1].toIntOrNull() ?: return null
@@ -1500,49 +1529,4 @@ private fun isRuleCurrentlyWindowed(start: Int, end: Int, daysOfWeek: Set<DayOfW
     val now = java.time.LocalTime.now()
     val minuteOfDay = now.hour * 60 + now.minute
     return if (start <= end) minuteOfDay in start until end else minuteOfDay >= start || minuteOfDay < end
-}
-
-@Composable
-private fun HabitRuleMinutesDialog(
-    triggerLabel: String,
-    habitNames: List<String>,
-    targetLabel: String,
-    initialMinutes: Int = 30,
-    isEditing: Boolean = false,
-    onDismiss: () -> Unit,
-    onConfirm: (unlockMinutes: Int) -> Unit,
-) {
-    var minutesText by remember { mutableStateOf(initialMinutes.toString()) }
-    val conditionLabel = if (habitNames.isEmpty()) "all habits" else habitNames.joinToString(" AND ")
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("$targetLabel is blocked until \"$conditionLabel\" done in $triggerLabel...") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    "...then unlock $targetLabel for how many minutes?",
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                OutlinedTextField(
-                    value = minutesText,
-                    onValueChange = { minutesText = it },
-                    label = { Text("Unlock minutes") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
-        },
-        confirmButton = {
-            Button(onClick = {
-                val minutes = minutesText.toIntOrNull() ?: return@Button
-                if (minutes > 0) onConfirm(minutes)
-            }) {
-                Text(if (isEditing) "Save changes" else "Save rule")
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
-        },
-    )
 }
