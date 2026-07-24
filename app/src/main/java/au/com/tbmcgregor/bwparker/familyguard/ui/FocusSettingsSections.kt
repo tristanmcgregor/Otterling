@@ -15,9 +15,12 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
@@ -73,6 +76,7 @@ import au.com.tbmcgregor.bwparker.familyguard.focus.ProofSettings
 import au.com.tbmcgregor.bwparker.familyguard.focus.HabitRule
 import au.com.tbmcgregor.bwparker.familyguard.focus.HabitRuleManager
 import au.com.tbmcgregor.bwparker.familyguard.focus.HabitShareApiClient
+import au.com.tbmcgregor.bwparker.familyguard.focus.HabitShareSyncManager
 import au.com.tbmcgregor.bwparker.familyguard.focus.HabitTrackerScanner
 import au.com.tbmcgregor.bwparker.familyguard.focus.MindfulApp
 import au.com.tbmcgregor.bwparker.familyguard.focus.MindfulAppManager
@@ -563,7 +567,7 @@ fun HabitRuleWizardHost(
  */
 @Composable
 fun HabitShareSettingsScreen(context: Context, onBack: () -> Unit) {
-    Column(modifier = Modifier.fillMaxSize()) {
+    Column(modifier = Modifier.fillMaxSize().statusBarsPadding()) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -579,6 +583,7 @@ fun HabitShareSettingsScreen(context: Context, onBack: () -> Unit) {
             modifier = Modifier
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
+                .navigationBarsPadding()
                 .padding(horizontal = 20.dp, vertical = 4.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
@@ -698,10 +703,14 @@ fun HabitShareVerificationSection(context: Context) {
     var detectedHabits by remember { mutableStateOf<List<DetectedHabit>>(emptyList()) }
     var proofRequirements by remember { mutableStateOf<List<HabitProofRequirement>>(emptyList()) }
     var sensitivity by remember { mutableStateOf(proofSettings.sensitivity()) }
+    var isRefreshing by remember { mutableStateOf(false) }
 
     LaunchedEffect(refreshTrigger) {
+        isRefreshing = true
+        withContext(Dispatchers.IO) { runCatching { HabitShareSyncManager(context).syncIfConnected() } }
         detectedHabits = detectedHabitManager.latest()
         proofRequirements = habitProofManager.requirements()
+        isRefreshing = false
     }
 
     SectionCard(
@@ -717,7 +726,10 @@ fun HabitShareVerificationSection(context: Context) {
                 "cheat); more lenient accepts more (fewer genuine photos refused).",
             style = MaterialTheme.typography.bodySmall,
         )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
             ImageMatcher.Sensitivity.entries.forEach { option ->
                 val label = when (option) {
                     ImageMatcher.Sensitivity.LENIENT -> "Lenient"
@@ -725,12 +737,20 @@ fun HabitShareVerificationSection(context: Context) {
                     ImageMatcher.Sensitivity.STRICT -> "Strict"
                 }
                 if (option == sensitivity) {
-                    Button(onClick = {}) { Text(label) }
+                    Button(
+                        onClick = {},
+                        modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(horizontal = 4.dp),
+                    ) { Text(label, maxLines = 1) }
                 } else {
-                    OutlinedButton(onClick = {
-                        sensitivity = option
-                        proofSettings.setSensitivity(option)
-                    }) { Text(label) }
+                    OutlinedButton(
+                        onClick = {
+                            sensitivity = option
+                            proofSettings.setSensitivity(option)
+                        },
+                        modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(horizontal = 4.dp),
+                    ) { Text(label, maxLines = 1) }
                 }
             }
         }
@@ -760,7 +780,9 @@ fun HabitShareVerificationSection(context: Context) {
                 }
             }
         }
-        OutlinedButton(onClick = { refreshTrigger++ }) { Text("Refresh") }
+        OutlinedButton(onClick = { refreshTrigger++ }, enabled = !isRefreshing) {
+            Text(if (isRefreshing) "Refreshing…" else "Refresh")
+        }
     }
 }
 
@@ -780,14 +802,18 @@ fun HabitRulesSection(context: Context) {
     var wizardRule by remember { mutableStateOf<HabitRule?>(null) }
     var showDetected by remember { mutableStateOf(false) }
     var showProofLog by remember { mutableStateOf(false) }
+    var isRefreshing by remember { mutableStateOf(false) }
 
     LaunchedEffect(refreshTrigger) {
+        isRefreshing = true
+        withContext(Dispatchers.IO) { runCatching { HabitShareSyncManager(context).syncIfConnected() } }
         rules = habitRuleManager.rules()
         detectedHabits = detectedHabitManager.latest()
         proofRequirements = habitProofManager.requirements()
         if (installedApps.isEmpty()) {
             installedApps = withContext(Dispatchers.IO) { loadInstalledApps(context) }
         }
+        isRefreshing = false
     }
 
     /** Falls back to the raw package name if the app list hasn't loaded yet or it's been uninstalled. */
@@ -884,8 +910,8 @@ fun HabitRulesSection(context: Context) {
                     }
                 }
             }
-            OutlinedButton(onClick = { refreshTrigger++ }) {
-                Text("Refresh")
+            OutlinedButton(onClick = { refreshTrigger++ }, enabled = !isRefreshing) {
+                Text(if (isRefreshing) "Refreshing…" else "Refresh")
             }
         }
 

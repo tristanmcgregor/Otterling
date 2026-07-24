@@ -21,5 +21,6 @@ class DetectedHabitManager(context: Context) {
         rows.forEach { (name, done) ->
             dao.upsert(DetectedHabit(name = name.take(120), doneToday = done, dateEpochDay = today))
         }
+        dao.deleteNotIn(rows.map { it.first.take(120) })
     }
 }

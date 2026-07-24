@@ -102,6 +102,9 @@ interface DetectedHabitDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(habit: DetectedHabit)
+
+    @Query("DELETE FROM detected_habits WHERE name NOT IN (:names)")
+    suspend fun deleteNotIn(names: List<String>)
 }
 
 @Dao
