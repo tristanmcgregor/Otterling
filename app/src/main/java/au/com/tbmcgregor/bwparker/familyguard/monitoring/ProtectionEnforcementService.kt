@@ -13,6 +13,7 @@ import android.os.Looper
 import android.provider.Settings
 import android.util.Log
 import au.com.tbmcgregor.bwparker.familyguard.content.AppSuspensionManager
+import au.com.tbmcgregor.bwparker.familyguard.content.VpnFilterManager
 import au.com.tbmcgregor.bwparker.familyguard.focus.AppTimeBudgetManager
 import au.com.tbmcgregor.bwparker.familyguard.focus.BudgetEnforcer
 import au.com.tbmcgregor.bwparker.familyguard.focus.HabitRuleManager
@@ -41,6 +42,7 @@ class ProtectionEnforcementService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var loopJob: Job? = null
     private var habitShareSyncJob: Job? = null
+    private var vpnWatchdogJob: Job? = null
     private var accessibilityObserver: ContentObserver? = null
 
     override fun onCreate() {
@@ -91,6 +93,15 @@ class ProtectionEnforcementService : Service() {
                 }
             }
         }
+        if (vpnWatchdogJob == null) {
+            vpnWatchdogJob = scope.launch {
+                while (isActive) {
+                    runCatching { VpnFilterManager(applicationContext).ensureActive() }
+                        .onFailure { Log.w(TAG, "VPN watchdog failed", it) }
+                    delay(VPN_WATCHDOG_INTERVAL_MS)
+                }
+            }
+        }
         return START_STICKY
     }
 
@@ -133,6 +144,8 @@ class ProtectionEnforcementService : Service() {
         loopJob = null
         habitShareSyncJob?.cancel()
         habitShareSyncJob = null
+        vpnWatchdogJob?.cancel()
+        vpnWatchdogJob = null
         super.onDestroy()
     }
 
@@ -157,6 +170,7 @@ class ProtectionEnforcementService : Service() {
         private const val NOTIFICATION_ID = 1001
         private const val POLL_INTERVAL_MS = 5 * 60 * 1000L
         private const val HABITSHARE_SYNC_INTERVAL_MS = 30 * 1000L
+        private const val VPN_WATCHDOG_INTERVAL_MS = 60 * 1000L
 
         fun start(context: Context) {
             context.startForegroundService(Intent(context, ProtectionEnforcementService::class.java))

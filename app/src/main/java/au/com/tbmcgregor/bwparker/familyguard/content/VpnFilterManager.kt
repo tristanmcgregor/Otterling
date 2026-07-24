@@ -121,6 +121,30 @@ class VpnFilterManager(private val context: Context) {
         if (wasEnabledByUser()) enable()
     }
 
+    /**
+     * Cheap, idempotent watchdog meant to be called periodically (e.g. every 60s, on
+     * [Dispatchers.IO]). Re-asserts the always-on registration if it has drifted away from us and
+     * makes sure the service is up, so the filter VPN effectively never stays disconnected. No-op
+     * when the user has the VPN intentionally off. Never throws -- all DPM/system calls are guarded.
+     */
+    fun ensureActive() {
+        if (!wasEnabledByUser()) return
+        val dpm = devicePolicyManager ?: return
+        runCatching {
+            val current = dpm.getAlwaysOnVpnPackage(adminComponent)
+            if (current != context.packageName) {
+                Log.w(TAG, "Always-on VPN drifted (was $current) -- re-registering")
+                dpm.setAlwaysOnVpnPackage(adminComponent, context.packageName, false)
+                suppressConflictingPrivateDns()
+            }
+        }.onFailure { Log.w(TAG, "Watchdog always-on re-registration failed", it) }
+        // Best-effort: starting an already-running foreground service is a harmless no-op and does
+        // NOT rebuild the tunnel (the service's own running flag is already set), so this only
+        // matters when the service somehow isn't up.
+        runCatching { VpnFilterService.start(context) }
+            .onFailure { Log.w(TAG, "Watchdog service start failed", it) }
+    }
+
     private companion object {
         const val TAG = "VpnFilterManager"
         const val PREFS_NAME = "vpn_filter_manager_prefs"

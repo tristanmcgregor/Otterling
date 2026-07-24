@@ -24,6 +24,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -82,6 +84,10 @@ class VpnFilterService : VpnService() {
     // its bypass list changed.
     private var connectionScope: CoroutineScope? = null
     private val running = AtomicBoolean(false)
+    // Prevents multiple overlapping self-heal restarts from stacking up (e.g. a dead-tunnel exit
+    // firing at the same time as an establish() retry): set when a restart is scheduled, cleared
+    // right before it actually rebuilds, so at most one rebuild is ever pending at a time.
+    private val restartScheduled = AtomicBoolean(false)
 
     override fun onCreate() {
         super.onCreate()
@@ -142,7 +148,12 @@ class VpnFilterService : VpnService() {
 
         val tun = tunInterface
         if (tun == null) {
-            running.set(false)
+            // The service is still meant to be up (e.g. establish() can fail transiently when
+            // started before the network is ready at boot). Keep running=true and retry after a
+            // backoff rather than giving up forever; the anti-stacking guard keeps repeated
+            // failures from tight-looping.
+            Log.w(TAG, "VPN tunnel establish returned null -- scheduling retry")
+            scheduleRestart()
             return
         }
         val generationScope = CoroutineScope(
@@ -152,6 +163,29 @@ class VpnFilterService : VpnService() {
         workerJob = scope.launch {
             runCatching { runPacketLoop(tun, blocklist, generationScope) }
                 .onFailure { Log.e(TAG, "Packet loop crashed", it) }
+            // The packet loop returned. If this coroutine is still active and the service is still
+            // meant to be running, the loop exited unexpectedly (transient tun read IOException/EOF
+            // during a network handover or brief teardown) rather than via an intentional
+            // reestablish()/onDestroy() -- both of those cancel workerJob (isActive=false) and/or
+            // clear running. In that case the tun is dead and filtering has silently stopped, so
+            // self-heal by rebuilding the tunnel after a short backoff.
+            if (isActive && running.get()) {
+                Log.w(TAG, "Packet loop exited unexpectedly with tunnel still active -- self-healing")
+                scheduleRestart()
+            }
+        }
+    }
+
+    /** Rebuilds the tunnel after [RESTART_BACKOFF_MS], on the service-lifetime [scope] (survives the
+     * old workerJob completing). Anti-stacking: at most one restart is pending at a time. */
+    private fun scheduleRestart() {
+        if (!restartScheduled.compareAndSet(false, true)) return
+        scope.launch {
+            delay(RESTART_BACKOFF_MS)
+            restartScheduled.set(false)
+            // The service may have been torn down (VPN toggled off) during the backoff.
+            if (!running.get()) return@launch
+            reestablish()
         }
     }
 
@@ -355,6 +389,10 @@ class VpnFilterService : VpnService() {
         // See runPacketLoop's zero-length-read handling: how long to back off when the tun fd
         // returns 0 bytes without blocking, instead of busy-spinning on it.
         private const val EMPTY_READ_BACKOFF_MS = 20L
+        // How long to wait before rebuilding the tunnel after an unexpected packet-loop exit or a
+        // failed establish(). 3s balances fast recovery against not hammering establish() in a
+        // tight loop when the network genuinely isn't ready yet (e.g. right after boot).
+        private const val RESTART_BACKOFF_MS = 3_000L
 
         /** Public DoH/DoT resolver IPs -- refused (RST/dropped) so apps can't dodge filtering by
          *  hardcoding their own DNS instead of using the (filtered) system resolver set above. */
