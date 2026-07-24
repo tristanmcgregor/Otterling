@@ -13,7 +13,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.LockClock
@@ -168,9 +167,7 @@ fun DashboardScreen(context: Context, onOpenSettings: () -> Unit) {
                         Text("Block website")
                     }
                 }
-                RulesOverview(snapshot, now)
-                TimeBudgetOverview(snapshot)
-                TodayHabits(context, snapshot, habitsRefreshing) {
+                RulesOverview(context, snapshot, now, habitsRefreshing) {
                     habitsRefreshing = true
                     scope.launch {
                         withContext(Dispatchers.IO) {
@@ -180,6 +177,7 @@ fun DashboardScreen(context: Context, onOpenSettings: () -> Unit) {
                         refresh++
                     }
                 }
+                TimeBudgetOverview(snapshot)
                 RecentActivity(snapshot, now)
             }
         }
@@ -207,8 +205,28 @@ private fun ProtectionStatus(data: DashboardData) {
 }
 
 @Composable
-private fun RulesOverview(data: DashboardData, now: Long) {
+private fun RulesOverview(
+    context: Context,
+    data: DashboardData,
+    now: Long,
+    isRefreshing: Boolean,
+    onRefresh: () -> Unit,
+) {
     SectionCard(title = "Rules overview", icon = Icons.Default.LockClock) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.End,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Spacer(modifier = Modifier.weight(1f))
+            if (isRefreshing) {
+                CircularProgressIndicator(modifier = Modifier.size(20.dp))
+            } else {
+                IconButton(onClick = onRefresh, enabled = !isRefreshing) {
+                    Icon(Icons.Default.Refresh, contentDescription = "Refresh habits")
+                }
+            }
+        }
         if (data.rules.isEmpty()) {
             Text("No habit rules yet.", style = MaterialTheme.typography.bodySmall)
         } else {
@@ -239,7 +257,23 @@ private fun RulesOverview(data: DashboardData, now: Long) {
                     }
                 } else {
                     required.forEach { name ->
-                        Text("• $name — ${habitStatus(name, data)}", style = MaterialTheme.typography.bodySmall)
+                        val status = habitStatus(name, data)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                "• $name — $status",
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.weight(1f),
+                            )
+                            if (status == "Done, proof pending") {
+                                TextButton(onClick = { HabitProofActivity.launch(context, name) }) {
+                                    Text("Verify")
+                                }
+                            }
+                        }
                     }
                 }
                 if (rule.isTimeWindowed()) {
@@ -287,53 +321,6 @@ private fun TimeBudgetOverview(data: DashboardData) {
                             "${formatSeconds(subRemaining)} remaining",
                         style = MaterialTheme.typography.bodySmall,
                     )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun TodayHabits(
-    context: Context,
-    data: DashboardData,
-    isRefreshing: Boolean,
-    onRefresh: () -> Unit,
-) {
-    SectionCard(title = "Today's habits", icon = Icons.Default.CheckCircle) {
-        val today = LocalDate.now().toEpochDay()
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.End,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Spacer(modifier = Modifier.weight(1f))
-            if (isRefreshing) {
-                CircularProgressIndicator(modifier = Modifier.size(20.dp))
-            } else {
-                IconButton(onClick = onRefresh, enabled = !isRefreshing) {
-                    Icon(Icons.Default.Refresh, contentDescription = "Refresh habits")
-                }
-            }
-        }
-        if (data.habits.isEmpty()) {
-            Text("No habits detected yet. Open or connect HabitShare.", style = MaterialTheme.typography.bodySmall)
-        } else {
-            data.habits.forEach { habit ->
-                val current = habit.copy(doneToday = habit.doneToday && habit.dateEpochDay == today)
-                val status = habitStatus(current.name, data, current)
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(habit.name, modifier = Modifier.weight(1f))
-                    Text(status)
-                    if (status == "Done, proof pending") {
-                        TextButton(onClick = { HabitProofActivity.launch(context, habit.name) }) {
-                            Text("Verify")
-                        }
-                    }
                 }
             }
         }
