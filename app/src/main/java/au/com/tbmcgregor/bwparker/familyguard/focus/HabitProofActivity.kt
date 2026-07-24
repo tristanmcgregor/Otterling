@@ -11,19 +11,32 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -31,11 +44,18 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import androidx.lifecycle.lifecycleScope
+import au.com.tbmcgregor.bwparker.familyguard.ui.theme.FamilyGuardTheme
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -114,7 +134,7 @@ class HabitProofActivity : ComponentActivity() {
                 }
             }
 
-            MaterialTheme {
+            FamilyGuardTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     if (referenceMissing) {
                         NoReferencePhotoScreen(habitName = habitName, onDismiss = { finish() })
@@ -168,58 +188,140 @@ private fun HabitProofScreen(
     onTakePhoto: () -> Unit,
     onSkip: () -> Unit,
 ) {
-    Column(
-        modifier = Modifier.fillMaxSize().padding(32.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Text("Prove it: $habitName", style = MaterialTheme.typography.headlineSmall, textAlign = TextAlign.Center)
-        Spacer(Modifier.height(8.dp))
-        Text(
-            "Take a photo showing you actually doing this. It's automatically checked against " +
-                "your reference photo -- only a match unlocks anything gated on this habit today.",
-            style = MaterialTheme.typography.bodyMedium,
-            textAlign = TextAlign.Center,
+    val teal = Color(0xFF14B8A6)
+    val red = Color(0xFFEF4444)
+    Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+        // Dashed camera viewfinder frame.
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(24.dp)
+                .drawBehind {
+                    drawRoundRect(
+                        color = Color.White.copy(alpha = 0.25f),
+                        cornerRadius = CornerRadius(28.dp.toPx(), 28.dp.toPx()),
+                        style = Stroke(
+                            width = 3.dp.toPx(),
+                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(24f, 18f), 0f),
+                        ),
+                    )
+                },
         )
-        Spacer(Modifier.height(24.dp))
 
-        if (preview != null) {
-            Image(
-                bitmap = preview.asImageBitmap(),
-                contentDescription = "Proof photo preview",
-                modifier = Modifier.fillMaxWidth().height(220.dp),
-            )
-            Spacer(Modifier.height(16.dp))
+        IconButton(onClick = onSkip, modifier = Modifier.padding(8.dp).align(Alignment.TopStart)) {
+            Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.White)
         }
 
-        when (matchState) {
-            ProofMatchState.Checking -> {
-                CircularProgressIndicator()
-                Spacer(Modifier.height(8.dp))
-                Text("Checking against your reference photo...", style = MaterialTheme.typography.bodySmall)
-            }
-            ProofMatchState.NoMatch -> {
-                Text(
-                    "That doesn't look close enough to your reference photo. Frame it more like the " +
-                        "reference and retake. (You can add more reference angles, or lower the match " +
-                        "strictness, under HabitShare settings.)",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.error,
-                    textAlign = TextAlign.Center,
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .align(Alignment.BottomCenter)
+                .padding(28.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            if (preview != null && matchState != ProofMatchState.Matched) {
+                Image(
+                    bitmap = preview.asImageBitmap(),
+                    contentDescription = "Proof photo preview",
+                    modifier = Modifier.fillMaxWidth().height(180.dp),
                 )
-                Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.height(20.dp))
             }
-            else -> {}
-        }
 
-        Button(onClick = onTakePhoto, enabled = matchState != ProofMatchState.Checking) {
-            Text(if (matchState == ProofMatchState.NoMatch) "Retake photo" else "Take photo")
-        }
-        Spacer(Modifier.height(12.dp))
-        OutlinedButton(onClick = onSkip) {
-            Text("Not now")
+            when (matchState) {
+                ProofMatchState.Checking -> {
+                    CircularProgressIndicator(color = Color.White)
+                    Spacer(Modifier.height(16.dp))
+                    Text(
+                        "Checking against your reference...",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = Color.White,
+                        textAlign = TextAlign.Center,
+                    )
+                }
+                ProofMatchState.Matched -> {
+                    ResultBadge(teal, matched = true)
+                    Spacer(Modifier.height(16.dp))
+                    Text("Verified!", style = MaterialTheme.typography.headlineSmall, color = Color.White)
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "Your apps are now unlocked.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color.White.copy(alpha = 0.8f),
+                    )
+                }
+                ProofMatchState.NoMatch -> {
+                    ResultBadge(red, matched = false)
+                    Spacer(Modifier.height(16.dp))
+                    Text("Not quite right", style = MaterialTheme.typography.headlineSmall, color = Color.White)
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "That doesn't look close enough to your reference photo. Frame it more like " +
+                            "the reference and retake. (Add more reference angles or lower the match " +
+                            "strictness under HabitShare settings.)",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color.White.copy(alpha = 0.8f),
+                        textAlign = TextAlign.Center,
+                    )
+                    Spacer(Modifier.height(24.dp))
+                    WhiteButton(onClick = onTakePhoto) { Text("Retake photo") }
+                }
+                ProofMatchState.Idle -> {
+                    Text(
+                        "Prove it: $habitName",
+                        style = MaterialTheme.typography.headlineSmall,
+                        color = Color.White,
+                        textAlign = TextAlign.Center,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "Take a photo showing you doing this. It's checked against your reference " +
+                            "photo -- only a match unlocks anything gated on this habit today.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Color.White.copy(alpha = 0.8f),
+                        textAlign = TextAlign.Center,
+                    )
+                    Spacer(Modifier.height(24.dp))
+                    WhiteButton(onClick = onTakePhoto) {
+                        Icon(Icons.Default.PhotoCamera, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Take photo")
+                    }
+                    TextButton(onClick = onSkip) {
+                        Text("Not now", color = Color.White)
+                    }
+                }
+            }
         }
     }
+}
+
+@Composable
+private fun ResultBadge(color: Color, matched: Boolean) {
+    Box(
+        modifier = Modifier.size(80.dp).clip(CircleShape).background(color),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            if (matched) Icons.Default.Check else Icons.Default.Close,
+            contentDescription = null,
+            tint = Color.White,
+            modifier = Modifier.size(40.dp),
+        )
+    }
+}
+
+@Composable
+private fun WhiteButton(onClick: () -> Unit, content: @Composable RowScope.() -> Unit) {
+    Button(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth().height(60.dp),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = Color.White,
+            contentColor = Color.Black,
+        ),
+        content = content,
+    )
 }
 
 @Composable

@@ -69,6 +69,7 @@ import au.com.tbmcgregor.bwparker.familyguard.ui.SectionCard
 import au.com.tbmcgregor.bwparker.familyguard.ui.SettingsScreen
 import au.com.tbmcgregor.bwparker.familyguard.ui.TimeBudgetsSection
 import au.com.tbmcgregor.bwparker.familyguard.ui.VpnFilterSection
+import au.com.tbmcgregor.bwparker.familyguard.ui.theme.FamilyGuardTheme
 import au.com.tbmcgregor.bwparker.familyguard.ui.loadInstalledApps
 import au.com.tbmcgregor.bwparker.familyguard.ui.StatusText
 import au.com.tbmcgregor.bwparker.familyguard.ui.SwitchRow
@@ -94,7 +95,7 @@ class MainActivity : ComponentActivity() {
         RestrictionEnforcementWorker.enqueuePeriodic(applicationContext)
         BlocklistRefreshWorker.enqueuePeriodic(applicationContext)
         setContent {
-            MaterialTheme {
+            FamilyGuardTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     var screen by remember { mutableStateOf(Screen.Home) }
                     val pinAuthManager = remember { PinAuthManager(applicationContext) }
@@ -348,6 +349,8 @@ class MainActivity : ComponentActivity() {
                     restrictionsManager.setUninstallBlocked(it)
                     refreshTrigger++
                 },
+                description = "Require Device Owner to remove protected apps",
+                emphasizeLabel = true,
             )
 
             states.forEach { (restriction, enabled) ->

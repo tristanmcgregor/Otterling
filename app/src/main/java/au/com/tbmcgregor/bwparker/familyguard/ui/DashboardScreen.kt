@@ -1,33 +1,43 @@
 package au.com.tbmcgregor.bwparker.familyguard.ui
 
 import android.content.Context
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockClock
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Shield
+import androidx.compose.material.icons.filled.Smartphone
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -41,7 +51,9 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import au.com.tbmcgregor.bwparker.familyguard.admin.DeviceOwnerManager
 import au.com.tbmcgregor.bwparker.familyguard.content.CustomBlocklistManager
@@ -134,75 +146,130 @@ fun DashboardScreen(context: Context, onOpenSettings: () -> Unit) {
         )
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text("Family Device Guard", style = MaterialTheme.typography.headlineMedium)
-            Text(
-                "Your protection and progress today",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
+    Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    "Family Device Guard",
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = FontWeight.Bold,
+                )
+                Text(
+                    "Your protection and progress today",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
 
-        when {
-            data == null && loadError == null -> {
-                CircularProgressIndicator(modifier = Modifier.align(Alignment.CenterHorizontally))
-            }
-            loadError != null -> {
-                Text(loadError!!, color = MaterialTheme.colorScheme.error)
-                OutlinedButton(onClick = { refresh++ }) { Text("Refresh") }
-            }
-            data != null -> {
-                val snapshot = data!!
-                ProtectionStatus(snapshot)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = { showRuleWizard = true }, modifier = Modifier.weight(1f)) {
-                        Text("Add rule")
-                    }
-                    OutlinedButton(onClick = { showDomainDialog = true }, modifier = Modifier.weight(1f)) {
-                        Text("Block website")
-                    }
+            when {
+                data == null && loadError == null -> {
+                    CircularProgressIndicator(modifier = Modifier.align(Alignment.CenterHorizontally))
                 }
-                RulesOverview(context, snapshot, now, habitsRefreshing) {
-                    habitsRefreshing = true
-                    scope.launch {
-                        withContext(Dispatchers.IO) {
-                            runCatching { HabitShareSyncManager(context).syncIfConnected() }
+                loadError != null -> {
+                    Text(loadError!!, color = MaterialTheme.colorScheme.error)
+                    OutlinedButton(onClick = { refresh++ }) { Text("Refresh") }
+                }
+                data != null -> {
+                    val snapshot = data!!
+                    ProtectionStatus(snapshot)
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Button(onClick = { showRuleWizard = true }, modifier = Modifier.weight(1f)) {
+                            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.size(8.dp))
+                            Text("Add rule")
                         }
-                        habitsRefreshing = false
-                        refresh++
+                        OutlinedButton(onClick = { showDomainDialog = true }, modifier = Modifier.weight(1f)) {
+                            Icon(Icons.Default.Language, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.size(8.dp))
+                            Text("Block web")
+                        }
                     }
+                    RulesOverview(context, snapshot, now, habitsRefreshing) {
+                        habitsRefreshing = true
+                        scope.launch {
+                            withContext(Dispatchers.IO) {
+                                runCatching { HabitShareSyncManager(context).syncIfConnected() }
+                            }
+                            habitsRefreshing = false
+                            refresh++
+                        }
+                    }
+                    TimeBudgetOverview(snapshot)
+                    DebugLogs()
                 }
-                TimeBudgetOverview(snapshot)
-                DebugLogs()
             }
+
+            Spacer(Modifier.height(72.dp))
         }
 
-        Button(onClick = onOpenSettings, modifier = Modifier.fillMaxWidth()) {
-            Text("Open Settings with PIN")
+        Surface(
+            modifier = Modifier.fillMaxWidth().align(Alignment.BottomCenter),
+            color = MaterialTheme.colorScheme.background,
+            tonalElevation = 0.dp,
+            shadowElevation = 8.dp,
+        ) {
+            Button(
+                onClick = onOpenSettings,
+                modifier = Modifier.fillMaxWidth().padding(16.dp),
+            ) {
+                Icon(Icons.Default.Lock, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.size(8.dp))
+                Text("Open Settings with PIN")
+            }
         }
     }
 }
 
 @Composable
 private fun ProtectionStatus(data: DashboardData) {
-    SectionCard(
-        title = if (data.isDeviceOwner) "Protected" else "Setup required",
-        icon = Icons.Default.Shield,
+    val good = data.isDeviceOwner
+    val container = if (good) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.errorContainer
+    val onContainer = if (good) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onErrorContainer
+    val badge = if (good) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.error
+    val onBadge = if (good) MaterialTheme.colorScheme.onSecondary else MaterialTheme.colorScheme.onError
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.extraLarge,
+        color = container,
+        contentColor = onContainer,
+        shadowElevation = 2.dp,
     ) {
-        Text(
-            if (data.isDeviceOwner) {
-                "${data.activeRestrictions} of ${data.totalRestrictions} tamper protections active"
-            } else {
-                "Device Owner isn't active. Open Settings to finish setup."
-            },
-        )
+        Row(
+            modifier = Modifier.padding(20.dp),
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(48.dp)
+                    .clip(CircleShape)
+                    .background(badge),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.Default.Shield, contentDescription = null, tint = onBadge)
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    if (good) "Protected" else "Setup required",
+                    style = MaterialTheme.typography.titleLarge,
+                )
+                Text(
+                    if (good) {
+                        "${data.activeRestrictions} of ${data.totalRestrictions} tamper protections active"
+                    } else {
+                        "Device Owner isn't active. Open Settings to finish setup."
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = onContainer.copy(alpha = 0.8f),
+                )
+            }
+        }
     }
 }
 
@@ -232,67 +299,131 @@ private fun RulesOverview(
         if (data.rules.isEmpty()) {
             Text("No habit rules yet.", style = MaterialTheme.typography.bodySmall)
         } else {
-            data.rules.forEachIndexed { index, rule ->
-                if (index > 0) HorizontalDivider()
-                val required = rule.requiredHabitNames()
-                Text(data.label(rule.targetPackageName), style = MaterialTheme.typography.titleSmall)
-                if (!rule.enabled) {
-                    Text("Disabled in Settings", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                if (required.isEmpty()) {
-                    Text(
-                        if (rule.isTimeWindowed()) {
-                            "Unconditional block during the window"
-                        } else {
-                            "Required: all habits complete"
-                        },
+            data.rules.forEach { rule -> RuleCard(context, data, rule, now) }
+        }
+    }
+}
+
+@Composable
+private fun RuleCard(context: Context, data: DashboardData, rule: HabitRule, now: Long) {
+    val required = rule.requiredHabitNames()
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.large,
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Icon(
+                        Icons.Default.Smartphone,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                        tint = MaterialTheme.colorScheme.onSurface,
                     )
-                    if (!rule.isTimeWindowed()) {
-                        Text(
-                            if (allDetectedHabitsSatisfied(data)) {
-                                "Status: all detected habits complete"
-                            } else {
-                                "Status: waiting for all habits"
-                            },
-                            style = MaterialTheme.typography.bodySmall,
+                    Text(
+                        data.label(rule.targetPackageName),
+                        style = MaterialTheme.typography.titleSmall,
+                    )
+                }
+                if (rule.isTimeWindowed()) {
+                    Pill(
+                        "${formatDays(rule.daysOfWeekSet())}, " +
+                            "${formatMinute(rule.windowStartMinute!!)}–${formatMinute(rule.windowEndMinute!!)}",
+                        PillVariant.Default,
+                    )
+                }
+            }
+
+            if (!rule.enabled) {
+                Text(
+                    "Disabled in Settings",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            if (required.isEmpty()) {
+                if (rule.isTimeWindowed()) {
+                    Text(
+                        "Unconditional block during the window",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                } else {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("All habits complete", style = MaterialTheme.typography.bodyMedium)
+                        val done = allDetectedHabitsSatisfied(data)
+                        Pill(
+                            if (done) "Complete" else "Waiting",
+                            if (done) PillVariant.Success else PillVariant.Warning,
                         )
                     }
-                } else {
-                    required.forEach { name ->
-                        val status = habitStatus(name, data)
+                }
+            } else {
+                required.forEach { name ->
+                    val status = habitStatus(name, data)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            name,
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.weight(1f),
+                        )
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
-                            Text(
-                                "• $name — $status",
-                                style = MaterialTheme.typography.bodySmall,
-                                modifier = Modifier.weight(1f),
-                            )
+                            Pill(status, pillForStatus(status))
                             if (status == "Done, proof pending") {
-                                TextButton(onClick = { HabitProofActivity.launch(context, name) }) {
-                                    Text("Verify")
+                                FilledTonalButton(
+                                    onClick = { HabitProofActivity.launch(context, name) },
+                                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
+                                ) {
+                                    Text("Verify", style = MaterialTheme.typography.labelLarge)
                                 }
                             }
                         }
                     }
                 }
-                if (rule.isTimeWindowed()) {
-                    Text(
-                        "${formatDays(rule.daysOfWeekSet())}, " +
-                            "${formatMinute(rule.windowStartMinute!!)}–${formatMinute(rule.windowEndMinute!!)}",
-                        style = MaterialTheme.typography.bodySmall,
+            }
+
+            if (rule.isTimeWindowed()) {
+                RuleFooter(
+                    icon = Icons.Default.Lock,
+                    text = "Blocked until requirements met",
+                    tint = MaterialTheme.colorScheme.tertiary,
+                )
+            } else {
+                val remaining = (rule.unlockUntilMillis - now).coerceAtLeast(0)
+                if (remaining > 0) {
+                    RuleFooter(
+                        icon = Icons.Default.Schedule,
+                        text = "Unlocked for ${formatDuration(remaining)} more",
+                        tint = MaterialTheme.colorScheme.secondary,
                     )
                 } else {
-                    val remaining = (rule.unlockUntilMillis - now).coerceAtLeast(0)
-                    Text(
-                        if (remaining > 0) {
-                            "Unlocked for ${formatDuration(remaining)} more"
-                        } else {
-                            "Unlock duration: ${rule.unlockMinutes} minutes"
-                        },
-                        style = MaterialTheme.typography.bodySmall,
+                    RuleFooter(
+                        icon = Icons.Default.Lock,
+                        text = "Unlocks for ${rule.unlockMinutes} min once done",
+                        tint = MaterialTheme.colorScheme.tertiary,
                     )
                 }
             }
@@ -301,28 +432,56 @@ private fun RulesOverview(
 }
 
 @Composable
+private fun RuleFooter(icon: androidx.compose.ui.graphics.vector.ImageVector, text: String, tint: androidx.compose.ui.graphics.Color) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Icon(icon, contentDescription = null, modifier = Modifier.size(14.dp), tint = tint)
+        Text(text, style = MaterialTheme.typography.labelMedium, color = tint)
+    }
+}
+
+private fun pillForStatus(status: String): PillVariant = when (status) {
+    "Not done" -> PillVariant.Warning
+    "Done and verified", "Done (no proof needed)" -> PillVariant.Success
+    "Done, proof pending" -> PillVariant.Default
+    else -> PillVariant.Default
+}
+
+@Composable
 private fun TimeBudgetOverview(data: DashboardData) {
     SectionCard(title = "Remaining app time", icon = Icons.Default.History) {
         if (data.budgets.isEmpty()) {
             Text("No daily app budgets configured.", style = MaterialTheme.typography.bodySmall)
         } else {
-            data.budgets.forEachIndexed { index, (budget, counter) ->
-                if (index > 0) HorizontalDivider()
+            data.budgets.forEach { (budget, counter) ->
                 val limitSeconds = budget.dailyLimitMinutes * 60
                 val remainingSeconds = (limitSeconds - counter.totalSeconds).coerceAtLeast(0)
-                Text(data.label(budget.packageName), style = MaterialTheme.typography.titleSmall)
-                Text("${formatSeconds(remainingSeconds)} remaining of ${budget.dailyLimitMinutes} min")
-                LinearProgressIndicator(
-                    progress = { (counter.totalSeconds.toFloat() / limitSeconds.coerceAtLeast(1)).coerceIn(0f, 1f) },
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                budget.subLimitMinutes?.let { subLimit ->
-                    val subRemaining = (subLimit * 60 - counter.subSeconds).coerceAtLeast(0)
-                    Text(
-                        "${budget.subLimitLabel?.takeIf { it.isNotBlank() } ?: "Sub-limit"}: " +
-                            "${formatSeconds(subRemaining)} remaining",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
+                val remainingFraction = (remainingSeconds.toFloat() / limitSeconds.coerceAtLeast(1))
+                val low = remainingFraction <= 0.2f
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text(data.label(budget.packageName), style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            "${formatSeconds(remainingSeconds)} / ${budget.dailyLimitMinutes}m",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = if (low) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
+                    TimeBudgetBar(fraction = remainingFraction, low = low)
+                    budget.subLimitMinutes?.let { subLimit ->
+                        val subRemaining = (subLimit * 60 - counter.subSeconds).coerceAtLeast(0)
+                        Text(
+                            "${budget.subLimitLabel?.takeIf { it.isNotBlank() } ?: "Sub-limit"}: " +
+                                "${formatSeconds(subRemaining)} remaining",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
             }
         }
@@ -346,38 +505,67 @@ private fun DebugLogs() {
 
     LaunchedEffect(Unit) { load() }
 
-    SectionCard(title = "Debug logs", icon = Icons.Default.History) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.End,
-            verticalAlignment = Alignment.CenterVertically,
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.extraLarge,
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Spacer(modifier = Modifier.weight(1f))
-            if (loading) {
-                CircularProgressIndicator(modifier = Modifier.size(20.dp))
-            } else {
-                IconButton(onClick = { load() }, enabled = !loading) {
-                    Icon(Icons.Default.Refresh, contentDescription = "Refresh logs")
-                }
-            }
-        }
-        val current = lines
-        when {
-            current == null -> Text("Loading logs…", style = MaterialTheme.typography.bodySmall)
-            current.isEmpty() -> Text("No logs captured yet.", style = MaterialTheme.typography.bodySmall)
-            else -> {
-                val reversed = current.asReversed()
-                val visible = if (expanded) reversed.take(200) else reversed.take(DEBUG_LOG_COLLAPSED_LIMIT)
-                visible.forEach { line ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Icon(
+                        Icons.Default.BugReport,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                     Text(
-                        line,
-                        style = MaterialTheme.typography.bodySmall,
-                        fontFamily = FontFamily.Monospace,
+                        "Debug logs",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                if (reversed.size > DEBUG_LOG_COLLAPSED_LIMIT) {
-                    TextButton(onClick = { expanded = !expanded }) {
-                        Text(if (expanded) "Show less" else "Show more")
+                if (loading) {
+                    CircularProgressIndicator(modifier = Modifier.size(18.dp))
+                } else {
+                    IconButton(onClick = { load() }, enabled = !loading) {
+                        Icon(
+                            Icons.Default.Refresh,
+                            contentDescription = "Refresh logs",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+            val current = lines
+            when {
+                current == null -> Text("Loading logs…", style = MaterialTheme.typography.bodySmall)
+                current.isEmpty() -> Text("No logs captured yet.", style = MaterialTheme.typography.bodySmall)
+                else -> {
+                    val reversed = current.asReversed()
+                    val visible = if (expanded) reversed.take(200) else reversed.take(DEBUG_LOG_COLLAPSED_LIMIT)
+                    visible.forEach { line ->
+                        Text(
+                            line,
+                            style = MaterialTheme.typography.bodySmall,
+                            fontFamily = FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    if (reversed.size > DEBUG_LOG_COLLAPSED_LIMIT) {
+                        TextButton(onClick = { expanded = !expanded }) {
+                            Text(if (expanded) "Show less" else "Show more")
+                        }
                     }
                 }
             }

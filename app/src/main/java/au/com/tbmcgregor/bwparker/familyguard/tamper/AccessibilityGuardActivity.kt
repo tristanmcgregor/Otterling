@@ -7,15 +7,22 @@ import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -24,10 +31,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.AccessibilityGuard
+import au.com.tbmcgregor.bwparker.familyguard.ui.theme.FamilyGuardTheme
 import kotlinx.coroutines.delay
 
 /**
@@ -49,7 +58,7 @@ class AccessibilityGuardActivity : ComponentActivity() {
         runCatching { startLockTask() }
 
         setContent {
-            MaterialTheme {
+            FamilyGuardTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     AccessibilityGuardScreen(
                         onOpenSettings = {
@@ -108,25 +117,77 @@ private fun AccessibilityGuardScreen(onOpenSettings: () -> Unit, onResolved: () 
     }
 
     Column(
-        modifier = Modifier.fillMaxSize().padding(32.dp),
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.error)
+            .padding(32.dp),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Icon(Icons.Default.Lock, contentDescription = null, modifier = Modifier.height(48.dp))
-        Spacer(Modifier.height(16.dp))
+        val onError = MaterialTheme.colorScheme.onError
+        Box(
+            modifier = Modifier
+                .size(80.dp)
+                .clip(CircleShape)
+                .background(onError.copy(alpha = 0.2f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                Icons.Default.Shield,
+                contentDescription = null,
+                tint = onError,
+                modifier = Modifier.size(40.dp),
+            )
+        }
+        Spacer(Modifier.height(24.dp))
         Text(
-            "Accessibility access was turned off",
+            "Protection Disabled",
             style = MaterialTheme.typography.headlineMedium,
+            color = onError,
             textAlign = TextAlign.Center,
         )
         Spacer(Modifier.height(16.dp))
         Text(
-            "Family Device Guard needs this permission to enforce friction screens, time " +
-                "budgets, and habit-based unlocks. Turn it back on to keep using this device.",
+            "The required accessibility service was turned off. Family Device Guard can't enforce " +
+                "friction screens, time budgets, or habit-based unlocks until it's back on.",
             style = MaterialTheme.typography.bodyLarge,
+            color = onError.copy(alpha = 0.9f),
             textAlign = TextAlign.Center,
         )
         Spacer(Modifier.height(32.dp))
-        Button(onClick = onOpenSettings) { Text("Open Accessibility settings") }
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = MaterialTheme.shapes.extraLarge,
+            color = onError.copy(alpha = 0.12f),
+            border = BorderStroke(1.dp, onError.copy(alpha = 0.25f)),
+            contentColor = onError,
+        ) {
+            Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("How to fix:", style = MaterialTheme.typography.titleMedium, color = onError)
+                listOf(
+                    "Open device Settings",
+                    "Go to Accessibility",
+                    "Find \"Family Device Guard\"",
+                    "Turn the switch on",
+                ).forEachIndexed { index, step ->
+                    Text(
+                        "${index + 1}. $step",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = onError.copy(alpha = 0.9f),
+                    )
+                }
+            }
+        }
+        Spacer(Modifier.height(32.dp))
+        Button(
+            onClick = onOpenSettings,
+            modifier = Modifier.fillMaxWidth().height(56.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = onError,
+                contentColor = MaterialTheme.colorScheme.error,
+            ),
+        ) {
+            Text("Re-enable in Settings", style = MaterialTheme.typography.titleMedium)
+        }
     }
 }

@@ -9,14 +9,17 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -38,6 +41,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -1222,7 +1226,10 @@ private fun HabitConditionPickerDialog(
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 Checkbox(checked = habit.name in selected, onCheckedChange = { toggle(habit.name) })
-                                Text(habit.name)
+                                Text(habit.name, modifier = Modifier.weight(1f))
+                                if (habit.name in selected) {
+                                    Pill("Selected", PillVariant.Success)
+                                }
                             }
                             ProofRequirementRow(
                                 habitName = habit.name,
@@ -1375,18 +1382,27 @@ private fun HabitWindowPickerDialog(
 }
 
 /** Compact Mon-Sun toggle row for restricting a windowed rule to specific days -- at least one
- * day must stay selected (see [HabitWindowPickerDialog.toggleDay]). */
+ * day must stay selected (see [HabitWindowPickerDialog.toggleDay]). Rendered as a row of circular
+ * toggle buttons matching the Figma design. */
 @Composable
 private fun DayOfWeekPicker(selectedDays: Set<DayOfWeek>, onToggle: (DayOfWeek) -> Unit) {
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         DayOfWeek.entries.forEach { day ->
             val selected = day in selectedDays
-            FilterChip(
-                selected = selected,
+            Surface(
                 onClick = { onToggle(day) },
-                label = { Text(day.name.take(1) + day.name.drop(1).take(1).lowercase()) },
-                modifier = Modifier.weight(1f),
-            )
+                modifier = Modifier.weight(1f).aspectRatio(1f),
+                shape = CircleShape,
+                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+                contentColor = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Text(
+                        day.name.take(1),
+                        style = MaterialTheme.typography.labelLarge,
+                    )
+                }
+            }
         }
     }
 }
