@@ -41,6 +41,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import au.com.tbmcgregor.bwparker.familyguard.admin.DeviceOwnerManager
 import au.com.tbmcgregor.bwparker.familyguard.content.CustomBlocklistManager
@@ -59,6 +60,7 @@ import au.com.tbmcgregor.bwparker.familyguard.focus.HabitShareSyncManager
 import au.com.tbmcgregor.bwparker.familyguard.focus.daysOfWeekSet
 import au.com.tbmcgregor.bwparker.familyguard.focus.isTimeWindowed
 import au.com.tbmcgregor.bwparker.familyguard.focus.requiredHabitNames
+import au.com.tbmcgregor.bwparker.familyguard.monitoring.DebugLogReader
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.DeviceRestrictionsManager
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.Restriction
 import au.com.tbmcgregor.bwparker.familyguard.tamper.TamperEvent
@@ -178,7 +180,7 @@ fun DashboardScreen(context: Context, onOpenSettings: () -> Unit) {
                     }
                 }
                 TimeBudgetOverview(snapshot)
-                RecentActivity(snapshot, now)
+                DebugLogs()
             }
         }
 
@@ -327,49 +329,63 @@ private fun TimeBudgetOverview(data: DashboardData) {
     }
 }
 
-private data class ActivityItem(val timestamp: Long, val title: String, val details: String)
-
 @Composable
-private fun RecentActivity(data: DashboardData, now: Long) {
-    val items = remember(data) {
-        val tamperItems = data.events.map { event ->
-            ActivityItem(
-                event.timestampMillis,
-                friendlyEventType(event.type),
-                replacePackages(event.details, data.appLabels),
-            )
-        }
-        val proofItems = data.proofLogs.map { log ->
-            ActivityItem(log.submittedAtMillis, "Proof verified", log.habitName)
-        }
-        (tamperItems + proofItems).sortedByDescending { it.timestamp }.take(30)
-    }
+private fun DebugLogs() {
+    var lines by remember { mutableStateOf<List<String>?>(null) }
+    var loading by remember { mutableStateOf(false) }
     var expanded by remember { mutableStateOf(false) }
-    SectionCard(title = "Recent activity", icon = Icons.Default.History) {
-        if (items.isEmpty()) {
-            Text("No recent activity.", style = MaterialTheme.typography.bodySmall)
-        } else {
-            val visible = if (expanded) items else items.take(RECENT_ACTIVITY_COLLAPSED_LIMIT)
-            visible.forEachIndexed { index, item ->
-                if (index > 0) HorizontalDivider()
-                Text(item.title, style = MaterialTheme.typography.titleSmall)
-                Text(item.details, style = MaterialTheme.typography.bodySmall)
-                Text(
-                    relativeTime(now - item.timestamp),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+    val scope = rememberCoroutineScope()
+
+    fun load() {
+        loading = true
+        scope.launch {
+            lines = DebugLogReader.recentLines()
+            loading = false
+        }
+    }
+
+    LaunchedEffect(Unit) { load() }
+
+    SectionCard(title = "Debug logs", icon = Icons.Default.History) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.End,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Spacer(modifier = Modifier.weight(1f))
+            if (loading) {
+                CircularProgressIndicator(modifier = Modifier.size(20.dp))
+            } else {
+                IconButton(onClick = { load() }, enabled = !loading) {
+                    Icon(Icons.Default.Refresh, contentDescription = "Refresh logs")
+                }
             }
-            if (items.size > RECENT_ACTIVITY_COLLAPSED_LIMIT) {
-                TextButton(onClick = { expanded = !expanded }) {
-                    Text(if (expanded) "Show less" else "Show more (${items.size - RECENT_ACTIVITY_COLLAPSED_LIMIT})")
+        }
+        val current = lines
+        when {
+            current == null -> Text("Loading logs…", style = MaterialTheme.typography.bodySmall)
+            current.isEmpty() -> Text("No logs captured yet.", style = MaterialTheme.typography.bodySmall)
+            else -> {
+                val reversed = current.asReversed()
+                val visible = if (expanded) reversed.take(200) else reversed.take(DEBUG_LOG_COLLAPSED_LIMIT)
+                visible.forEach { line ->
+                    Text(
+                        line,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontFamily = FontFamily.Monospace,
+                    )
+                }
+                if (reversed.size > DEBUG_LOG_COLLAPSED_LIMIT) {
+                    TextButton(onClick = { expanded = !expanded }) {
+                        Text(if (expanded) "Show less" else "Show more")
+                    }
                 }
             }
         }
     }
 }
 
-private const val RECENT_ACTIVITY_COLLAPSED_LIMIT = 3
+private const val DEBUG_LOG_COLLAPSED_LIMIT = 8
 
 @Composable
 fun BlockedWebsitesSettingsSection(context: Context) {
@@ -539,25 +555,3 @@ private fun formatSeconds(seconds: Int): String {
     val minutes = seconds % 3_600 / 60
     return if (hours > 0) "${hours}h ${minutes}m" else "${minutes}m"
 }
-
-private fun relativeTime(ageMillis: Long): String {
-    val seconds = (ageMillis / 1_000).coerceAtLeast(0)
-    return when {
-        seconds < 10 -> "Just now"
-        seconds < 60 -> "${seconds}s ago"
-        seconds < 3_600 -> "${seconds / 60}m ago"
-        seconds < 86_400 -> "${seconds / 3_600}h ago"
-        else -> "${seconds / 86_400}d ago"
-    }
-}
-
-private fun friendlyEventType(type: String): String = when (type) {
-    "HABIT_UNLOCK" -> "Habit unlock granted"
-    "RESTRICTION_DRIFT" -> "Protection restored"
-    "ACCESSIBILITY_DISABLED" -> "Accessibility protection disabled"
-    "DEVICE_ADMIN_DISABLED" -> "Device admin disabled"
-    else -> type.lowercase().replace('_', ' ').replaceFirstChar { it.titlecase() }
-}
-
-private fun replacePackages(details: String, labels: Map<String, String>): String =
-    labels.entries.fold(details) { text, (packageName, label) -> text.replace(packageName, label) }
