@@ -11,18 +11,23 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockClock
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Shield
@@ -30,6 +35,8 @@ import androidx.compose.material.icons.filled.Smartphone
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -108,6 +115,8 @@ fun DashboardScreen(context: Context, onOpenSettings: () -> Unit) {
     var loadError by remember { mutableStateOf<String?>(null) }
     var showRuleWizard by remember { mutableStateOf(false) }
     var showDomainDialog by remember { mutableStateOf(false) }
+    var showMenu by remember { mutableStateOf(false) }
+    var showDebugLogs by remember { mutableStateOf(false) }
     var habitsRefreshing by remember { mutableStateOf(false) }
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     val scope = rememberCoroutineScope()
@@ -145,26 +154,49 @@ fun DashboardScreen(context: Context, onOpenSettings: () -> Unit) {
             },
         )
     }
+    if (showDebugLogs) {
+        DebugLogsDialog(onDismiss = { showDebugLogs = false })
+    }
 
     Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
+                .statusBarsPadding()
                 .padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(
-                    "Family Device Guard",
-                    style = MaterialTheme.typography.headlineMedium,
-                    fontWeight = FontWeight.Bold,
-                )
-                Text(
-                    "Your protection and progress today",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(
+                        "Family Device Guard",
+                        style = MaterialTheme.typography.headlineMedium,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    Text(
+                        "Your protection and progress today",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Box {
+                    IconButton(onClick = { showMenu = true }) {
+                        Icon(Icons.Default.MoreVert, contentDescription = "More")
+                    }
+                    DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                        DropdownMenuItem(
+                            text = { Text("Debug logs") },
+                            onClick = {
+                                showMenu = false
+                                showDebugLogs = true
+                            },
+                        )
+                    }
+                }
             }
 
             when {
@@ -201,7 +233,6 @@ fun DashboardScreen(context: Context, onOpenSettings: () -> Unit) {
                         }
                     }
                     TimeBudgetOverview(snapshot)
-                    DebugLogs()
                 }
             }
 
@@ -209,7 +240,7 @@ fun DashboardScreen(context: Context, onOpenSettings: () -> Unit) {
         }
 
         Surface(
-            modifier = Modifier.fillMaxWidth().align(Alignment.BottomCenter),
+            modifier = Modifier.fillMaxWidth().align(Alignment.BottomCenter).navigationBarsPadding(),
             color = MaterialTheme.colorScheme.background,
             tonalElevation = 0.dp,
             shadowElevation = 8.dp,
@@ -281,13 +312,10 @@ private fun RulesOverview(
     isRefreshing: Boolean,
     onRefresh: () -> Unit,
 ) {
-    SectionCard(title = "Rules overview", icon = Icons.Default.LockClock) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.End,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Spacer(modifier = Modifier.weight(1f))
+    SectionCard(
+        title = "Rules overview",
+        icon = Icons.Default.LockClock,
+        action = {
             if (isRefreshing) {
                 CircularProgressIndicator(modifier = Modifier.size(20.dp))
             } else {
@@ -295,7 +323,8 @@ private fun RulesOverview(
                     Icon(Icons.Default.Refresh, contentDescription = "Refresh habits")
                 }
             }
-        }
+        },
+    ) {
         if (data.rules.isEmpty()) {
             Text("No habit rules yet.", style = MaterialTheme.typography.bodySmall)
         } else {
@@ -406,11 +435,19 @@ private fun RuleCard(context: Context, data: DashboardData, rule: HabitRule, now
             }
 
             if (rule.isTimeWindowed()) {
-                RuleFooter(
-                    icon = Icons.Default.Lock,
-                    text = "Blocked until requirements met",
-                    tint = MaterialTheme.colorScheme.tertiary,
-                )
+                if (requiredHabitsAllDone(required, data)) {
+                    RuleFooter(
+                        icon = Icons.Default.CheckCircle,
+                        text = "Unlocked",
+                        tint = MaterialTheme.colorScheme.secondary,
+                    )
+                } else {
+                    RuleFooter(
+                        icon = Icons.Default.Lock,
+                        text = "Blocked until requirements met",
+                        tint = MaterialTheme.colorScheme.tertiary,
+                    )
+                }
             } else {
                 val remaining = (rule.unlockUntilMillis - now).coerceAtLeast(0)
                 if (remaining > 0) {
@@ -442,9 +479,15 @@ private fun RuleFooter(icon: androidx.compose.ui.graphics.vector.ImageVector, te
     }
 }
 
+private fun requiredHabitsAllDone(required: List<String>, data: DashboardData): Boolean =
+    required.isNotEmpty() && required.all {
+        val s = habitStatus(it, data)
+        s == "Done and verified" || s == "Done"
+    }
+
 private fun pillForStatus(status: String): PillVariant = when (status) {
     "Not done" -> PillVariant.Warning
-    "Done and verified", "Done (no proof needed)" -> PillVariant.Success
+    "Done and verified", "Done" -> PillVariant.Success
     "Done, proof pending" -> PillVariant.Default
     else -> PillVariant.Default
 }
@@ -489,7 +532,7 @@ private fun TimeBudgetOverview(data: DashboardData) {
 }
 
 @Composable
-private fun DebugLogs() {
+private fun DebugLogsDialog(onDismiss: () -> Unit) {
     var lines by remember { mutableStateOf<List<String>?>(null) }
     var loading by remember { mutableStateOf(false) }
     var expanded by remember { mutableStateOf(false) }
@@ -505,72 +548,55 @@ private fun DebugLogs() {
 
     LaunchedEffect(Unit) { load() }
 
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = MaterialTheme.shapes.extraLarge,
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
             Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Icon(
-                        Icons.Default.BugReport,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Text(
-                        "Debug logs",
-                        style = MaterialTheme.typography.titleSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                if (loading) {
-                    CircularProgressIndicator(modifier = Modifier.size(18.dp))
-                } else {
-                    IconButton(onClick = { load() }, enabled = !loading) {
-                        Icon(
-                            Icons.Default.Refresh,
-                            contentDescription = "Refresh logs",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
+                Icon(Icons.Default.BugReport, contentDescription = null)
+                Text("Debug logs")
             }
-            val current = lines
-            when {
-                current == null -> Text("Loading logs…", style = MaterialTheme.typography.bodySmall)
-                current.isEmpty() -> Text("No logs captured yet.", style = MaterialTheme.typography.bodySmall)
-                else -> {
-                    val reversed = current.asReversed()
-                    val visible = if (expanded) reversed.take(200) else reversed.take(DEBUG_LOG_COLLAPSED_LIMIT)
-                    visible.forEach { line ->
-                        Text(
-                            line,
-                            style = MaterialTheme.typography.bodySmall,
-                            fontFamily = FontFamily.Monospace,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    if (reversed.size > DEBUG_LOG_COLLAPSED_LIMIT) {
-                        TextButton(onClick = { expanded = !expanded }) {
-                            Text(if (expanded) "Show less" else "Show more")
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .verticalScroll(rememberScrollState())
+                    .heightIn(max = 420.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                val current = lines
+                when {
+                    current == null -> Text("Loading logs…", style = MaterialTheme.typography.bodySmall)
+                    current.isEmpty() -> Text("No logs captured yet.", style = MaterialTheme.typography.bodySmall)
+                    else -> {
+                        val reversed = current.asReversed()
+                        val visible = if (expanded) reversed.take(200) else reversed.take(DEBUG_LOG_COLLAPSED_LIMIT)
+                        visible.forEach { line ->
+                            Text(
+                                line,
+                                style = MaterialTheme.typography.bodySmall,
+                                fontFamily = FontFamily.Monospace,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        if (reversed.size > DEBUG_LOG_COLLAPSED_LIMIT) {
+                            TextButton(onClick = { expanded = !expanded }) {
+                                Text(if (expanded) "Show less" else "Show more")
+                            }
                         }
                     }
                 }
             }
-        }
-    }
+        },
+        dismissButton = {
+            TextButton(onClick = { load() }, enabled = !loading) { Text("Refresh") }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Close") }
+        },
+    )
 }
 
 private const val DEBUG_LOG_COLLAPSED_LIMIT = 8
@@ -708,7 +734,7 @@ private fun habitStatus(
         it.habitName.equals(habit.name, ignoreCase = true) &&
             it.required && !it.referencePhotoPath.isNullOrBlank()
     }
-    if (!proofRequired) return "Done (no proof needed)"
+    if (!proofRequired) return "Done"
     return if (habit.name.lowercase() in data.proofToday) {
         "Done and verified"
     } else {

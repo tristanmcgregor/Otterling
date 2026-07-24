@@ -1,6 +1,7 @@
 package au.com.tbmcgregor.bwparker.familyguard
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -82,6 +83,28 @@ import kotlinx.coroutines.withContext
 class MainActivity : ComponentActivity() {
     private enum class Screen { Home, PinEntry, Settings, HabitShareSettings }
 
+    /**
+     * DEBUG-ONLY hook: lets the PIN-gated Settings screen be opened directly via ADB, because
+     * the PIN lives in EncryptedSharedPreferences and can't be set from the shell.
+     *
+     * Strictly gated on the app being debuggable so release/Play builds can never bypass the PIN.
+     * Does NOT alter the normal Home -> PinEntry -> Settings flow; it's purely an extra entry point.
+     *
+     * Trigger it with:
+     *   adb shell am start -n au.com.tbmcgregor.bwparker.familyguard/.MainActivity --ez open_settings true
+     */
+    private val isDebuggable
+        get() = (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
+
+    private fun wantsDebugSettings(intent: Intent?) =
+        isDebuggable && intent?.getBooleanExtra("open_settings", false) == true
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (wantsDebugSettings(intent)) recreate()
+    }
+
     private val notificationPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
     private val batteryOptimizationLauncher =
@@ -97,7 +120,9 @@ class MainActivity : ComponentActivity() {
         setContent {
             FamilyGuardTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    var screen by remember { mutableStateOf(Screen.Home) }
+                    var screen by remember {
+                        mutableStateOf(if (wantsDebugSettings(intent)) Screen.Settings else Screen.Home)
+                    }
                     val pinAuthManager = remember { PinAuthManager(applicationContext) }
 
                     when (screen) {
