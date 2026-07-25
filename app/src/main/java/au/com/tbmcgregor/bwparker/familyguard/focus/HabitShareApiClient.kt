@@ -7,6 +7,7 @@ import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
 import java.time.LocalDate
+import java.time.ZoneOffset
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -120,13 +121,20 @@ class HabitShareApiClient(context: Context) {
      */
     private fun parseHabits(responseText: String): List<Pair<String, Boolean>> {
         val array = extractHabitArray(responseText) ?: return emptyList()
-        val today = LocalDate.now()
+        // HabitShare's backend is US-hosted, so a habit ticked "now" can be stamped under the UTC
+        // calendar date rather than the device-local one (e.g. early-morning local time, when the
+        // UTC clock is still on the previous date). Accept either so a just-ticked habit is seen
+        // as done today. Only ever widens for a "success" entry (see [trackerListHasToday]); a
+        // "fail" never counts.
+        val todayLocal = LocalDate.now()
+        val todayUtc = LocalDate.now(ZoneOffset.UTC)
         val rows = mutableListOf<Pair<String, Boolean>>()
         for (i in 0 until array.length()) {
             val habit = array.optJSONObject(i) ?: continue
             val name = firstNonBlank(habit, "title", "name", "habitName") ?: continue
-            rows.add(name to isDoneToday(habit, today))
+            rows.add(name to isDoneToday(habit, todayLocal, todayUtc))
         }
+        Log.d(TAG, "parsed ${rows.size} habits; done today: ${rows.filter { it.second }.map { it.first }}")
         return rows
     }
 
@@ -152,7 +160,16 @@ class HabitShareApiClient(context: Context) {
     private fun firstNonBlank(obj: JSONObject, vararg keys: String): String? =
         keys.firstNotNullOfOrNull { key -> obj.optString(key, "").takeIf { it.isNotBlank() } }
 
-    private fun isDoneToday(habit: JSONObject, today: LocalDate): Boolean {
+    private fun isDoneToday(habit: JSONObject, todayLocal: LocalDate, todayUtc: LocalDate): Boolean {
+        // The dated tracker list is the authoritative record of what happened *today*, so it wins
+        // over any top-level done/status/completed flag: those are frequently habit-level fields
+        // (e.g. "this habit is archived/finished overall"), not today-specific, and checking them
+        // first short-circuited "today" wrongly. Only fall back to the direct flags when the habit
+        // carries no recognised dated tracker list at all.
+        for (listKey in TRACKER_LIST_KEYS) {
+            val list = habit.optJSONArray(listKey) ?: continue
+            return trackerListHasToday(list, todayLocal, todayUtc)
+        }
         for (key in DIRECT_BOOLEAN_KEYS) {
             if (habit.has(key)) return habit.optBoolean(key, false)
         }
@@ -161,37 +178,47 @@ class HabitShareApiClient(context: Context) {
             if (status.isNotBlank()) return status.equals("done", ignoreCase = true) ||
                 status.equals("completed", ignoreCase = true) || status.equals("checked", ignoreCase = true)
         }
-        for (listKey in TRACKER_LIST_KEYS) {
-            val list = habit.optJSONArray(listKey) ?: continue
-            if (trackerListHasToday(list, today)) return true
-        }
         return false
     }
 
-    private fun trackerListHasToday(list: JSONArray, today: LocalDate): Boolean {
+    private fun trackerListHasToday(list: JSONArray, todayLocal: LocalDate, todayUtc: LocalDate): Boolean {
+        fun LocalDate.isToday() = this == todayLocal || this == todayUtc
         for (i in 0 until list.length()) {
             when (val entry = list.opt(i)) {
                 // HabitShare's actual shape: each tracker is a 3-element array
                 // [ "YYYY-MM-DD", "success"|"fail", "note" ]. A same-day "success" is a done tick;
-                // a same-day "fail" is an explicit not-done and must NOT count.
+                // a same-day "fail" is an explicit not-done and must NOT count. We scan the whole
+                // list (rather than returning on the first same-day entry) so a "fail" on one
+                // accepted date can't mask a "success" on the other.
                 is JSONArray -> {
                     val entryDate = entry.optString(0, "").let(::parseFlexibleDate) ?: continue
-                    if (entryDate != today) continue
-                    return entry.optString(1, "").equals("success", ignoreCase = true)
+                    if (!entryDate.isToday()) continue
+                    if (entry.optString(1, "").equals("success", ignoreCase = true)) return true
                 }
                 is JSONObject -> {
                     val dateText = firstNonBlank(entry, "date", "day", "checkinDate", "createdAt", "created_at")
                     val entryDate = dateText?.let(::parseFlexibleDate) ?: continue
-                    if (entryDate != today) continue
+                    if (!entryDate.isToday()) continue
                     val status = firstNonBlank(entry, "status", "state")
-                    if (status != null) return status.equals("success", ignoreCase = true) ||
-                        status.equals("done", ignoreCase = true) || status.equals("completed", ignoreCase = true)
-                    val hasExplicitFlag = DIRECT_BOOLEAN_KEYS.any { entry.has(it) }
-                    return if (hasExplicitFlag) DIRECT_BOOLEAN_KEYS.any { entry.optBoolean(it, false) } else true
+                    if (status != null) {
+                        if (status.equals("success", ignoreCase = true) ||
+                            status.equals("done", ignoreCase = true) ||
+                            status.equals("completed", ignoreCase = true)
+                        ) {
+                            return true
+                        }
+                    } else {
+                        val hasExplicitFlag = DIRECT_BOOLEAN_KEYS.any { entry.has(it) }
+                        if (hasExplicitFlag) {
+                            if (DIRECT_BOOLEAN_KEYS.any { entry.optBoolean(it, false) }) return true
+                        } else {
+                            return true
+                        }
+                    }
                 }
                 is String -> {
                     val entryDate = parseFlexibleDate(entry) ?: continue
-                    if (entryDate == today) return true
+                    if (entryDate.isToday()) return true
                 }
                 else -> Unit
             }
