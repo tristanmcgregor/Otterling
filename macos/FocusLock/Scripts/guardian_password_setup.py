@@ -59,7 +59,7 @@ GUARDIAN_USER = "Guardian"    # macOS shortname of the account to delete
 CHROME_PROFILE = f"/Users/{ADMIN_USER}/Library/Application Support/Google/Chrome"
 
 PORT = 8765
-MIN_PASSWORD_LEN = 8
+MIN_PASSWORD_LEN = 4
 SERVER_TIMEOUT_SECONDS = 30 * 60  # auto-exit after 30 min even if never used
 LOG_PATH = "/tmp/guardian_password_setup.log"
 
