@@ -61,6 +61,7 @@ CHROME_PROFILE = f"/Users/{ADMIN_USER}/Library/Application Support/Google/Chrome
 PORT = 8765
 MIN_PASSWORD_LEN = 8
 SERVER_TIMEOUT_SECONDS = 30 * 60  # auto-exit after 30 min even if never used
+LOG_PATH = "/tmp/guardian_password_setup.log"
 
 
 # --- Small helpers -----------------------------------------------------------
@@ -72,6 +73,32 @@ def log(message: str) -> None:
 def fail(message: str, code: int = 1) -> "NoReturn":  # type: ignore[name-defined]
     print(f"[guardian-setup] ERROR: {message}", file=sys.stderr, flush=True)
     sys.exit(code)
+
+
+def daemonize(log_path: str) -> None:
+    """Detach into a background process that survives the caller exiting.
+
+    Launched via a GUI elevation (`osascript ... with administrator privileges`),
+    the tool would otherwise die when that short-lived shell returns, and `nohup`
+    can't detach because there's no controlling tty. A standard double-fork +
+    `setsid` sidesteps both: the original process (the elevation's direct child)
+    exits immediately so the dialog returns, while the grandchild keeps serving,
+    reparented to launchd, with all output redirected to the log we poll.
+    """
+    if os.fork() > 0:
+        os._exit(0)          # original parent returns to the elevation shell
+    os.setsid()
+    if os.fork() > 0:
+        os._exit(0)          # session leader exits so we can't reacquire a tty
+    sys.stdout.flush()
+    sys.stderr.flush()
+    log_fd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    null_fd = os.open(os.devnull, os.O_RDONLY)
+    os.dup2(null_fd, 0)
+    os.dup2(log_fd, 1)
+    os.dup2(log_fd, 2)
+    os.close(null_fd)
+    os.close(log_fd)
 
 
 def user_exists(shortname: str) -> bool:
@@ -361,6 +388,10 @@ def main() -> None:
 
     if not user_exists(ADMIN_USER):
         fail(f"Admin account '{ADMIN_USER}' not found on this Mac.")
+
+    # Detach so the tool keeps running after the GUI elevation shell returns; from
+    # here on all output goes to LOG_PATH (which the launcher / caller tails).
+    daemonize(LOG_PATH)
 
     log("Starting one-time Guardian handoff.")
     log(f"  - target admin account : {ADMIN_USER}")

@@ -27,6 +27,7 @@ fi
 # Elevate. `do shell script ... with administrator privileges` pops the macOS
 # auth dialog; enter any admin account's password to approve. Output (including
 # the one-time link) is teed to a log so you can read the URL to share.
+# Keep this in sync with LOG_PATH in guardian_password_setup.py.
 LOG="/tmp/guardian_password_setup.log"
 : > "$LOG"
 
@@ -35,23 +36,30 @@ echo "The one-time link will appear below as soon as setup starts."
 echo "A copy of all output is saved to: $LOG"
 echo
 
-# Escape the paths for embedding inside the AppleScript string literal.
+# Escape the path for embedding inside the AppleScript string literal.
 esc_script=${SCRIPT//\\/\\\\}; esc_script=${esc_script//\"/\\\"}
-esc_log=${LOG//\\/\\\\}; esc_log=${esc_log//\"/\\\"}
 
-# `do shell script ... with administrator privileges` blocks until the elevated
-# process exits, so run it in the background and stream its live output (which it
-# tees to the log) so the shareable link shows up immediately, not 30 min later.
-/usr/bin/osascript -e "do shell script \"/usr/bin/python3 '${esc_script}' 2>&1 | tee '${esc_log}'\" with administrator privileges" >/dev/null 2>&1 &
-OSA_PID=$!
+# The Python tool daemonizes itself (double-fork) and redirects its own output to
+# LOG, so this elevation returns almost immediately while the one-time server keeps
+# running in the background. Stream the log so the shareable link shows up live.
+/usr/bin/osascript -e "do shell script \"/usr/bin/python3 '${esc_script}'\" with administrator privileges" >/dev/null 2>&1 || {
+  echo "Authorization was cancelled or failed. Nothing was changed." >&2
+  exit 1
+}
 
-tail -f "$LOG" 2>/dev/null &
+echo "Setup is running in the background. Streaming its output (Ctrl-C to stop watching):"
+echo
+
+# Follow the log until the tool signals it has finished (server exited), then stop.
+tail -n +1 -f "$LOG" 2>/dev/null &
 TAIL_PID=$!
-
-# Wait for the elevated job to finish (success, timeout, or cancelled auth), then
-# stop streaming.
-wait "$OSA_PID" 2>/dev/null || true
+for _ in $(seq 1 $((31 * 60))); do
+  if grep -qE "The admin password is now set|No password was set before the server stopped|ERROR:" "$LOG" 2>/dev/null; then
+    break
+  fi
+  sleep 1
+done
 sleep 1
 kill "$TAIL_PID" 2>/dev/null || true
 echo
-echo "Setup process has exited."
+echo "Done watching. Full output is in: $LOG"
