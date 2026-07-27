@@ -88,6 +88,7 @@ class HabitProofActivity : ComponentActivity() {
             finish()
             return
         }
+        HabitProofPrompter.cancelNotification(applicationContext)
 
         val dir = File(filesDir, "habit_proofs").apply { mkdirs() }
         val safeName = habitName.replace(Regex("[^A-Za-z0-9]"), "_").take(60)
@@ -265,6 +266,7 @@ private fun HabitProofScreen(
                 Button(onClick = onTakePhoto, modifier = Modifier.fillMaxWidth().height(60.dp)) {
                     Text("Retake photo")
                 }
+                TextButton(onClick = onSkip) { Text("Skip") }
             }
             ProofMatchState.Idle -> {
                 if (cameraCancelled) {
@@ -286,7 +288,7 @@ private fun HabitProofScreen(
                         Spacer(Modifier.width(8.dp))
                         Text("Take photo")
                     }
-                    TextButton(onClick = onSkip) { Text("Not now") }
+                    TextButton(onClick = onSkip) { Text("Skip") }
                 } else {
                     // Native camera is opening (or reopening) -- brief themed waiting state.
                     CircularProgressIndicator()

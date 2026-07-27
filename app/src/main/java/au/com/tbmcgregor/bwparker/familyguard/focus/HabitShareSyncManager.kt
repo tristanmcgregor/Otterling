@@ -13,9 +13,11 @@ import android.util.Log
  * updating when the tracker app happens to be open.
  */
 class HabitShareSyncManager(context: Context) {
+    private val appContext = context.applicationContext
     private val apiClient = HabitShareApiClient(context)
     private val detectedHabitManager = DetectedHabitManager(context)
     private val habitRuleManager = HabitRuleManager(context)
+    private val proofManager = HabitProofManager(context)
 
     suspend fun syncIfConnected() {
         if (!apiClient.isConnected()) return
@@ -25,6 +27,7 @@ class HabitShareSyncManager(context: Context) {
         }
         if (rows.isEmpty()) return
         detectedHabitManager.recordScan(rows)
+        promptForProofIfNeeded(rows)
         // Non-windowed "unlock for N minutes" rules fire here...
         habitRuleManager.evaluateTrigger(HabitTrackerScanner.HABITSHARE_PACKAGE_NAME, rows)
         // ...but time-windowed rules are driven purely by reapplyAll (evaluateTrigger skips them),
@@ -32,6 +35,17 @@ class HabitShareSyncManager(context: Context) {
         // a habit ticked in HabitShare lifts/asserts a windowed block within one 30s sync instead
         // of waiting up to five minutes.
         habitRuleManager.reapplyAll()
+    }
+
+    /** Surfaces the photo-proof prompt for the first proof-required habit that's newly done but not
+     * yet verified today. [HabitProofPrompter] debounces per habit+day, so this is safe to call on
+     * every (once-a-second) sync -- it won't relaunch the camera in a loop. */
+    private suspend fun promptForProofIfNeeded(rows: List<Pair<String, Boolean>>) {
+        val doneNamesRaw = rows.filter { it.second }.map { it.first }
+        val needsProof = proofManager.namesNeedingProof(doneNamesRaw)
+        for (habitName in needsProof) {
+            if (HabitProofPrompter.promptFor(appContext, habitName)) break
+        }
     }
 
     private companion object {
