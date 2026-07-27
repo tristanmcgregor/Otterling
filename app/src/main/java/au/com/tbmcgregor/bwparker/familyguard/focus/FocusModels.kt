@@ -57,12 +57,17 @@ data class RewardLedger(
 )
 
 /**
- * A user-defined command: "[targetPackageName] is blocked until (a completion pattern is seen in
- * [triggerPackageName]), then it unlocks for [unlockMinutes] minutes". [targetPackageName] is
+ * A user-defined command: "[targetPackages] is blocked until (a completion pattern is seen in
+ * [triggerPackageName]), then it unlocks for [unlockMinutes] minutes". Every target app is
  * suspended by default (like a [RewardApp]) and only opens while one of its rules has an active
- * unlock window. [lastGrantedEpochDay] makes firing idempotent per calendar day; [unlockUntilMillis]
- * is this rule's own currently-active unlock expiry (a target with multiple rules unlocks if any of
- * them is currently active).
+ * unlock window; all apps on a rule block and unlock together. [lastGrantedEpochDay] makes firing
+ * idempotent per calendar day; [unlockUntilMillis] is this rule's own currently-active unlock
+ * expiry (an app with multiple rules unlocks if any of them is currently active).
+ *
+ * [targetPackageName] holds the first target app for backward compatibility; [targetPackages] holds
+ * every target app joined with [TARGET_PACKAGE_DELIMITER] (null on rules created before multi-app
+ * support, which fall back to the single [targetPackageName]). Use [targetPackageNames]/
+ * [encodeTargetPackages] rather than touching either field directly.
  *
  * [habitName] holds the raw, possibly multi-habit condition: null/blank means "any/all habits
  * complete" (the original whole-tracker pattern match); otherwise it's one or more habit names
@@ -91,6 +96,7 @@ data class HabitRule(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val triggerPackageName: String,
     val targetPackageName: String,
+    val targetPackages: String? = null,
     val unlockMinutes: Int,
     val enabled: Boolean = true,
     val lastGrantedEpochDay: Long = -1,
@@ -118,6 +124,22 @@ fun encodeDaysOfWeek(days: Set<DayOfWeek>): Int =
 
 /** Non-printable separator, so it can't collide with a real habit name typed by the user. */
 private const val HABIT_NAME_DELIMITER = "\u001F"
+
+/** Non-printable separator for packing multiple target packages into [HabitRule.targetPackages]. */
+private const val TARGET_PACKAGE_DELIMITER = "\u001F"
+
+/** Decodes the set of target app packages a rule blocks/unlocks together. Falls back to the legacy
+ * single [HabitRule.targetPackageName] for rules created before multi-app support. */
+fun HabitRule.targetPackageNames(): List<String> {
+    val decoded = targetPackages?.split(TARGET_PACKAGE_DELIMITER)?.map { it.trim() }?.filter { it.isNotBlank() }
+    return decoded?.takeIf { it.isNotEmpty() } ?: listOf(targetPackageName).filter { it.isNotBlank() }
+}
+
+/** Encodes a list of target packages for storage in [HabitRule.targetPackages]; blanks/duplicates
+ * are dropped. Returns null for an empty list. */
+fun encodeTargetPackages(packageNames: List<String>): String? =
+    packageNames.map { it.trim() }.filter { it.isNotBlank() }.distinct()
+        .takeIf { it.isNotEmpty() }?.joinToString(TARGET_PACKAGE_DELIMITER)
 
 /** Decodes [HabitRule.habitName] into the list of habit names that must ALL be done today for this
  * rule to fire. Empty means "any/all habits complete". */

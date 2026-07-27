@@ -79,6 +79,7 @@ import au.com.tbmcgregor.bwparker.familyguard.focus.HabitShareSyncManager
 import au.com.tbmcgregor.bwparker.familyguard.focus.daysOfWeekSet
 import au.com.tbmcgregor.bwparker.familyguard.focus.isTimeWindowed
 import au.com.tbmcgregor.bwparker.familyguard.focus.requiredHabitNames
+import au.com.tbmcgregor.bwparker.familyguard.focus.targetPackageNames
 import au.com.tbmcgregor.bwparker.familyguard.monitoring.DebugLogReader
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.DeviceRestrictionsManager
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.Restriction
@@ -362,7 +363,7 @@ private fun RuleCard(context: Context, data: DashboardData, rule: HabitRule, now
                         tint = MaterialTheme.colorScheme.onSurface,
                     )
                     Text(
-                        data.label(rule.targetPackageName),
+                        rule.targetPackageNames().joinToString(", ") { data.label(it) },
                         style = MaterialTheme.typography.titleSmall,
                     )
                 }

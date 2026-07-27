@@ -44,7 +44,7 @@ import au.com.tbmcgregor.bwparker.familyguard.tamper.TamperEventDao
         HabitProofRequirement::class,
         HabitProofLog::class,
     ],
-    version = 16,
+    version = 17,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -99,6 +99,7 @@ abstract class AppDatabase : RoomDatabase() {
                     MIGRATION_13_14,
                     MIGRATION_14_15,
                     MIGRATION_15_16,
+                    MIGRATION_16_17,
                 )
                     .build()
                     .also { instance = it }
@@ -365,6 +366,15 @@ abstract class AppDatabase : RoomDatabase() {
         private val MIGRATION_15_16 = object : Migration(15, 16) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE habit_proof_requirements ADD COLUMN referencePhotoPath TEXT")
+            }
+        }
+
+        // A habit rule can now block/unlock multiple apps at once; store the full target set in a
+        // new delimited column, seeding each existing single-app rule from its targetPackageName.
+        private val MIGRATION_16_17 = object : Migration(16, 17) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE habit_rules ADD COLUMN targetPackages TEXT")
+                db.execSQL("UPDATE habit_rules SET targetPackages = targetPackageName")
             }
         }
     }

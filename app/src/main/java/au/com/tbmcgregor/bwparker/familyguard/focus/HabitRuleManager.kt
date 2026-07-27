@@ -72,17 +72,20 @@ class HabitRuleManager(context: Context) {
      */
     suspend fun addRule(
         triggerPackageName: String,
-        targetPackageName: String,
+        targetPackageNames: List<String>,
         unlockMinutes: Int,
         requiredHabitNames: List<String> = emptyList(),
         windowStartMinute: Int? = null,
         windowEndMinute: Int? = null,
         daysOfWeek: Set<DayOfWeek> = DayOfWeek.entries.toSet(),
     ) {
+        val targets = targetPackageNames.map { it.trim() }.filter { it.isNotBlank() }.distinct()
+        if (targets.isEmpty()) return
         dao.insert(
             HabitRule(
                 triggerPackageName = triggerPackageName,
-                targetPackageName = targetPackageName,
+                targetPackageName = targets.first(),
+                targetPackages = encodeTargetPackages(targets),
                 unlockMinutes = unlockMinutes,
                 habitName = encodeRequiredHabitNames(requiredHabitNames),
                 windowStartMinute = windowStartMinute,
@@ -101,14 +104,14 @@ class HabitRuleManager(context: Context) {
     /**
      * Replaces every field of an existing rule in place (used by the "Edit rule" flow) and
      * resets its grant state, since the old unlock/last-granted state was derived from a
-     * condition that may no longer exist. If [targetPackageName] changes and no other rule still
-     * governs the old target, that app is explicitly unsuspended rather than left stuck blocked
-     * with nothing left to ever unlock it.
+     * condition that may no longer exist. Any target app dropped by this edit that no longer has
+     * another rule governing it is explicitly unsuspended rather than left stuck blocked with
+     * nothing left to ever unlock it.
      */
     suspend fun updateRule(
         id: Long,
         triggerPackageName: String,
-        targetPackageName: String,
+        targetPackageNames: List<String>,
         unlockMinutes: Int,
         requiredHabitNames: List<String> = emptyList(),
         windowStartMinute: Int? = null,
@@ -116,10 +119,13 @@ class HabitRuleManager(context: Context) {
         daysOfWeek: Set<DayOfWeek> = DayOfWeek.entries.toSet(),
     ) {
         val existing = dao.getAll().find { it.id == id } ?: return
+        val targets = targetPackageNames.map { it.trim() }.filter { it.isNotBlank() }.distinct()
+        if (targets.isEmpty()) return
         dao.update(
             existing.copy(
                 triggerPackageName = triggerPackageName,
-                targetPackageName = targetPackageName,
+                targetPackageName = targets.first(),
+                targetPackages = encodeTargetPackages(targets),
                 unlockMinutes = unlockMinutes,
                 habitName = encodeRequiredHabitNames(requiredHabitNames),
                 windowStartMinute = windowStartMinute,
@@ -130,23 +136,24 @@ class HabitRuleManager(context: Context) {
             ),
         )
         reapplyAll()
-        unsuspendOrphanedTarget(oldTarget = existing.targetPackageName, newTarget = targetPackageName)
+        unsuspendOrphanedTargets(oldTargets = existing.targetPackageNames(), newTargets = targets)
     }
 
     suspend fun deleteRule(id: Long) {
-        val oldTarget = dao.getAll().find { it.id == id }?.targetPackageName
+        val oldTargets = dao.getAll().find { it.id == id }?.targetPackageNames().orEmpty()
         dao.delete(id)
         reapplyAll()
-        unsuspendOrphanedTarget(oldTarget = oldTarget, newTarget = null)
+        unsuspendOrphanedTargets(oldTargets = oldTargets, newTargets = emptyList())
     }
 
-    /** If [oldTarget] no longer has any rule pointing at it, it should no longer be blocked --
-     * reapplyAll() only visits targets that still have at least one rule, so a target that just
-     * lost its last (or only, now-retargeted) rule would otherwise stay suspended forever. */
-    private suspend fun unsuspendOrphanedTarget(oldTarget: String?, newTarget: String?) {
-        if (oldTarget == null || oldTarget == newTarget) return
-        val stillGoverned = dao.getAll().any { it.targetPackageName == oldTarget }
-        if (!stillGoverned) setSuspended(oldTarget, suspended = false)
+    /** Any package in [oldTargets] that no longer has any rule pointing at it should no longer be
+     * blocked -- reapplyAll() only visits packages that still have at least one rule, so a package
+     * that just lost its last (or only, now-dropped) rule would otherwise stay suspended forever. */
+    private suspend fun unsuspendOrphanedTargets(oldTargets: Collection<String>, newTargets: Collection<String>) {
+        val removed = oldTargets.toSet() - newTargets.toSet()
+        if (removed.isEmpty()) return
+        val stillGoverned = dao.getAll().flatMap { it.targetPackageNames() }.toSet()
+        removed.forEach { pkg -> if (pkg !in stillGoverned) setSuspended(pkg, suspended = false) }
     }
 
     /**
@@ -194,7 +201,7 @@ class HabitRuleManager(context: Context) {
                 ?: "all habits"
             tamperEventLogger.log(
                 type = "HABIT_UNLOCK",
-                details = "Unlocked ${rule.targetPackageName} for ${rule.unlockMinutes} minutes after $condition.",
+                details = "Unlocked ${rule.targetPackageNames().joinToString()} for ${rule.unlockMinutes} minutes after $condition.",
             )
             grantedCount++
         }
@@ -215,7 +222,13 @@ class HabitRuleManager(context: Context) {
             .toSet()
         val doneHabitNamesToday = proofManager.filterSatisfied(rawDoneHabitNamesToday)
 
-        dao.getAll().groupBy { it.targetPackageName }.forEach { (packageName, allRulesForTarget) ->
+        val rulesByPackage = mutableMapOf<String, MutableList<HabitRule>>()
+        dao.getAll().forEach { rule ->
+            rule.targetPackageNames().forEach { packageName ->
+                rulesByPackage.getOrPut(packageName) { mutableListOf() }.add(rule)
+            }
+        }
+        rulesByPackage.forEach { (packageName, allRulesForTarget) ->
             val activeRules = allRulesForTarget.filter { it.enabled }
             val unlocked = activeRules.isEmpty() ||
                 isTargetUnlocked(activeRules, now, nowMinuteOfDay, nowDayOfWeek, doneHabitNamesToday)

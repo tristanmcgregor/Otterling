@@ -35,6 +35,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Accessibility
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CloudSync
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
@@ -97,6 +98,7 @@ import au.com.tbmcgregor.bwparker.familyguard.focus.MindfulAppManager
 import au.com.tbmcgregor.bwparker.familyguard.focus.daysOfWeekSet
 import au.com.tbmcgregor.bwparker.familyguard.focus.decodeDaysOfWeek
 import au.com.tbmcgregor.bwparker.familyguard.focus.requiredHabitNames
+import au.com.tbmcgregor.bwparker.familyguard.focus.targetPackageNames
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.AccessibilityGuard
 import java.time.DayOfWeek
 import kotlinx.coroutines.Dispatchers
@@ -419,7 +421,7 @@ fun HabitRuleWizardHost(
     var ready by remember { mutableStateOf(false) }
 
     var step by remember { mutableIntStateOf(1) }
-    var targetApp by remember { mutableStateOf<InstalledAppInfo?>(null) }
+    var selectedApps by remember { mutableStateOf<Set<String>>(emptySet()) }
     var selectedHabits by remember { mutableStateOf<Set<String>>(emptySet()) }
     // Habit names on an edited rule that aren't in the currently-detected list (e.g. typed by the
     // old custom-name flow) are still offered as pills so editing preserves them.
@@ -437,8 +439,7 @@ fun HabitRuleWizardHost(
         detectedHabits = detectedHabitManager.latest()
         ruleToEdit?.let { rule ->
             editingId = rule.id
-            targetApp = installedApps.find { it.packageName == rule.targetPackageName }
-                ?: InstalledAppInfo(rule.targetPackageName, rule.targetPackageName)
+            selectedApps = rule.targetPackageNames().toSet()
             val names = rule.requiredHabitNames()
             selectedHabits = names.toSet()
             val detectedNames = detectedHabits.map { it.name }.toSet()
@@ -465,13 +466,14 @@ fun HabitRuleWizardHost(
     val title = if (editingId != null) "Edit Rule" else "Create Rule"
 
     val canAdvance = when (step) {
-        1 -> targetApp != null
+        1 -> selectedApps.isNotEmpty()
         3 -> if (windowEnabled) windowStart != null && windowEnd != null else (minutes != null && minutes > 0)
         else -> true
     }
 
     fun save() {
-        val target = targetApp ?: return
+        val targets = selectedApps.toList()
+        if (targets.isEmpty()) return
         val trigger = habitShareAppInfo(installedApps)
         val habitNames = habitOptions.filter { it in selectedHabits }
         val id = editingId
@@ -481,11 +483,11 @@ fun HabitRuleWizardHost(
             val unlockMinutes = if (windowEnabled) 0 else (minutes ?: 30)
             if (id == null) {
                 ruleManager.addRule(
-                    trigger.packageName, target.packageName, unlockMinutes, habitNames, start, end, selectedDays,
+                    trigger.packageName, targets, unlockMinutes, habitNames, start, end, selectedDays,
                 )
             } else {
                 ruleManager.updateRule(
-                    id, trigger.packageName, target.packageName, unlockMinutes, habitNames, start, end, selectedDays,
+                    id, trigger.packageName, targets, unlockMinutes, habitNames, start, end, selectedDays,
                 )
             }
             onSaved()
@@ -531,10 +533,13 @@ fun HabitRuleWizardHost(
                                 apps = installedApps,
                                 query = query,
                                 onQueryChange = { query = it },
-                                selectedPackage = targetApp?.packageName,
-                                onSelect = { app ->
-                                    targetApp = app
-                                    step = 2
+                                selectedPackages = selectedApps,
+                                onToggle = { app ->
+                                    selectedApps = if (app.packageName in selectedApps) {
+                                        selectedApps - app.packageName
+                                    } else {
+                                        selectedApps + app.packageName
+                                    }
                                 },
                             )
                             2 -> WizardStepHabits(
@@ -596,14 +601,15 @@ private fun WizardHeading(title: String, subtitle: String) {
     }
 }
 
-/** Step 1: searchable installed-app list; tapping a row selects the target and advances. */
+/** Step 1: searchable installed-app list; tapping a row toggles it in/out of the target set. At
+ * least one app must be selected to advance. */
 @Composable
 private fun WizardStepTarget(
     apps: List<InstalledAppInfo>,
     query: String,
     onQueryChange: (String) -> Unit,
-    selectedPackage: String?,
-    onSelect: (InstalledAppInfo) -> Unit,
+    selectedPackages: Set<String>,
+    onToggle: (InstalledAppInfo) -> Unit,
 ) {
     val filtered = remember(apps, query) {
         if (query.isBlank()) {
@@ -616,7 +622,14 @@ private fun WizardStepTarget(
     }
     Column(modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp)) {
         Spacer(Modifier.height(16.dp))
-        WizardHeading("Which app to block?", "Select the target application")
+        WizardHeading(
+            "Which apps to block?",
+            if (selectedPackages.isEmpty()) {
+                "Select one or more target applications"
+            } else {
+                "${selectedPackages.size} app${if (selectedPackages.size == 1) "" else "s"} selected"
+            },
+        )
         Spacer(Modifier.height(16.dp))
         OutlinedTextField(
             value = query,
@@ -632,7 +645,7 @@ private fun WizardStepTarget(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             items(filtered, key = { it.packageName }) { app ->
-                AppRow(app = app, selected = app.packageName == selectedPackage, onClick = { onSelect(app) })
+                AppRow(app = app, selected = app.packageName in selectedPackages, onClick = { onToggle(app) })
             }
             if (filtered.isEmpty()) {
                 item {
@@ -644,7 +657,8 @@ private fun WizardStepTarget(
     }
 }
 
-/** A single installed-app row: leading rounded icon badge + app label. */
+/** A single installed-app row: leading rounded icon badge + app label, with a trailing check when
+ * selected. */
 @Composable
 private fun AppRow(app: InstalledAppInfo, selected: Boolean, onClick: () -> Unit) {
     Surface(
@@ -673,7 +687,20 @@ private fun AppRow(app: InstalledAppInfo, selected: Boolean, onClick: () -> Unit
                     modifier = Modifier.size(20.dp),
                 )
             }
-            Text(app.label, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
+            Text(
+                app.label,
+                style = MaterialTheme.typography.bodyLarge,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier.weight(1f),
+            )
+            if (selected) {
+                Icon(
+                    Icons.Default.CheckCircle,
+                    contentDescription = "Selected",
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
         }
     }
 }
@@ -1135,7 +1162,7 @@ fun HabitRulesSection(context: Context) {
                     HabitRuleRow(
                         rule = rule,
                         triggerLabel = appLabel(rule.triggerPackageName),
-                        targetLabel = appLabel(rule.targetPackageName),
+                        targetLabel = rule.targetPackageNames().joinToString(", ") { appLabel(it) },
                         now = now,
                         onEdit = {
                             wizardRule = rule
