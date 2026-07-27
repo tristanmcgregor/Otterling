@@ -35,11 +35,9 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -66,12 +64,11 @@ private sealed interface ProofMatchState {
 /**
  * "Prove it" prompt shown by [FocusGuardAccessibilityService] when a habit configured in
  * [HabitProofManager] as requiring proof gets ticked in HabitShare without approved proof yet
- * today. It launches the device's native camera directly on open (no intermediate in-app
- * "camera" screen) -- matching how reference-photo capture works in Settings -- then compares the
- * captured photo against the habit's stored reference photo via [ImageMatcher]; only a visual
- * match is recorded and allowed to satisfy any [HabitRule]. A non-match shows an inline "doesn't
- * match" message and lets you retake; cancelling the camera drops back to a small themed prompt so
- * the user is never stuck on a blank screen.
+ * today. It shows a themed prompt with "Take photo" and "Skip"; tapping "Take photo" opens the
+ * device's native camera, then compares the captured photo against the habit's stored reference
+ * photo via [ImageMatcher]; only a visual match is recorded and allowed to satisfy any [HabitRule].
+ * A non-match shows an inline "doesn't match" message and lets you retake. "Skip" just dismisses
+ * the prompt without recording proof, so anything gated on this habit stays locked.
  *
  * `singleTask` launch mode (see manifest) means a repeat [launch] call while an instance already
  * exists -- even backgrounded via Home, not just currently visible -- brings that same instance
@@ -102,19 +99,11 @@ class HabitProofActivity : ComponentActivity() {
             var matchState by remember { mutableStateOf<ProofMatchState>(ProofMatchState.Idle) }
             var preview by remember { mutableStateOf<Bitmap?>(null) }
             var referenceMissing by remember { mutableStateOf(false) }
-            // Whether the user backed out of the native camera without taking a photo -- controls
-            // showing the themed "take photo / not now" fallback instead of a blank waiting screen.
-            var cameraCancelled by remember { mutableStateOf(false) }
-            // Survives recreate()/onNewIntent + recomposition so the camera auto-launches exactly
-            // once per prompt rather than relaunching in a loop.
-            var hasLaunched by rememberSaveable { mutableStateOf(false) }
 
             val takePicture = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { success ->
                 if (!success) {
-                    cameraCancelled = true
                     return@rememberLauncherForActivityResult
                 }
-                cameraCancelled = false
                 matchState = ProofMatchState.Checking
                 lifecycleScope.launch {
                     preview = withContext(Dispatchers.IO) { decodeShrunk(file) }
@@ -142,19 +131,7 @@ class HabitProofActivity : ComponentActivity() {
                 }
             }
 
-            val launchCamera: () -> Unit = {
-                cameraCancelled = false
-                takePicture.launch(photoUri)
-            }
-
-            // Auto-open the native camera the moment the prompt appears, so there's no confusing
-            // intermediate in-app "camera" screen.
-            LaunchedEffect(Unit) {
-                if (!hasLaunched) {
-                    hasLaunched = true
-                    launchCamera()
-                }
-            }
+            val launchCamera: () -> Unit = { takePicture.launch(photoUri) }
 
             FamilyGuardTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
@@ -165,7 +142,6 @@ class HabitProofActivity : ComponentActivity() {
                             habitName = habitName,
                             matchState = matchState,
                             preview = preview,
-                            cameraCancelled = cameraCancelled,
                             onTakePhoto = launchCamera,
                             onSkip = { finish() },
                         )
@@ -208,7 +184,6 @@ private fun HabitProofScreen(
     habitName: String,
     matchState: ProofMatchState,
     preview: Bitmap?,
-    cameraCancelled: Boolean,
     onTakePhoto: () -> Unit,
     onSkip: () -> Unit,
 ) {
@@ -269,36 +244,25 @@ private fun HabitProofScreen(
                 TextButton(onClick = onSkip) { Text("Skip") }
             }
             ProofMatchState.Idle -> {
-                if (cameraCancelled) {
-                    Text(
-                        "Prove it: $habitName",
-                        style = MaterialTheme.typography.headlineSmall,
-                        textAlign = TextAlign.Center,
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    Text(
-                        "Take a photo showing you doing this. It's checked against your reference " +
-                            "photo -- only a match unlocks anything gated on this habit today.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        textAlign = TextAlign.Center,
-                    )
-                    Spacer(Modifier.height(24.dp))
-                    Button(onClick = onTakePhoto, modifier = Modifier.fillMaxWidth().height(60.dp)) {
-                        Icon(Icons.Default.PhotoCamera, contentDescription = null)
-                        Spacer(Modifier.width(8.dp))
-                        Text("Take photo")
-                    }
-                    TextButton(onClick = onSkip) { Text("Skip") }
-                } else {
-                    // Native camera is opening (or reopening) -- brief themed waiting state.
-                    CircularProgressIndicator()
-                    Spacer(Modifier.height(16.dp))
-                    Text(
-                        "Opening camera...",
-                        style = MaterialTheme.typography.titleMedium,
-                        textAlign = TextAlign.Center,
-                    )
+                Text(
+                    "Prove it: $habitName",
+                    style = MaterialTheme.typography.headlineSmall,
+                    textAlign = TextAlign.Center,
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Take a photo showing you doing this. It's checked against your reference " +
+                        "photo -- only a match unlocks anything gated on this habit today.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    textAlign = TextAlign.Center,
+                )
+                Spacer(Modifier.height(24.dp))
+                Button(onClick = onTakePhoto, modifier = Modifier.fillMaxWidth().height(60.dp)) {
+                    Icon(Icons.Default.PhotoCamera, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Take photo")
                 }
+                TextButton(onClick = onSkip) { Text("Skip") }
             }
         }
     }
