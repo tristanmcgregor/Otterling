@@ -63,6 +63,10 @@ MIN_PASSWORD_LEN = 4
 SERVER_TIMEOUT_SECONDS = 30 * 60  # auto-exit after 30 min even if never used
 LOG_PATH = "/tmp/guardian_password_setup.log"
 
+# The current password of a SecureToken admin, needed to authorise the reset under
+# FileVault. Captured once at startup (before daemonizing) and held only in memory.
+CURRENT_ADMIN_PW: str = ""
+
 
 # --- Small helpers -----------------------------------------------------------
 
@@ -178,29 +182,57 @@ def delete_guardian() -> None:
 
 # --- Password reset (PTY-driven so the password never hits argv/logs) ---------
 
-def set_admin_password(new_password: str) -> tuple[bool, str]:
-    """Reset ADMIN_USER's password via `sysadminctl`, feeding the value over a PTY.
+def password_authenticates(password: str) -> bool:
+    """Ground truth for 'did the password actually change': can we log in with it?"""
+    return subprocess.run(
+        ["/usr/bin/dscl", ".", "-authonly", ADMIN_USER, password],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    ).returncode == 0
 
-    Returns (success, detail). The password is written only into the child's PTY,
-    never into this process's argv or any log line.
+
+def set_admin_password(new_password: str) -> tuple[bool, str]:
+    """Reset ADMIN_USER's password, authorising the change with the current password.
+
+    ADMIN_USER holds a SecureToken (FileVault), so a plain root reset is silently
+    refused ("Operation is not permitted without secure token unlock") -- and worse,
+    sysadminctl exits 0, so exit code can't be trusted. We therefore:
+      1. Authorise with a SecureToken holder's current credentials
+         (`-adminUser ADMIN -adminPassword <current>`), read from the
+         GUARDIAN_ADMIN_CURRENT_PW env var set by the launcher.
+      2. Feed the NEW password over a PTY (`-newPassword -`) so the secret never
+         lands in argv/logs. The authoriser (current) password is the one the
+         launcher operator already knows, so passing it as an arg leaks nothing new.
+      3. Verify with `dscl -authonly` -- the only reliable success signal.
+
+    Returns (success, detail). Neither password is written to any log line.
     """
-    argv = ["/usr/sbin/sysadminctl", "-resetPasswordFor", ADMIN_USER, "-newPassword", "-"]
+    current = CURRENT_ADMIN_PW
+    if not current:
+        return False, ("No current admin password was captured to authorise the reset. "
+                       "Relaunch via the .command launcher.")
+    if not password_authenticates(current):
+        return False, ("The current admin password provided at launch is no longer correct, "
+                       "so the reset can't be authorised.")
+
+    argv = [
+        "/usr/sbin/sysadminctl", "-resetPasswordFor", ADMIN_USER,
+        "-newPassword", "-", "-adminUser", ADMIN_USER, "-adminPassword", current,
+    ]
     pid, fd = pty.fork()
     if pid == 0:
-        # Child: become sysadminctl. exec never returns on success.
         try:
             os.execv(argv[0], argv)
         except Exception:  # pragma: no cover - exec failure path
             os._exit(127)
 
-    # Parent: answer every interactive prompt by typing the password + newline.
+    # Parent: type the NEW password at each interactive "password" prompt (some
+    # macOS builds ask once, others ask again to confirm), up to twice.
     captured = bytearray()
     deadline = time.time() + 30
-    typed = False
+    feeds = 0
+    answered_upto = 0
     try:
-        while True:
-            if time.time() > deadline:
-                break
+        while time.time() <= deadline:
             r, _, _ = select.select([fd], [], [], 0.5)
             if fd in r:
                 try:
@@ -210,25 +242,27 @@ def set_admin_password(new_password: str) -> tuple[bool, str]:
                 if not chunk:
                     break
                 captured.extend(chunk)
-                low = bytes(captured).lower()
-                # sysadminctl prompts with something containing "password".
-                if (not typed) and b"password" in low:
+                tail = bytes(captured[answered_upto:]).lower()
+                if feeds < 2 and b"password" in tail and tail.rstrip().endswith(b":"):
                     os.write(fd, (new_password + "\n").encode("utf-8"))
-                    typed = True
-            # If we've typed and the child produced a bit more output, keep draining
-            # until it exits (handled by the read returning empty / OSError above).
+                    feeds += 1
+                    answered_upto = len(captured)
     finally:
         try:
             os.close(fd)
         except OSError:
             pass
+    try:
+        os.waitpid(pid, 0)
+    except ChildProcessError:
+        pass
 
-    _, status = os.waitpid(pid, 0)
-    exit_code = os.waitstatus_to_exitcode(status)
-    # Scrub any echoed password out of the detail we surface/log.
     detail = bytes(captured).decode("utf-8", "replace")
-    detail = detail.replace(new_password, "********")
-    ok = exit_code == 0 and "error" not in detail.lower()
+    detail = detail.replace(new_password, "********").replace(current, "********")
+    # Trust the login test, not sysadminctl's exit code.
+    ok = password_authenticates(new_password)
+    if not ok and "secure token" in detail.lower():
+        detail += " (secure-token authorisation was refused)"
     return ok, detail.strip()
 
 
@@ -388,6 +422,29 @@ def main() -> None:
 
     if not user_exists(ADMIN_USER):
         fail(f"Admin account '{ADMIN_USER}' not found on this Mac.")
+
+    # Capture the current (authoriser) admin password now, while we still have it,
+    # and hold it only in memory. Under FileVault the reset must be authorised by a
+    # SecureToken holder, so this is required. Accept it from an env var or a
+    # launcher-created temp file (which we read then delete immediately).
+    global CURRENT_ADMIN_PW
+    pw_file = os.environ.get("GUARDIAN_ADMIN_CURRENT_PW_FILE", "")
+    if pw_file and os.path.isfile(pw_file):
+        try:
+            with open(pw_file, "r", encoding="utf-8") as fh:
+                CURRENT_ADMIN_PW = fh.read().rstrip("\n")
+        finally:
+            try:
+                os.remove(pw_file)
+            except OSError:
+                pass
+    if not CURRENT_ADMIN_PW:
+        CURRENT_ADMIN_PW = os.environ.get("GUARDIAN_ADMIN_CURRENT_PW", "")
+    if not CURRENT_ADMIN_PW:
+        fail("No current admin password was provided. Launch via guardian_password_setup.command "
+             "so it can prompt for it (needed to authorise the change under FileVault).")
+    if not password_authenticates(CURRENT_ADMIN_PW):
+        fail("The current admin password entered is incorrect, so the change can't be authorised.")
 
     # Detach so the tool keeps running after the GUI elevation shell returns; from
     # here on all output goes to LOG_PATH (which the launcher / caller tails).

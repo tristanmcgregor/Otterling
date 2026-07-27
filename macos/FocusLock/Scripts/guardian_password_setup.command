@@ -31,21 +31,43 @@ fi
 LOG="/tmp/guardian_password_setup.log"
 : > "$LOG"
 
+# Prompt (in the user session) for the CURRENT admin password. Under FileVault the
+# reset must be authorised by a SecureToken holder, so the tool needs it. This is
+# the password you already know; the NEW one is chosen by the other person and
+# stays unknown to you. Passed to the elevated tool via a private temp file (mode
+# 600) rather than argv, so it never appears in `ps`.
+CURPW=$(/usr/bin/osascript -e 'text returned of (display dialog "Enter the CURRENT admin password.\n\n(Needed once to authorise the change under FileVault. You already know this one; the NEW password is set by the other person.)" default answer "" with hidden answer with title "Guardian password setup")') || {
+  echo "Cancelled at the password prompt. Nothing was changed." >&2
+  exit 1
+}
+if [ -z "$CURPW" ]; then
+  echo "No current password entered. Nothing was changed." >&2
+  exit 1
+fi
+PWFILE=$(mktemp /tmp/guardian_curpw.XXXXXX)
+chmod 600 "$PWFILE"
+printf '%s' "$CURPW" > "$PWFILE"
+unset CURPW
+
 echo "Requesting administrator authorization (approve with any admin password)..."
 echo "The one-time link will appear below as soon as setup starts."
 echo "A copy of all output is saved to: $LOG"
 echo
 
-# Escape the path for embedding inside the AppleScript string literal.
+# Escape the path + temp-file path for embedding inside the AppleScript string literal.
 esc_script=${SCRIPT//\\/\\\\}; esc_script=${esc_script//\"/\\\"}
+esc_pwfile=${PWFILE//\\/\\\\}; esc_pwfile=${esc_pwfile//\"/\\\"}
 
 # The Python tool daemonizes itself (double-fork) and redirects its own output to
 # LOG, so this elevation returns almost immediately while the one-time server keeps
 # running in the background. Stream the log so the shareable link shows up live.
-/usr/bin/osascript -e "do shell script \"/usr/bin/python3 '${esc_script}'\" with administrator privileges" >/dev/null 2>&1 || {
+/usr/bin/osascript -e "do shell script \"GUARDIAN_ADMIN_CURRENT_PW_FILE='${esc_pwfile}' /usr/bin/python3 '${esc_script}'\" with administrator privileges" >/dev/null 2>&1 || {
+  rm -f "$PWFILE"
   echo "Authorization was cancelled or failed. Nothing was changed." >&2
   exit 1
 }
+# The tool reads and deletes the temp file itself; remove it here too just in case.
+rm -f "$PWFILE"
 
 echo "Setup is running in the background. Streaming its output (Ctrl-C to stop watching):"
 echo
