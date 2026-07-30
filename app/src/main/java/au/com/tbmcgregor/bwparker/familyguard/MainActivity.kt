@@ -102,9 +102,29 @@ class MainActivity : ComponentActivity() {
     private fun wantsDebugSettings(intent: Intent?) =
         isDebuggable && intent?.getBooleanExtra("open_settings", false) == true
 
+    /**
+     * DEBUG-ONLY: unsuspend packages that Device Owner previously suspended (pm unsuspend can't
+     * clear a DPM suspension). Usage:
+     *   adb shell am start -n …/.MainActivity --esa unsuspend_packages pkg1,pkg2
+     */
+    private fun applyDebugUnsuspend(intent: Intent?) {
+        if (!isDebuggable) return
+        val packages = intent?.getStringArrayExtra("unsuspend_packages") ?: return
+        if (packages.isEmpty()) return
+        val dpm = getSystemService(android.app.admin.DevicePolicyManager::class.java) ?: return
+        val admin = android.content.ComponentName(
+            this,
+            au.com.tbmcgregor.bwparker.familyguard.admin.DeviceAdminReceiverImpl::class.java,
+        )
+        runCatching {
+            dpm.setPackagesSuspended(admin, packages, false)
+        }
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        applyDebugUnsuspend(intent)
         if (wantsDebugSettings(intent)) recreate()
     }
 
@@ -115,6 +135,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        applyDebugUnsuspend(intent)
         requestNotificationPermissionIfNeeded()
         requestBatteryOptimizationExemptionIfNeeded()
         if (ProtectionController(applicationContext).isEnabled()) {
@@ -276,7 +297,7 @@ class MainActivity : ComponentActivity() {
             subtitle = if (protectionEnabled) {
                 "Habit rules, time budgets, VPN filtering, app blocking, and tamper protections are active."
             } else {
-                "Everything is off — apps unsuspended, VPN stopped, and tamper protections disabled."
+                "Everything is off — apps unsuspended/re-enabled, VPN stopped, and tamper protections disabled."
             },
         ) {
             Row(
@@ -321,9 +342,10 @@ class MainActivity : ComponentActivity() {
                 text = {
                     Text(
                         "This stops habit rules, time budgets, the filter VPN, friction screens, " +
-                            "unsuspends all blocked apps, and disables tamper protections (safe mode, " +
-                            "factory reset, USB debugging block, uninstall block, and protected apps). " +
-                            "Turn protection back on here to restore everything from your saved settings.",
+                            "unsuspends every blocked app, re-enables any apps that were disabled, " +
+                            "and turns off tamper protections (safe mode, factory reset, USB debugging " +
+                            "block, uninstall block, and protected apps). Turn protection back on here " +
+                            "to restore everything from your saved settings.",
                     )
                 },
                 confirmButton = {
