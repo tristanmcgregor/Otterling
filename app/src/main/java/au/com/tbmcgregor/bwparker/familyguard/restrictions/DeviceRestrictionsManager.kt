@@ -56,6 +56,18 @@ class DeviceRestrictionsManager(private val context: Context) {
         }
     }
 
+    /** Clears every tamper restriction from the live system without changing stored preferences. */
+    fun clearAllFromSystem() {
+        Restriction.entries.forEach { applyToSystem(it, enabled = false) }
+        applyUninstallBlockedToSystem(blocked = false)
+    }
+
+    /** Re-applies whatever is stored in preferences (used when protection is turned back on). */
+    fun reapplyDesiredFromPreferences() {
+        Restriction.entries.forEach { applyToSystem(it, preferences.isDesired(it)) }
+        applyUninstallBlockedToSystem(preferences.isUninstallBlockDesired())
+    }
+
     /** Called once from [DeviceAdminReceiverImpl.onEnabled] so protection is on by default. */
     fun applyDefaults() {
         Restriction.entries.forEach { setEnabled(it, true) }

@@ -7,11 +7,13 @@ import au.com.tbmcgregor.bwparker.familyguard.focus.BudgetEnforcer
 import au.com.tbmcgregor.bwparker.familyguard.focus.HabitRuleManager
 import au.com.tbmcgregor.bwparker.familyguard.focus.RewardAppManager
 import au.com.tbmcgregor.bwparker.familyguard.focus.RewardLedgerManager
+import au.com.tbmcgregor.bwparker.familyguard.restrictions.AppUninstallGuard
+import au.com.tbmcgregor.bwparker.familyguard.restrictions.DeviceRestrictionsManager
 
 /**
- * Master on/off for all enforcement (habit rules, budgets, VPN, suspensions, friction, etc.).
- * Tamper-resistance restrictions (safe mode, factory reset, uninstall block for this app) stay
- * active so this can't be used as a one-tap uninstall escape hatch.
+ * Master on/off for all enforcement (habit rules, budgets, VPN, suspensions, friction, tamper
+ * protections, etc.). Turning off clears everything from the live system; turning back on restores
+ * each feature from its saved preferences.
  */
 class ProtectionController(private val context: Context) {
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -36,10 +38,15 @@ class ProtectionController(private val context: Context) {
         BudgetEnforcer(context).releaseAll()
         RewardAppManager(context).setAllSuspended(suspended = false)
         AppSuspensionManager(context).releaseAll()
+
+        DeviceRestrictionsManager(context).clearAllFromSystem()
+        AppUninstallGuard(context).releaseAll()
     }
 
     suspend fun startup() {
         setEnabled(true)
+        DeviceRestrictionsManager(context).reapplyDesiredFromPreferences()
+        AppUninstallGuard(context).reapplyAll()
         ProtectionEnforcementService.start(context)
         if (prefs.getBoolean(KEY_VPN_WAS_ON, false)) {
             VpnFilterManager(context).enable()

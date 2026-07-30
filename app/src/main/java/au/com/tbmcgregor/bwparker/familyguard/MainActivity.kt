@@ -274,9 +274,9 @@ class MainActivity : ComponentActivity() {
             title = "Protection",
             icon = Icons.Default.PowerSettingsNew,
             subtitle = if (protectionEnabled) {
-                "Habit rules, time budgets, VPN filtering, and app blocking are active."
+                "Habit rules, time budgets, VPN filtering, app blocking, and tamper protections are active."
             } else {
-                "All enforcement is off. Apps are unsuspended and the filter VPN is stopped."
+                "Everything is off — apps unsuspended, VPN stopped, and tamper protections disabled."
             },
         ) {
             Row(
@@ -321,9 +321,9 @@ class MainActivity : ComponentActivity() {
                 text = {
                     Text(
                         "This stops habit rules, time budgets, the filter VPN, friction screens, " +
-                            "and unsuspends all blocked apps. Tamper protections (safe mode, factory " +
-                            "reset, uninstall block) stay on. You can turn protection back on here " +
-                            "any time.",
+                            "unsuspends all blocked apps, and disables tamper protections (safe mode, " +
+                            "factory reset, USB debugging block, uninstall block, and protected apps). " +
+                            "Turn protection back on here to restore everything from your saved settings.",
                     )
                 },
                 confirmButton = {
