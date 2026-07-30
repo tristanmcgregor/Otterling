@@ -23,6 +23,12 @@ class BudgetEnforcer(context: Context) {
         }
     }
 
+    suspend fun releaseAll() {
+        budgetManager.budgets().forEach { budget ->
+            setSuspended(budget.packageName, suspended = false)
+        }
+    }
+
     private fun setSuspended(packageName: String, suspended: Boolean) {
         val dpm = devicePolicyManager ?: return
         runCatching { dpm.setPackagesSuspended(adminComponent, arrayOf(packageName), suspended) }

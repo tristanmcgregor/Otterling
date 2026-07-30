@@ -18,8 +18,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.FilterAlt
+import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.VerifiedUser
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -49,6 +51,7 @@ import au.com.tbmcgregor.bwparker.familyguard.content.PrivateDnsFilterManager
 import au.com.tbmcgregor.bwparker.familyguard.data.BlockedApp
 import au.com.tbmcgregor.bwparker.familyguard.data.ProtectedApp
 import au.com.tbmcgregor.bwparker.familyguard.knox.KnoxLicenseManager
+import au.com.tbmcgregor.bwparker.familyguard.monitoring.ProtectionController
 import au.com.tbmcgregor.bwparker.familyguard.monitoring.ProtectionEnforcementService
 import au.com.tbmcgregor.bwparker.familyguard.pin.PinAuthManager
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.AppUninstallGuard
@@ -114,7 +117,9 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         requestNotificationPermissionIfNeeded()
         requestBatteryOptimizationExemptionIfNeeded()
-        ProtectionEnforcementService.start(applicationContext)
+        if (ProtectionController(applicationContext).isEnabled()) {
+            ProtectionEnforcementService.start(applicationContext)
+        }
         RestrictionEnforcementWorker.enqueuePeriodic(applicationContext)
         BlocklistRefreshWorker.enqueuePeriodic(applicationContext)
         setContent {
@@ -142,6 +147,7 @@ class MainActivity : ComponentActivity() {
                                 screen = Screen.PinEntry
                             },
                         ) {
+                            ProtectionControlSection()
                             DeviceOwnerSection()
                             RestrictionsSection()
                             UninstallProtectionSection()
@@ -253,6 +259,92 @@ class MainActivity : ComponentActivity() {
         val batteryManager = BatteryOptimizationManager(applicationContext)
         if (!batteryManager.isExempt()) {
             batteryOptimizationLauncher.launch(batteryManager.exemptionRequestIntent())
+        }
+    }
+
+    @Composable
+    private fun ProtectionControlSection() {
+        val coroutineScope = rememberCoroutineScope()
+        val controller = remember { ProtectionController(applicationContext) }
+        var protectionEnabled by remember { mutableStateOf(controller.isEnabled()) }
+        var showConfirmOff by remember { mutableStateOf(false) }
+        var busy by remember { mutableStateOf(false) }
+
+        SectionCard(
+            title = "Protection",
+            icon = Icons.Default.PowerSettingsNew,
+            subtitle = if (protectionEnabled) {
+                "Habit rules, time budgets, VPN filtering, and app blocking are active."
+            } else {
+                "All enforcement is off. Apps are unsuspended and the filter VPN is stopped."
+            },
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("Status", style = MaterialTheme.typography.bodyLarge)
+                StatusText(if (protectionEnabled) "Active" else "Off", isGood = protectionEnabled)
+            }
+
+            if (protectionEnabled) {
+                OutlinedButton(
+                    onClick = { showConfirmOff = true },
+                    enabled = !busy,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Turn protection off")
+                }
+            } else {
+                Button(
+                    onClick = {
+                        busy = true
+                        coroutineScope.launch {
+                            withContext(Dispatchers.IO) { controller.startup() }
+                            protectionEnabled = true
+                            busy = false
+                        }
+                    },
+                    enabled = !busy,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(if (busy) "Turning on..." else "Turn protection on")
+                }
+            }
+        }
+
+        if (showConfirmOff) {
+            AlertDialog(
+                onDismissRequest = { showConfirmOff = false },
+                title = { Text("Turn protection off?") },
+                text = {
+                    Text(
+                        "This stops habit rules, time budgets, the filter VPN, friction screens, " +
+                            "and unsuspends all blocked apps. Tamper protections (safe mode, factory " +
+                            "reset, uninstall block) stay on. You can turn protection back on here " +
+                            "any time.",
+                    )
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            showConfirmOff = false
+                            busy = true
+                            coroutineScope.launch {
+                                withContext(Dispatchers.IO) { controller.shutdown() }
+                                protectionEnabled = false
+                                busy = false
+                            }
+                        },
+                    ) {
+                        Text("Turn off")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showConfirmOff = false }) { Text("Cancel") }
+                },
+            )
         }
     }
 

@@ -8,6 +8,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import au.com.tbmcgregor.bwparker.familyguard.content.AppSuspensionManager
+import au.com.tbmcgregor.bwparker.familyguard.monitoring.ProtectionController
 import au.com.tbmcgregor.bwparker.familyguard.tamper.AccessibilityGuardActivity
 import au.com.tbmcgregor.bwparker.familyguard.tamper.TamperEventLogger
 import java.util.concurrent.TimeUnit
@@ -25,6 +26,7 @@ class RestrictionEnforcementWorker(context: Context, params: WorkerParameters) :
     CoroutineWorker(context, params) {
 
     override suspend fun doWork(): Result {
+        if (!ProtectionController(applicationContext).isEnabled()) return Result.success()
         val restrictionsManager = DeviceRestrictionsManager(applicationContext)
         val tamperLogger = TamperEventLogger(applicationContext)
         runCatching { restrictionsManager.detectDriftAndReapply(tamperLogger) }

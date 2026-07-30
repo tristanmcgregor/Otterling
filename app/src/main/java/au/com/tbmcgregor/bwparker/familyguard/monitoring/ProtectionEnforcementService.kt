@@ -52,6 +52,10 @@ class ProtectionEnforcementService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (!ProtectionController(applicationContext).isEnabled()) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
         if (loopJob == null) {
             val restrictionsManager = DeviceRestrictionsManager(applicationContext)
             val tamperLogger = TamperEventLogger(applicationContext)
@@ -67,6 +71,10 @@ class ProtectionEnforcementService : Service() {
                 runCatching { uninstallGuard.reapplyAll() }
                     .onFailure { Log.w(TAG, "Uninstall-protection reapply failed", it) }
                 while (isActive) {
+                    if (!ProtectionController(applicationContext).isEnabled()) {
+                        stopSelf()
+                        break
+                    }
                     runCatching { restrictionsManager.detectDriftAndReapply(tamperLogger) }
                         .onFailure { Log.w(TAG, "Restriction drift check failed", it) }
                     runCatching { checkAccessibilityGuard(tamperLogger) }
@@ -87,6 +95,7 @@ class ProtectionEnforcementService : Service() {
             val habitShareSyncManager = HabitShareSyncManager(applicationContext)
             habitShareSyncJob = scope.launch {
                 while (isActive) {
+                    if (!ProtectionController(applicationContext).isEnabled()) break
                     runCatching { habitShareSyncManager.syncIfConnected() }
                         .onFailure { Log.w(TAG, "HabitShare sync failed", it) }
                     delay(HABITSHARE_SYNC_INTERVAL_MS)
@@ -96,6 +105,7 @@ class ProtectionEnforcementService : Service() {
         if (vpnWatchdogJob == null) {
             vpnWatchdogJob = scope.launch {
                 while (isActive) {
+                    if (!ProtectionController(applicationContext).isEnabled()) break
                     runCatching { VpnFilterManager(applicationContext).ensureActive() }
                         .onFailure { Log.w(TAG, "VPN watchdog failed", it) }
                     delay(VPN_WATCHDOG_INTERVAL_MS)
@@ -125,6 +135,7 @@ class ProtectionEnforcementService : Service() {
     }
 
     private fun checkAccessibilityGuard(tamperLogger: TamperEventLogger) {
+        if (!ProtectionController(applicationContext).isEnabled()) return
         AccessibilityGuard.reapplyAllowlist(applicationContext)
         if (!AccessibilityGuard.isEnabled(applicationContext)) {
             scope.launch {
@@ -173,7 +184,12 @@ class ProtectionEnforcementService : Service() {
         private const val VPN_WATCHDOG_INTERVAL_MS = 60 * 1000L
 
         fun start(context: Context) {
+            if (!ProtectionController(context).isEnabled()) return
             context.startForegroundService(Intent(context, ProtectionEnforcementService::class.java))
+        }
+
+        fun stop(context: Context) {
+            context.stopService(Intent(context, ProtectionEnforcementService::class.java))
         }
     }
 }

@@ -4,6 +4,7 @@ import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Context
 import android.util.Log
+import au.com.tbmcgregor.bwparker.familyguard.monitoring.ProtectionController
 import au.com.tbmcgregor.bwparker.familyguard.admin.DeviceAdminReceiverImpl
 
 /**
@@ -118,6 +119,7 @@ class VpnFilterManager(private val context: Context) {
 
     /** Call on boot -- re-locks the always-on VPN if it was previously turned on. */
     fun reapplyIfEnabled() {
+        if (!ProtectionController(context).isEnabled()) return
         if (wasEnabledByUser()) enable()
     }
 
@@ -128,6 +130,7 @@ class VpnFilterManager(private val context: Context) {
      * when the user has the VPN intentionally off. Never throws -- all DPM/system calls are guarded.
      */
     fun ensureActive() {
+        if (!ProtectionController(context).isEnabled()) return
         if (!wasEnabledByUser()) return
         val dpm = devicePolicyManager ?: return
         runCatching {

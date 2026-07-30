@@ -38,6 +38,10 @@ class AppSuspensionManager(private val context: Context) {
         dao.getAll().forEach { applyToSystem(it.packageName, it.blocked) }
     }
 
+    suspend fun releaseAll() {
+        dao.getAll().forEach { applyToSystem(it.packageName, blocked = false) }
+    }
+
     private fun applyToSystem(packageName: String, blocked: Boolean): Boolean {
         val dpm = devicePolicyManager ?: return false
         return try {

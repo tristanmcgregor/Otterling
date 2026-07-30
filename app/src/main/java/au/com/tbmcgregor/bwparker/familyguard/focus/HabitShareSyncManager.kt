@@ -1,6 +1,7 @@
 package au.com.tbmcgregor.bwparker.familyguard.focus
 
 import android.content.Context
+import au.com.tbmcgregor.bwparker.familyguard.monitoring.ProtectionController
 import android.util.Log
 
 /**
@@ -20,6 +21,7 @@ class HabitShareSyncManager(context: Context) {
     private val proofManager = HabitProofManager(context)
 
     suspend fun syncIfConnected() {
+        if (!ProtectionController(appContext).isEnabled()) return
         if (!apiClient.isConnected()) return
         val rows = apiClient.fetchTodayCompletions() ?: run {
             Log.w(TAG, "HabitShare sync skipped this cycle (fetch failed)")

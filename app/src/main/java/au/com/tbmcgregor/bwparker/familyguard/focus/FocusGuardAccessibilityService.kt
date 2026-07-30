@@ -7,6 +7,7 @@ import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.Toast
+import au.com.tbmcgregor.bwparker.familyguard.monitoring.ProtectionController
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -71,6 +72,7 @@ class FocusGuardAccessibilityService : AccessibilityService() {
      * Facebook available. Debounced so a single detection doesn't fire a burst of Back presses
      * before the UI has had a chance to transition away. */
     private fun blockReelsIfPresent() {
+        if (!ProtectionController(applicationContext).isEnabled()) return
         val now = System.currentTimeMillis()
         if (now - lastReelsBounceMillis < REELS_BOUNCE_DEBOUNCE_MS) return
         val root = rootInActiveWindow ?: return
@@ -115,6 +117,7 @@ class FocusGuardAccessibilityService : AccessibilityService() {
             startHabitPolling()
         }
         scope.launch {
+            if (!ProtectionController(applicationContext).isEnabled()) return@launch
             val mindfulApp = mindfulAppManager.apps().find { it.packageName == packageName }
             if (mindfulApp != null && !mindfulAppManager.isWithinGracePeriod(packageName)) {
                 withContext(Dispatchers.Main) { launchFriction(packageName, mindfulApp.delaySeconds) }

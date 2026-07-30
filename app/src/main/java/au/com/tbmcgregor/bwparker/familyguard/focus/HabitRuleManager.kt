@@ -209,6 +209,14 @@ class HabitRuleManager(context: Context) {
         grantedCount
     }
 
+    /** Unsuspends every target app referenced by any rule -- used when protection is turned off. */
+    suspend fun unsuspendAllTargets() {
+        dao.getAll()
+            .flatMap { it.targetPackageNames() }
+            .distinct()
+            .forEach { setSuspended(it, suspended = false) }
+    }
+
     /** Re-derives suspended state for every target app from scratch. Call periodically -- this is
      * also what makes time-windowed rules' blocking track the clock. */
     suspend fun reapplyAll() {

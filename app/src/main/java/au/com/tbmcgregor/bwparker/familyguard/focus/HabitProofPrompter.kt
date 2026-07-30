@@ -6,6 +6,7 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import au.com.tbmcgregor.bwparker.familyguard.monitoring.ProtectionController
 import java.time.LocalDate
 import java.util.Collections
 
@@ -28,6 +29,7 @@ object HabitProofPrompter {
 
     /** Returns true if a prompt was shown (i.e. this habit hadn't already been prompted today). */
     fun promptFor(context: Context, habitName: String): Boolean {
+        if (!ProtectionController(context).isEnabled()) return false
         if (!promptedKeys.add(keyFor(habitName))) return false
         val appContext = context.applicationContext
         val activityIntent = Intent(appContext, HabitProofActivity::class.java)
