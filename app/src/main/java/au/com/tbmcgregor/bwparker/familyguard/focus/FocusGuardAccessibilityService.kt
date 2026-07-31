@@ -7,6 +7,8 @@ import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.Toast
+import au.com.tbmcgregor.bwparker.familyguard.content.CustomBlocklistManager
+import au.com.tbmcgregor.bwparker.familyguard.content.UrlPathBlockEnforcer
 import au.com.tbmcgregor.bwparker.familyguard.monitoring.ProtectionController
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -35,16 +37,19 @@ class FocusGuardAccessibilityService : AccessibilityService() {
     private var habitPollJob: Job? = null
     private var currentPackage: String? = null
     private var lastReelsBounceMillis = 0L
+    private var lastPathBlockMillis = 0L
 
     private lateinit var mindfulAppManager: MindfulAppManager
     private lateinit var budgetManager: AppTimeBudgetManager
     private lateinit var habitShareSyncManager: HabitShareSyncManager
+    private lateinit var customBlocklist: CustomBlocklistManager
 
     override fun onServiceConnected() {
         super.onServiceConnected()
         mindfulAppManager = MindfulAppManager(applicationContext)
         budgetManager = AppTimeBudgetManager(applicationContext)
         habitShareSyncManager = HabitShareSyncManager(applicationContext)
+        customBlocklist = CustomBlocklistManager(applicationContext)
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -66,6 +71,43 @@ class FocusGuardAccessibilityService : AccessibilityService() {
         if (packageName in FACEBOOK_PACKAGES) {
             blockReelsIfPresent()
         }
+        if (packageName in UrlPathBlockEnforcer.BROWSER_PACKAGES ||
+            packageName in UrlPathBlockEnforcer.YOUTUBE_PACKAGES
+        ) {
+            blockPathRulesIfPresent(packageName)
+        }
+    }
+
+    /**
+     * Enforces custom blocklist path rules (e.g. youtube.com/shorts). Domain-only rules are handled
+     * by the VPN; path rules need the address bar / in-app Shorts UI because HTTPS hides paths.
+     */
+    private fun blockPathRulesIfPresent(packageName: String) {
+        if (!ProtectionController(applicationContext).isEnabled()) return
+        val now = System.currentTimeMillis()
+        if (now - lastPathBlockMillis < PATH_BLOCK_DEBOUNCE_MS) return
+        val pathEntries = customBlocklist.pathEntries()
+        if (pathEntries.isEmpty()) return
+
+        if (packageName in UrlPathBlockEnforcer.YOUTUBE_PACKAGES &&
+            UrlPathBlockEnforcer.shouldBlockYoutubeShorts(pathEntries) &&
+            isInSubFeature()
+        ) {
+            lastPathBlockMillis = now
+            Log.d(TAG, "YouTube Shorts blocked by path rule -- bouncing")
+            performGlobalAction(GLOBAL_ACTION_BACK)
+            Toast.makeText(applicationContext, "This page is blocked.", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        if (packageName !in UrlPathBlockEnforcer.BROWSER_PACKAGES) return
+        val root = rootInActiveWindow ?: return
+        val urlText = UrlPathBlockEnforcer.extractBrowserUrl(root) ?: return
+        if (!UrlPathBlockEnforcer.shouldBlockBrowserUrl(pathEntries, urlText)) return
+        lastPathBlockMillis = now
+        Log.d(TAG, "Browser URL blocked by path rule: $urlText")
+        performGlobalAction(GLOBAL_ACTION_BACK)
+        Toast.makeText(applicationContext, "This page is blocked.", Toast.LENGTH_SHORT).show()
     }
 
     /** Presses Back to leave the Reels player the moment it's detected, keeping the rest of
@@ -310,6 +352,7 @@ class FocusGuardAccessibilityService : AccessibilityService() {
         const val TICK_MILLIS = 5_000L
         const val TICK_SECONDS = 5
         const val HABIT_POLL_MILLIS = 1_000L
+        const val PATH_BLOCK_DEBOUNCE_MS = 800L
         val SUB_FEATURE_HINTS = listOf("shorts", "reel")
 
         // Facebook (main app + Lite) -- Reels blocking is scoped to these so the rest of the app

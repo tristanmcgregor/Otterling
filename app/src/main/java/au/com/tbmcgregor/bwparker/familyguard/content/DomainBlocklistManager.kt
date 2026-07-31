@@ -21,7 +21,9 @@ class DomainBlocklistManager(private val context: Context) {
     /** True if [hostname] or any of its parent domains is on the blocklist. */
     fun isBlocked(hostname: String): Boolean {
         val domains = loadedDomains()
-        val customDomains = customBlocklist.domains()
+        // Path rules (youtube.com/shorts) must NOT NXDOMAIN the whole host -- only domain-only
+        // custom entries participate in DNS blocking.
+        val customDomains = customBlocklist.domainOnlyHosts()
         if (domains.isEmpty() && customDomains.isEmpty()) return false
         var candidate = hostname.lowercase().trimEnd('.')
         while (candidate.isNotEmpty()) {

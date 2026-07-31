@@ -620,7 +620,8 @@ fun BlockedWebsitesSettingsSection(context: Context) {
     SectionCard(
         title = "Blocked Websites",
         icon = Icons.Default.Language,
-        subtitle = "Custom domains are blocked immediately in the running VPN, including subdomains.",
+        subtitle = "Domains are blocked by the VPN (including subdomains). Paths like " +
+            "youtube.com/shorts are blocked in browsers and the YouTube app without blocking the rest of the site.",
     ) {
         Button(onClick = { showAdd = true }) { Text("Add website") }
         if (domains.isEmpty()) {
@@ -632,7 +633,16 @@ fun BlockedWebsitesSettingsSection(context: Context) {
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(domain, modifier = Modifier.weight(1f))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(domain)
+                        if ('/' in domain) {
+                            Text(
+                                "Path rule (browser / YouTube app)",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
                     TextButton(onClick = {
                         manager.remove(domain)
                         domains = manager.domains()
@@ -656,14 +666,17 @@ private fun AddBlockedWebsiteDialog(
         title = { Text("Block website") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Enter a domain. Its subdomains will also be blocked.")
+                Text(
+                    "Enter a domain (example.com) or a path (youtube.com/shorts). " +
+                        "Paths block only that URL prefix — the rest of the site stays available.",
+                )
                 OutlinedTextField(
                     value = input,
                     onValueChange = {
                         input = it
                         error = null
                     },
-                    label = { Text("example.com") },
+                    label = { Text("example.com or youtube.com/shorts") },
                     isError = error != null,
                     supportingText = error?.let { message -> { Text(message) } },
                     singleLine = true,
