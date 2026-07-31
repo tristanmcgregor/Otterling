@@ -20,7 +20,7 @@ class CustomBlocklistManagerTest {
             CustomBlocklistManager.normalize("youtube.com/shorts"),
         )
         assertEquals(
-            BlocklistEntry("youtube.com", "/shorts"),
+            BlocklistEntry("youtube.com", "/shorts/abc"),
             CustomBlocklistManager.normalize("https://www.youtube.com/shorts/abc?feature=share"),
         )
     }
