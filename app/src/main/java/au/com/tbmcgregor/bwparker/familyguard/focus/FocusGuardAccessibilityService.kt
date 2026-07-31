@@ -77,19 +77,33 @@ class FocusGuardAccessibilityService : AccessibilityService() {
         if (now - lastReelsBounceMillis < REELS_BOUNCE_DEBOUNCE_MS) return
         val root = rootInActiveWindow ?: return
         val screenHeight = resources.displayMetrics.heightPixels
-        if (!hasReelsTitleAtTop(root, screenHeight)) return
+        val screenWidth = resources.displayMetrics.widthPixels
+        if (!isInFacebookReelsPlayer(root, screenWidth, screenHeight)) return
         lastReelsBounceMillis = now
-        Log.d(TAG, "Facebook Reels title detected at top -- bouncing")
+        Log.d(TAG, "Facebook Reels player detected -- bouncing")
         performGlobalAction(GLOBAL_ACTION_BACK)
         Toast.makeText(applicationContext, "Reels is blocked.", Toast.LENGTH_SHORT).show()
     }
 
     /**
-     * True if a "Reels" title sits near the very top of the screen -- the header the Reels player
-     * shows. Deliberately position-gated so it ignores the feed's inline reel previews (mid/lower
-     * screen) and the bottom-nav "Reels" tab, which would otherwise make this fire on the normal
-     * feed too. Matches text or content-description equal to "Reels" (allowing a small amount of
-     * surrounding text, e.g. "Reels").
+     * True when Facebook is showing the fullscreen Reels player -- either via the Reels tab
+     * (which puts a "Reels" title at the top) or by tapping a video/reel from the main feed
+     * (which often has no "Reels" title, but uses a near-fullscreen viewer with reel-specific
+     * view ids / content descriptions). Deliberately avoids the feed's inline reel cards and the
+     * bottom-nav "Reels" tab label.
+     */
+    private fun isInFacebookReelsPlayer(
+        root: AccessibilityNodeInfo,
+        screenWidth: Int,
+        screenHeight: Int,
+    ): Boolean {
+        if (hasReelsTitleAtTop(root, screenHeight)) return true
+        return hasFullscreenReelsViewer(root, screenWidth, screenHeight)
+    }
+
+    /**
+     * True if a "Reels" title sits near the very top of the screen -- the header the Reels *tab*
+     * player shows. Position-gated so the bottom-nav "Reels" tab doesn't count.
      */
     private fun hasReelsTitleAtTop(node: AccessibilityNodeInfo, screenHeight: Int): Boolean {
         val label = node.text?.toString()?.trim() ?: node.contentDescription?.toString()?.trim()
@@ -101,6 +115,80 @@ class FocusGuardAccessibilityService : AccessibilityService() {
         for (i in 0 until node.childCount) {
             val child = node.getChild(i) ?: continue
             if (hasReelsTitleAtTop(child, screenHeight)) return true
+        }
+        return false
+    }
+
+    /**
+     * Detects the fullscreen Reels viewer opened from the feed (or anywhere else that doesn't
+     * show a "Reels" title). Requires BOTH a reel/viewer resource-id or content-desc signal AND a
+     * near-fullscreen media surface, so inline feed cards (small mid-screen previews) don't trip it.
+     */
+    private fun hasFullscreenReelsViewer(
+        root: AccessibilityNodeInfo,
+        screenWidth: Int,
+        screenHeight: Int,
+    ): Boolean {
+        var hasReelSignal = false
+        var hasFullscreenSurface = false
+        val minHeight = (screenHeight * REELS_FULLSCREEN_HEIGHT_FRACTION).toInt()
+        val minWidth = (screenWidth * REELS_FULLSCREEN_WIDTH_FRACTION).toInt()
+        val queue = ArrayDeque<AccessibilityNodeInfo>()
+        queue.add(root)
+        var visited = 0
+        while (queue.isNotEmpty() && visited < REELS_SCAN_MAX_NODES) {
+            val node = queue.removeFirst()
+            visited++
+            val id = node.viewIdResourceName?.lowercase().orEmpty()
+            val desc = (node.contentDescription?.toString() ?: "").lowercase()
+            val text = (node.text?.toString() ?: "").lowercase()
+            if (REELS_VIEWER_ID_HINTS.any { id.contains(it) } ||
+                REELS_VIEWER_DESC_HINTS.any { desc.contains(it) }
+            ) {
+                hasReelSignal = true
+            }
+            // "Reel by …" / "Video by …" author lines often appear in the feed-opened player.
+            if (REELS_AUTHOR_LINE_PATTERN.containsMatchIn(desc) ||
+                REELS_AUTHOR_LINE_PATTERN.containsMatchIn(text)
+            ) {
+                hasReelSignal = true
+            }
+            val bounds = Rect()
+            node.getBoundsInScreen(bounds)
+            if (!bounds.isEmpty &&
+                bounds.height() >= minHeight &&
+                bounds.width() >= minWidth &&
+                bounds.top < screenHeight * 0.2f
+            ) {
+                // A near-fullscreen surface starting near the top -- typical of the Reels player,
+                // not an inline feed card.
+                val className = node.className?.toString().orEmpty()
+                if (className.contains("View", ignoreCase = true) ||
+                    className.contains("Video", ignoreCase = true) ||
+                    className.contains("Image", ignoreCase = true) ||
+                    id.contains("video") ||
+                    id.contains("media") ||
+                    id.contains("reel")
+                ) {
+                    hasFullscreenSurface = true
+                }
+            }
+            if (hasReelSignal && hasFullscreenSurface) return true
+            for (i in 0 until node.childCount) {
+                queue.add(node.getChild(i) ?: continue)
+            }
+        }
+        // Strong viewer ids alone are enough -- Facebook's reels_viewer_* hierarchy is specific
+        // to the fullscreen player and isn't used for tiny inline feed previews.
+        return hasStrongReelsViewerId(root)
+    }
+
+    private fun hasStrongReelsViewerId(node: AccessibilityNodeInfo): Boolean {
+        val id = node.viewIdResourceName?.lowercase().orEmpty()
+        if (REELS_STRONG_VIEWER_ID_HINTS.any { id.contains(it) }) return true
+        for (i in 0 until node.childCount) {
+            val child = node.getChild(i) ?: continue
+            if (hasStrongReelsViewerId(child)) return true
         }
         return false
     }
@@ -227,11 +315,39 @@ class FocusGuardAccessibilityService : AccessibilityService() {
         // Facebook (main app + Lite) -- Reels blocking is scoped to these so the rest of the app
         // keeps working normally.
         val FACEBOOK_PACKAGES = setOf("com.facebook.katana", "com.facebook.lite")
-        const val REELS_BOUNCE_DEBOUNCE_MS = 1_200L
-        // The Reels player shows a "Reels" title in the top bar; only a title within this fraction
-        // of the screen height from the top counts, so the feed's inline previews / bottom tab
-        // don't trigger it.
-        const val REELS_TITLE_TOP_FRACTION = 0.15
+        const val REELS_BOUNCE_DEBOUNCE_MS = 800L
+        // The Reels tab shows a "Reels" title in the top bar; only a title within this fraction
+        // of the screen height from the top counts, so the bottom-nav tab doesn't trigger it.
+        const val REELS_TITLE_TOP_FRACTION = 0.18
         val REELS_TITLE_PATTERN = Regex("""^reels$""", RegexOption.IGNORE_CASE)
+        // Feed-opened Reels player: near-fullscreen media surface + reel signal, or a strong
+        // reels_viewer resource id on its own.
+        const val REELS_FULLSCREEN_HEIGHT_FRACTION = 0.65f
+        const val REELS_FULLSCREEN_WIDTH_FRACTION = 0.75f
+        const val REELS_SCAN_MAX_NODES = 250
+        val REELS_VIEWER_ID_HINTS = listOf(
+            "reels_viewer",
+            "reel_viewer",
+            "reels_video",
+            "reel_video",
+            "reels_playback",
+            "fb_reels",
+            "reels_watch",
+        )
+        val REELS_STRONG_VIEWER_ID_HINTS = listOf(
+            "reels_viewer",
+            "reel_viewer",
+            "reels_playback",
+            "fb_reels_viewer",
+        )
+        val REELS_VIEWER_DESC_HINTS = listOf(
+            "reel video",
+            "reels video",
+            "playing reel",
+            "pause reel",
+            "close reels",
+            "exit reels",
+        )
+        val REELS_AUTHOR_LINE_PATTERN = Regex("""\b(reel|reels)\b.*\bby\b|\bby\b.*\b(reel|reels)\b""")
     }
 }
