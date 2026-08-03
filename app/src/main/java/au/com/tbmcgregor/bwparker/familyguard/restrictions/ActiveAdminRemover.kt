@@ -11,14 +11,8 @@ import au.com.tbmcgregor.bwparker.familyguard.admin.DeviceAdminReceiverImpl
  * Best-effort helpers for apps that refuse [DevicePolicyManager.setPackagesSuspended] because they
  * are an active device admin (e.g. Accountable2You).
  *
- * Android will **not** let a Device Owner strip another production app's device admin:
- * - [DevicePolicyManager.removeActiveAdmin] only works for that admin's own package (or
- *   `MANAGE_DEVICE_ADMINS`).
- * - Hidden `forceRemoveActiveAdmin` (what `adb shell dpm remove-active-admin` uses) only works for
- *   `android:testOnly` admins.
- *
- * So we still try both, then the caller should fall back to [BounceBlockStore] (accessibility
- * kick-to-home) which keeps the target enabled so its own accessibility / admin can keep running.
+ * Android will not let a Device Owner strip another production app's device admin, so callers
+ * should fall back to [PackageDisableStore] when this returns false.
  */
 object ActiveAdminRemover {
     private const val TAG = "ActiveAdminRemover"
@@ -30,10 +24,6 @@ object ActiveAdminRemover {
             .orEmpty()
     }
 
-    /**
-     * Tries to force-remove every active admin for [packageName]. Returns true if none remain
-     * afterwards. Never touches this app's own device-owner admin.
-     */
     fun forceRemoveAdminsForPackage(context: Context, packageName: String): Boolean {
         if (packageName == context.packageName) {
             Log.w(TAG, "Refusing to remove our own device-owner admin")
@@ -52,21 +42,13 @@ object ActiveAdminRemover {
         return activeAdminsForPackage(context, packageName).isEmpty()
     }
 
-    /**
-     * Strip admins if any, then suspend. Returns true only if suspend succeeded. On failure the
-     * caller should register the package in [BounceBlockStore].
-     */
     fun suspendEvenIfAdmin(context: Context, packageName: String): Boolean {
         val dpm = context.getSystemService(DevicePolicyManager::class.java) ?: return false
         val ourAdmin = ComponentName(context, DeviceAdminReceiverImpl::class.java)
         if (activeAdminsForPackage(context, packageName).isNotEmpty()) {
             val stripped = forceRemoveAdminsForPackage(context, packageName)
             if (!stripped) {
-                Log.w(
-                    TAG,
-                    "Android refused to remove device admin for $packageName " +
-                        "(production admins can't be force-removed). Use bounce-block instead.",
-                )
+                Log.w(TAG, "Android refused to remove device admin for $packageName")
             }
         }
         return try {

@@ -1,11 +1,7 @@
 package au.com.tbmcgregor.bwparker.familyguard.focus
 
-import android.app.admin.DevicePolicyManager
-import android.content.ComponentName
 import android.content.Context
-import au.com.tbmcgregor.bwparker.familyguard.admin.DeviceAdminReceiverImpl
-import au.com.tbmcgregor.bwparker.familyguard.restrictions.ActiveAdminRemover
-import au.com.tbmcgregor.bwparker.familyguard.restrictions.BounceBlockStore
+import au.com.tbmcgregor.bwparker.familyguard.restrictions.PackageBlockEnforcer
 
 /**
  * Suspends apps that have gone over their [AppTimeBudget] for today, and unsuspends them once a
@@ -14,42 +10,21 @@ import au.com.tbmcgregor.bwparker.familyguard.restrictions.BounceBlockStore
  * hard-block list in the UI.
  */
 class BudgetEnforcer(private val context: Context) {
-    private val devicePolicyManager: DevicePolicyManager? =
-        context.getSystemService(DevicePolicyManager::class.java)
-    private val adminComponent = ComponentName(context, DeviceAdminReceiverImpl::class.java)
     private val budgetManager = AppTimeBudgetManager(context)
 
     suspend fun reapplyAll() {
         budgetManager.budgets().forEach { budget ->
-            setSuspended(budget.packageName, budgetManager.isOverBudget(budget.packageName))
+            PackageBlockEnforcer.setBlocked(
+                context,
+                budget.packageName,
+                blocked = budgetManager.isOverBudget(budget.packageName),
+            )
         }
     }
 
     suspend fun releaseAll() {
         budgetManager.budgets().forEach { budget ->
-            setSuspended(budget.packageName, suspended = false)
-        }
-    }
-
-    private fun setSuspended(packageName: String, suspended: Boolean) {
-        val dpm = devicePolicyManager ?: return
-        val bounce = BounceBlockStore(context)
-        if (!suspended) {
-            bounce.setBlocked(packageName, blocked = false)
-            runCatching { dpm.setPackagesSuspended(adminComponent, arrayOf(packageName), false) }
-            return
-        }
-        val failed = runCatching {
-            dpm.setPackagesSuspended(adminComponent, arrayOf(packageName), true)
-        }.getOrNull() ?: return
-        if (failed.isEmpty()) {
-            bounce.setBlocked(packageName, blocked = false)
-            return
-        }
-        if (ActiveAdminRemover.suspendEvenIfAdmin(context, packageName)) {
-            bounce.setBlocked(packageName, blocked = false)
-        } else {
-            bounce.setBlocked(packageName, blocked = true)
+            PackageBlockEnforcer.setBlocked(context, budget.packageName, blocked = false)
         }
     }
 }

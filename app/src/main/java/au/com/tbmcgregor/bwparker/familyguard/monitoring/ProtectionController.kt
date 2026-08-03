@@ -14,8 +14,8 @@ import au.com.tbmcgregor.bwparker.familyguard.focus.HabitRuleManager
 import au.com.tbmcgregor.bwparker.familyguard.focus.RewardAppManager
 import au.com.tbmcgregor.bwparker.familyguard.focus.RewardLedgerManager
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.AppUninstallGuard
-import au.com.tbmcgregor.bwparker.familyguard.restrictions.BounceBlockStore
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.DeviceRestrictionsManager
+import au.com.tbmcgregor.bwparker.familyguard.restrictions.PackageDisableStore
 
 /**
  * Master on/off for all enforcement (habit rules, budgets, VPN, suspensions, friction, tamper
@@ -45,7 +45,7 @@ class ProtectionController(private val context: Context) {
         BudgetEnforcer(context).releaseAll()
         RewardAppManager(context).setAllSuspended(suspended = false)
         AppSuspensionManager(context).releaseAll()
-        BounceBlockStore(context).clearAll()
+        PackageDisableStore(context).clearAll()
 
         // Also clear any leftover DPM suspensions / user-disabled packages that aren't in those
         // lists (e.g. an app suspended then removed from rules, or disabled via ADB while

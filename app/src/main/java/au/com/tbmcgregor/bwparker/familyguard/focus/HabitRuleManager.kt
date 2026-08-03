@@ -1,13 +1,8 @@
 package au.com.tbmcgregor.bwparker.familyguard.focus
 
-import android.app.admin.DevicePolicyManager
-import android.content.ComponentName
 import android.content.Context
-import android.util.Log
-import au.com.tbmcgregor.bwparker.familyguard.admin.DeviceAdminReceiverImpl
 import au.com.tbmcgregor.bwparker.familyguard.data.AppDatabase
-import au.com.tbmcgregor.bwparker.familyguard.restrictions.ActiveAdminRemover
-import au.com.tbmcgregor.bwparker.familyguard.restrictions.BounceBlockStore
+import au.com.tbmcgregor.bwparker.familyguard.restrictions.PackageBlockEnforcer
 import au.com.tbmcgregor.bwparker.familyguard.tamper.TamperEventLogger
 import java.time.DayOfWeek
 import java.time.LocalDate
@@ -40,9 +35,6 @@ class HabitRuleManager(private val context: Context) {
     private val detectedHabitDao = AppDatabase.getInstance(context).detectedHabitDao()
     private val proofManager = HabitProofManager(context)
     private val tamperEventLogger = TamperEventLogger(context)
-    private val devicePolicyManager: DevicePolicyManager? =
-        context.getSystemService(DevicePolicyManager::class.java)
-    private val adminComponent = ComponentName(context, DeviceAdminReceiverImpl::class.java)
 
     // Accessibility content-changed events can fire in a quick burst, and each scan calls
     // evaluateTrigger() from its own coroutine without waiting for a prior one to finish. Without
@@ -308,38 +300,6 @@ class HabitRuleManager(private val context: Context) {
     }
 
     private fun setSuspended(packageName: String, suspended: Boolean) {
-        val dpm = devicePolicyManager ?: return
-        val bounce = BounceBlockStore(context)
-        try {
-            if (suspended) {
-                // Device-admin apps (e.g. Accountable2You) refuse setPackagesSuspended. Android
-                // also won't let Device Owner strip another production app's admin -- try anyway,
-                // then fall back to accessibility bounce so blocking still works without disable-user.
-                val failed = dpm.setPackagesSuspended(adminComponent, arrayOf(packageName), true)
-                if (failed.isEmpty()) {
-                    bounce.setBlocked(packageName, blocked = false)
-                    return
-                }
-                Log.w(TAG, "Suspend refused for $packageName -- trying admin strip then bounce fallback")
-                if (ActiveAdminRemover.suspendEvenIfAdmin(context, packageName)) {
-                    bounce.setBlocked(packageName, blocked = false)
-                } else {
-                    bounce.setBlocked(packageName, blocked = true)
-                    Log.i(TAG, "Registered $packageName for accessibility bounce-block")
-                }
-            } else {
-                bounce.setBlocked(packageName, blocked = false)
-                dpm.setPackagesSuspended(adminComponent, arrayOf(packageName), false)
-            }
-        } catch (error: SecurityException) {
-            Log.e(TAG, "Not authorized to suspend $packageName", error)
-            if (suspended) bounce.setBlocked(packageName, blocked = true)
-        } catch (error: IllegalArgumentException) {
-            Log.e(TAG, "Cannot suspend $packageName (not installed?)", error)
-        }
-    }
-
-    private companion object {
-        const val TAG = "HabitRuleManager"
+        PackageBlockEnforcer.setBlocked(context, packageName, blocked = suspended)
     }
 }

@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AdminPanelSettings
+import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.FilterAlt
 import androidx.compose.material.icons.filled.PowerSettingsNew
@@ -57,6 +58,7 @@ import au.com.tbmcgregor.bwparker.familyguard.pin.PinAuthManager
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.AppUninstallGuard
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.BatteryOptimizationManager
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.DeviceRestrictionsManager
+import au.com.tbmcgregor.bwparker.familyguard.restrictions.PackageDisableStore
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.Restriction
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.RestrictionEnforcementWorker
 import au.com.tbmcgregor.bwparker.familyguard.tamper.TamperEvent
@@ -173,6 +175,7 @@ class MainActivity : ComponentActivity() {
                             RestrictionsSection()
                             UninstallProtectionSection()
                             ContentFilterSection()
+                            DisabledAppsSection()
                             VpnFilterSection(applicationContext)
                             BlockedWebsitesSettingsSection(applicationContext)
                             AccessibilityServiceSection(applicationContext)
@@ -689,6 +692,69 @@ class MainActivity : ComponentActivity() {
                         }
                     }) {
                         Text("Remove")
+                    }
+                }
+            }
+        }
+    }
+
+    @Composable
+    private fun DisabledAppsSection() {
+        val coroutineScope = rememberCoroutineScope()
+        val disableStore = remember { PackageDisableStore(applicationContext) }
+        var refreshTrigger by remember { mutableIntStateOf(0) }
+        var entries by remember { mutableStateOf<List<PackageDisableStore.Entry>>(emptyList()) }
+
+        LaunchedEffect(refreshTrigger) {
+            entries = withContext(Dispatchers.IO) { disableStore.visibleEntries() }
+        }
+
+        SectionCard(
+            title = "Disabled apps",
+            icon = Icons.Default.Block,
+            subtitle = "Apps that couldn't be suspended (usually because they are a device admin) " +
+                "are disabled instead. Undisable re-enables them and stops automatic re-disable " +
+                "until you tap Disable again.",
+        ) {
+            if (entries.isEmpty()) {
+                Text("No apps disabled via this fallback.", style = MaterialTheme.typography.bodySmall)
+            }
+            entries.forEach { entry ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(entry.label, style = MaterialTheme.typography.bodyLarge)
+                        Text(
+                            when {
+                                entry.disabled -> "Disabled"
+                                entry.exempt -> "Enabled (undisabled by you)"
+                                else -> entry.packageName
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    if (entry.disabled) {
+                        Button(onClick = {
+                            coroutineScope.launch {
+                                withContext(Dispatchers.IO) { disableStore.undisable(entry.packageName) }
+                                refreshTrigger++
+                            }
+                        }) {
+                            Text("Undisable")
+                        }
+                    } else {
+                        OutlinedButton(onClick = {
+                            coroutineScope.launch {
+                                withContext(Dispatchers.IO) { disableStore.disable(entry.packageName) }
+                                refreshTrigger++
+                            }
+                        }) {
+                            Text("Disable again")
+                        }
                     }
                 }
             }
