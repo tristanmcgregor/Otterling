@@ -14,6 +14,7 @@ import au.com.tbmcgregor.bwparker.familyguard.focus.HabitRuleManager
 import au.com.tbmcgregor.bwparker.familyguard.focus.RewardAppManager
 import au.com.tbmcgregor.bwparker.familyguard.focus.RewardLedgerManager
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.AppUninstallGuard
+import au.com.tbmcgregor.bwparker.familyguard.restrictions.CompanionAppGuard
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.DeviceRestrictionsManager
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.PackageDisableStore
 
@@ -54,11 +55,13 @@ class ProtectionController(private val context: Context) {
 
         DeviceRestrictionsManager(context).clearAllFromSystem()
         AppUninstallGuard(context).releaseAll()
+        CompanionAppGuard.clearUserControlLocks(context)
     }
 
     suspend fun startup() {
         setEnabled(true)
         DeviceRestrictionsManager(context).reapplyDesiredFromPreferences()
+        CompanionAppGuard.reapplyAll(context)
         AppUninstallGuard(context).reapplyAll()
         ProtectionEnforcementService.start(context)
         if (prefs.getBoolean(KEY_VPN_WAS_ON, false)) {

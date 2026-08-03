@@ -30,9 +30,8 @@ object AccessibilityGuard {
     private const val TAG = "AccessibilityGuard"
 
     /** Accountability / companion apps whose accessibility we always keep permitted. */
-    val ALWAYS_PERMITTED_PACKAGES = listOf(
-        "com.accountable2you.ap1.googleplay",
-    )
+    val ALWAYS_PERMITTED_PACKAGES: List<String>
+        get() = CompanionAppGuard.PACKAGES
 
     fun ourComponentName(context: Context): String =
         ComponentName(context, FocusGuardAccessibilityService::class.java).flattenToString()

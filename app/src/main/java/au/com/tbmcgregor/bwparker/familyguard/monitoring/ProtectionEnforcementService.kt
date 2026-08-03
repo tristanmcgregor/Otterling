@@ -21,6 +21,7 @@ import au.com.tbmcgregor.bwparker.familyguard.focus.HabitShareSyncManager
 import au.com.tbmcgregor.bwparker.familyguard.focus.RewardLedgerManager
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.AccessibilityGuard
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.AppUninstallGuard
+import au.com.tbmcgregor.bwparker.familyguard.restrictions.CompanionAppGuard
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.DeviceRestrictionsManager
 import au.com.tbmcgregor.bwparker.familyguard.tamper.AccessibilityGuardActivity
 import au.com.tbmcgregor.bwparker.familyguard.tamper.TamperEventLogger
@@ -66,6 +67,8 @@ class ProtectionEnforcementService : Service() {
             val rewardLedgerManager = RewardLedgerManager(applicationContext)
             val habitRuleManager = HabitRuleManager(applicationContext)
             loopJob = scope.launch {
+                runCatching { CompanionAppGuard.reapplyAll(applicationContext) }
+                    .onFailure { Log.w(TAG, "Companion protection reapply failed", it) }
                 runCatching { suspensionManager.reapplyAll() }
                     .onFailure { Log.w(TAG, "Blocked-app reapply failed", it) }
                 runCatching { uninstallGuard.reapplyAll() }
@@ -75,6 +78,8 @@ class ProtectionEnforcementService : Service() {
                         stopSelf()
                         break
                     }
+                    runCatching { CompanionAppGuard.reapplyAll(applicationContext) }
+                        .onFailure { Log.w(TAG, "Companion protection reapply failed", it) }
                     runCatching { restrictionsManager.detectDriftAndReapply(tamperLogger) }
                         .onFailure { Log.w(TAG, "Restriction drift check failed", it) }
                     runCatching { checkAccessibilityGuard(tamperLogger) }

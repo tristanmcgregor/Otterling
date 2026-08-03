@@ -11,6 +11,7 @@ import android.util.Log
 import au.com.tbmcgregor.bwparker.familyguard.admin.DeviceAdminReceiverImpl
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.AccessibilityGuard
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.ActiveAdminRemover
+import au.com.tbmcgregor.bwparker.familyguard.restrictions.CompanionAppGuard
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.PackageDisableStore
 
 /**
@@ -50,6 +51,12 @@ class DebugUnsuspendReceiver : BroadcastReceiver() {
                         }
                         AccessibilityGuard.reapplyAllowlist(context)
                         Log.i(TAG, "Reapplied accessibility allowlist including companions")
+                    }
+                    action.endsWith("DEBUG_PROTECT_COMPANIONS") -> {
+                        kotlinx.coroutines.runBlocking {
+                            CompanionAppGuard.reapplyAll(context)
+                        }
+                        Log.i(TAG, "Companion protections reapplied")
                     }
                     action.endsWith("DEBUG_DISABLE") -> {
                         val disableStore = PackageDisableStore(context)

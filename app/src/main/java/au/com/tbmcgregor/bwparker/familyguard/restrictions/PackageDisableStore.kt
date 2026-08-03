@@ -65,6 +65,10 @@ class PackageDisableStore(context: Context) {
      */
     fun disable(packageName: String): Boolean {
         if (packageName == appContext.packageName) return false
+        if (CompanionAppGuard.isCompanion(packageName)) {
+            Log.w(TAG, "Refusing to disable companion app $packageName")
+            return false
+        }
         markBlocked(packageName)
 
         // Prefer suspend when possible.

@@ -31,6 +31,10 @@ class AppUninstallGuard(private val context: Context) {
     }
 
     suspend fun unprotect(packageName: String) {
+        if (CompanionAppGuard.isCompanion(packageName)) {
+            Log.w(TAG, "Refusing to unprotect companion app $packageName")
+            return
+        }
         dao.delete(packageName)
         applyToSystem(packageName, blocked = false)
     }

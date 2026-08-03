@@ -57,6 +57,7 @@ import au.com.tbmcgregor.bwparker.familyguard.monitoring.ProtectionEnforcementSe
 import au.com.tbmcgregor.bwparker.familyguard.pin.PinAuthManager
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.AppUninstallGuard
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.BatteryOptimizationManager
+import au.com.tbmcgregor.bwparker.familyguard.restrictions.CompanionAppGuard
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.DeviceRestrictionsManager
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.PackageDisableStore
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.Restriction
@@ -559,8 +560,9 @@ class MainActivity : ComponentActivity() {
         SectionCard(
             title = "Protect Apps From Uninstall",
             icon = Icons.Default.VerifiedUser,
-            subtitle = "These apps can't be uninstalled while Device Owner is active, even " +
-                "from Settings → Apps.",
+            subtitle = "These apps can't be uninstalled while Device Owner is active. " +
+                "Accountable2You is always protected as a companion (uninstall, force-stop, " +
+                "and clear-data locked; never suspended by habit rules).",
         ) {
             Button(onClick = {
                 coroutineScope.launch {
@@ -574,19 +576,31 @@ class MainActivity : ComponentActivity() {
                 Text("No apps protected yet.", style = MaterialTheme.typography.bodySmall)
             } else {
                 protectedApps.forEach { app ->
+                    val isCompanion = CompanionAppGuard.isCompanion(app.packageName)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Text(app.packageName, modifier = Modifier.weight(1f))
-                        TextButton(onClick = {
-                            coroutineScope.launch {
-                                uninstallGuard.unprotect(app.packageName)
-                                refreshTrigger++
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(app.packageName)
+                            if (isCompanion) {
+                                Text(
+                                    "Always protected companion",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
                             }
-                        }) {
-                            Text("Remove")
+                        }
+                        if (!isCompanion) {
+                            TextButton(onClick = {
+                                coroutineScope.launch {
+                                    uninstallGuard.unprotect(app.packageName)
+                                    refreshTrigger++
+                                }
+                            }) {
+                                Text("Remove")
+                            }
                         }
                     }
                 }
