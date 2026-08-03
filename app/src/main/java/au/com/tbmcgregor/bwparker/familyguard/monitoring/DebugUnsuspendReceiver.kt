@@ -9,6 +9,7 @@ import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.util.Log
 import au.com.tbmcgregor.bwparker.familyguard.admin.DeviceAdminReceiverImpl
+import au.com.tbmcgregor.bwparker.familyguard.restrictions.AccessibilityGuard
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.ActiveAdminRemover
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.PackageDisableStore
 
@@ -29,6 +30,10 @@ import au.com.tbmcgregor.bwparker.familyguard.restrictions.PackageDisableStore
  *   adb shell am broadcast -a au.com.tbmcgregor.bwparker.familyguard.DEBUG_DISABLE \
  *     -n au.com.tbmcgregor.bwparker.familyguard/.monitoring.DebugUnsuspendReceiver \
  *     --esa packages com.accountable2you.ap1.googleplay
+ *
+ * Re-permit companion accessibility (Accountable2You etc.):
+ *   adb shell am broadcast -a au.com.tbmcgregor.bwparker.familyguard.DEBUG_PERMIT_A11Y \
+ *     -n au.com.tbmcgregor.bwparker.familyguard/.monitoring.DebugUnsuspendReceiver
  */
 class DebugUnsuspendReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
@@ -39,6 +44,13 @@ class DebugUnsuspendReceiver : BroadcastReceiver() {
         Thread {
             try {
                 when {
+                    action.endsWith("DEBUG_PERMIT_A11Y") -> {
+                        AccessibilityGuard.ALWAYS_PERMITTED_PACKAGES.forEach {
+                            AccessibilityGuard.permitPackage(context, it)
+                        }
+                        AccessibilityGuard.reapplyAllowlist(context)
+                        Log.i(TAG, "Reapplied accessibility allowlist including companions")
+                    }
                     action.endsWith("DEBUG_DISABLE") -> {
                         val disableStore = PackageDisableStore(context)
                         for (pkg in packages?.toList().orEmpty()) {

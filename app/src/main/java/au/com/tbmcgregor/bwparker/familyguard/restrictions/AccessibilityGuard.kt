@@ -23,12 +23,16 @@ import au.com.tbmcgregor.bwparker.familyguard.focus.FocusGuardAccessibilityServi
  *   see `AccessibilityGuardActivity`.
  * - [reapplyAllowlist] closes the one real gap that would otherwise remain: without it, the user
  *   could enable a *different* accessibility service as a workaround for whatever ours enforces.
- *   The allowlist is computed from whatever's currently enabled (so it never fights a legitimate
- *   accessibility-based app you've already turned on, e.g. Accountable2You) plus this app itself,
- *   so only genuinely *new* accessibility services are blocked from being enabled going forward.
+ *   The allowlist always includes this app, currently-enabled accessibility packages, and known
+ *   companion apps (e.g. Accountable2You) so those don't get locked out after a suspend/hide cycle.
  */
 object AccessibilityGuard {
     private const val TAG = "AccessibilityGuard"
+
+    /** Accountability / companion apps whose accessibility we always keep permitted. */
+    val ALWAYS_PERMITTED_PACKAGES = listOf(
+        "com.accountable2you.ap1.googleplay",
+    )
 
     fun ourComponentName(context: Context): String =
         ComponentName(context, FocusGuardAccessibilityService::class.java).flattenToString()
@@ -51,23 +55,45 @@ object AccessibilityGuard {
      * pinned, leaving no way out of the nag screen except us fixing it over adb. */
     private const val SETTINGS_PACKAGE = "com.android.settings"
 
-    /** Re-derives the permitted-accessibility-services allowlist from whatever's enabled right
-     * now, unioned with this app's own package, and locks this app plus Settings in as the
-     * allowed lock-task packages (needed for
-     * [au.com.tbmcgregor.bwparker.familyguard.tamper.AccessibilityGuardActivity]'s pinned nag
-     * screen). Safe to call repeatedly/periodically. */
+    /**
+     * Re-derives the permitted-accessibility-services allowlist from currently enabled packages,
+     * this app, [ALWAYS_PERMITTED_PACKAGES], and any packages previously remembered via
+     * [permitPackage]. Safe to call repeatedly/periodically.
+     */
     fun reapplyAllowlist(context: Context) {
         val dpm = context.getSystemService(DevicePolicyManager::class.java) ?: return
         val admin = ComponentName(context, DeviceAdminReceiverImpl::class.java)
+        val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val remembered = prefs.getStringSet(KEY_PERMITTED, emptySet()).orEmpty()
         val currentlyEnabledPackages = enabledComponents(context)
             ?.mapNotNull { it.substringBefore('/', missingDelimiterValue = "").takeIf(String::isNotBlank) }
             ?: emptyList()
-        val allowlist = (currentlyEnabledPackages + context.packageName).distinct()
+        val allowlist = (
+            currentlyEnabledPackages +
+                context.packageName +
+                ALWAYS_PERMITTED_PACKAGES +
+                remembered
+            ).distinct()
+        // Remember current allowlist members so a temporary disable of A2Y doesn't lock it out.
+        prefs.edit().putStringSet(KEY_PERMITTED, allowlist.toSet()).apply()
         try {
             dpm.setPermittedAccessibilityServices(admin, allowlist)
             dpm.setLockTaskPackages(admin, arrayOf(context.packageName, SETTINGS_PACKAGE))
+            Log.i(TAG, "Permitted accessibility packages: $allowlist")
         } catch (error: SecurityException) {
             Log.e(TAG, "Not authorized to lock down accessibility services (device owner not active yet?)", error)
         }
     }
+
+    /** Adds [packageName] to the remembered permit list and reapplies immediately. */
+    fun permitPackage(context: Context, packageName: String) {
+        val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val next = prefs.getStringSet(KEY_PERMITTED, emptySet()).orEmpty().toMutableSet()
+        next.add(packageName)
+        prefs.edit().putStringSet(KEY_PERMITTED, next).apply()
+        reapplyAllowlist(context)
+    }
+
+    private const val PREFS_NAME = "accessibility_guard"
+    private const val KEY_PERMITTED = "permitted_packages"
 }
