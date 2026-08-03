@@ -8,16 +8,15 @@ import android.util.Log
 import au.com.tbmcgregor.bwparker.familyguard.admin.DeviceAdminReceiverImpl
 
 /**
- * Fallback when [DevicePolicyManager.setPackagesSuspended] refuses (e.g. the target is/was an
- * active device admin).
+ * Tracks apps blocked via suspend / hide when a habit or manual block targets them, and backs the
+ * Settings "Undisable" button.
  *
- * Prefer [DevicePolicyManager.setApplicationHidden] (Device Owner can do this). Plain
- * [PackageManager.setApplicationEnabledSetting] requires `CHANGE_COMPONENT_ENABLED_STATE`, which
- * a normal Device Owner app does **not** have — so disable-user from inside the app fails even
- * though `adb shell pm disable-user` works.
+ * Prefer suspend; fall back to [DevicePolicyManager.setApplicationHidden] when suspend is refused
+ * (e.g. active device admin). Plain disable-user usually fails for a Device Owner app (needs
+ * `CHANGE_COMPONENT_ENABLED_STATE`).
  *
- * [undisable] unhides/re-enables and marks the package exempt so habit-rule reapply won't
- * immediately re-block until [disable] is called again.
+ * [undisable] unsuspends + unhides and marks the package exempt so reapply won't immediately
+ * re-block until [disable] / [markBlocked] runs again.
  */
 class PackageDisableStore(context: Context) {
     private val appContext = context.applicationContext
@@ -32,7 +31,9 @@ class PackageDisableStore(context: Context) {
     fun isExempt(packageName: String): Boolean =
         prefs.getStringSet(KEY_EXEMPT, emptySet()).orEmpty().contains(packageName)
 
-    fun isCurrentlyDisabled(packageName: String): Boolean {
+    /** True if the package is suspended, hidden, or disabled-user. */
+    fun isCurrentlyBlocked(packageName: String): Boolean {
+        if (isSuspended(packageName)) return true
         if (isHidden(packageName)) return true
         val state = runCatching { pm.getApplicationEnabledSetting(packageName) }.getOrNull()
             ?: return false
@@ -46,19 +47,31 @@ class PackageDisableStore(context: Context) {
             Entry(
                 packageName = pkg,
                 label = labelFor(pkg),
-                disabled = isCurrentlyDisabled(pkg),
+                blocked = isCurrentlyBlocked(pkg),
                 exempt = isExempt(pkg),
             )
         }.sortedBy { it.label.lowercase() }
 
+    /** Remember [packageName] as managed/blocked (clears exemption). Does not change system state. */
+    fun markBlocked(packageName: String) {
+        if (packageName == appContext.packageName) return
+        mutateSet(KEY_EXEMPT) { it.remove(packageName) }
+        mutateSet(KEY_TRACKED) { it.add(packageName) }
+    }
+
     /**
      * Hides (preferred) or disable-user (best-effort) [packageName]. Returns true if the package
-     * ends up hidden/disabled.
+     * ends up blocked.
      */
     fun disable(packageName: String): Boolean {
         if (packageName == appContext.packageName) return false
-        mutateSet(KEY_EXEMPT) { it.remove(packageName) }
-        mutateSet(KEY_TRACKED) { it.add(packageName) }
+        markBlocked(packageName)
+
+        // Prefer suspend when possible.
+        if (suspendPackage(packageName, suspended = true)) {
+            Log.i(TAG, "suspend $packageName -> true")
+            return true
+        }
 
         val hidden = hidePackage(packageName, hidden = true)
         if (hidden) {
@@ -72,9 +85,9 @@ class PackageDisableStore(context: Context) {
                 PackageManager.COMPONENT_ENABLED_STATE_DISABLED_USER,
                 0,
             )
-            isCurrentlyDisabled(packageName)
+            isCurrentlyBlocked(packageName)
         } catch (error: SecurityException) {
-            Log.w(TAG, "disable-user refused for $packageName (needs privileged permission)", error)
+            Log.w(TAG, "disable-user refused for $packageName", error)
             false
         } catch (error: IllegalArgumentException) {
             Log.e(TAG, "disable-user failed for $packageName", error)
@@ -85,18 +98,20 @@ class PackageDisableStore(context: Context) {
     }
 
     /**
-     * Unhides/re-enables [packageName] and exempts it from automatic re-disable until [disable]
-     * is called again (or [clearAll]).
+     * Unsuspends/unhides/re-enables [packageName] and exempts it from automatic re-block until
+     * [disable] / [markBlocked] is called again.
      */
     fun undisable(packageName: String): Boolean {
         mutateSet(KEY_TRACKED) { it.add(packageName) }
         mutateSet(KEY_EXEMPT) { it.add(packageName) }
+        suspendPackage(packageName, suspended = false)
         return enablePackage(packageName)
     }
 
-    /** Unhides/re-enables and drops tracking/exemption — used when a rule unlocks. */
+    /** Unsuspends/unhides and drops tracking/exemption — used when a rule unlocks. */
     fun release(packageName: String) {
-        if (packageName in trackedPackages() || isCurrentlyDisabled(packageName)) {
+        if (packageName in trackedPackages() || isCurrentlyBlocked(packageName)) {
+            suspendPackage(packageName, suspended = false)
             enablePackage(packageName)
         }
         mutateSet(KEY_TRACKED) { it.remove(packageName) }
@@ -104,13 +119,16 @@ class PackageDisableStore(context: Context) {
     }
 
     fun clearAll() {
-        trackedPackages().forEach { enablePackage(it) }
+        trackedPackages().forEach { pkg ->
+            suspendPackage(pkg, suspended = false)
+            enablePackage(pkg)
+        }
         prefs.edit().remove(KEY_TRACKED).remove(KEY_EXEMPT).apply()
     }
 
     private fun enablePackage(packageName: String): Boolean {
-        val unhidden = hidePackage(packageName, hidden = false)
-        val enabled = try {
+        hidePackage(packageName, hidden = false)
+        try {
             if (isEnabledSettingDisabled(packageName)) {
                 pm.setApplicationEnabledSetting(
                     packageName,
@@ -118,16 +136,27 @@ class PackageDisableStore(context: Context) {
                     0,
                 )
             }
-            !isCurrentlyDisabled(packageName)
         } catch (error: SecurityException) {
             Log.w(TAG, "enable refused for $packageName", error)
-            unhidden && !isHidden(packageName)
         } catch (error: IllegalArgumentException) {
             Log.e(TAG, "enable failed for $packageName", error)
+        }
+        val ok = !isHidden(packageName) && !isEnabledSettingDisabled(packageName)
+        Log.i(TAG, "enable $packageName -> $ok")
+        return ok
+    }
+
+    private fun suspendPackage(packageName: String, suspended: Boolean): Boolean {
+        val policy = dpm ?: return false
+        return try {
+            policy.setPackagesSuspended(admin, arrayOf(packageName), suspended).isEmpty()
+        } catch (error: SecurityException) {
+            Log.w(TAG, "setPackagesSuspended($suspended) refused for $packageName", error)
+            false
+        } catch (error: IllegalArgumentException) {
+            Log.w(TAG, "setPackagesSuspended($suspended) failed for $packageName", error)
             false
         }
-        Log.i(TAG, "enable $packageName -> $enabled (unhidden=$unhidden)")
-        return enabled
     }
 
     private fun hidePackage(packageName: String, hidden: Boolean): Boolean {
@@ -143,6 +172,9 @@ class PackageDisableStore(context: Context) {
             false
         }
     }
+
+    private fun isSuspended(packageName: String): Boolean =
+        runCatching { pm.isPackageSuspended(packageName) }.getOrDefault(false)
 
     private fun isHidden(packageName: String): Boolean {
         val policy = dpm ?: return false
@@ -171,7 +203,7 @@ class PackageDisableStore(context: Context) {
     data class Entry(
         val packageName: String,
         val label: String,
-        val disabled: Boolean,
+        val blocked: Boolean,
         val exempt: Boolean,
     )
 

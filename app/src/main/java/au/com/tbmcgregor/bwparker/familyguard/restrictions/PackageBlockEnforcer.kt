@@ -8,7 +8,8 @@ import au.com.tbmcgregor.bwparker.familyguard.admin.DeviceAdminReceiverImpl
 
 /**
  * Shared suspend → strip-admin → hide/disable-user fallback used by habit rules, manual blocks,
- * budgets, and reward apps.
+ * budgets, and reward apps. Successful blocks are tracked in [PackageDisableStore] so Settings can
+ * show an Undisable button.
  */
 object PackageBlockEnforcer {
     private const val TAG = "PackageBlockEnforcer"
@@ -40,14 +41,13 @@ object PackageBlockEnforcer {
         }
 
         if (suspended) {
-            // Suspended successfully — drop any prior hide/disable tracking.
-            disableStore.release(packageName)
+            disableStore.markBlocked(packageName)
             return
         }
 
         Log.w(TAG, "Suspend refused for $packageName -- trying admin strip then hide/disable")
         if (ActiveAdminRemover.suspendEvenIfAdmin(context, packageName)) {
-            disableStore.release(packageName)
+            disableStore.markBlocked(packageName)
             return
         }
 

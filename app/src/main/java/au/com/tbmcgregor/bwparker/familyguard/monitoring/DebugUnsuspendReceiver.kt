@@ -50,11 +50,12 @@ class DebugUnsuspendReceiver : BroadcastReceiver() {
                         val disableStore = PackageDisableStore(context)
                         for (pkg in packages?.toList().orEmpty()) {
                             val ok = ActiveAdminRemover.suspendEvenIfAdmin(context, pkg)
-                            if (!ok) {
+                            if (ok) {
+                                disableStore.markBlocked(pkg)
+                                Log.i(TAG, "strip+suspend $pkg -> suspendOk=true")
+                            } else {
                                 val disabled = disableStore.disable(pkg)
                                 Log.i(TAG, "strip+suspend $pkg -> suspendOk=false disableOk=$disabled")
-                            } else {
-                                Log.i(TAG, "strip+suspend $pkg -> suspendOk=true")
                             }
                         }
                     }

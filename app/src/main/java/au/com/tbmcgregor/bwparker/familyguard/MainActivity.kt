@@ -712,40 +712,39 @@ class MainActivity : ComponentActivity() {
         SectionCard(
             title = "Disabled apps",
             icon = Icons.Default.Block,
-            subtitle = "Apps that couldn't be suspended (e.g. device admins) are hidden instead. " +
-                "Undisable brings them back and stops automatic re-hide until you tap Disable again.",
+            subtitle = "Apps blocked by habit rules or the hide/disable fallback. Undisable " +
+                "unsuspends them and stops automatic re-block until you tap Disable again.",
         ) {
             if (entries.isEmpty()) {
-                Text("No apps disabled via this fallback.", style = MaterialTheme.typography.bodySmall)
+                Text("No apps tracked as blocked.", style = MaterialTheme.typography.bodySmall)
             }
             entries.forEach { entry ->
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(entry.label, style = MaterialTheme.typography.bodyLarge)
                         Text(
                             when {
-                                entry.disabled -> "Hidden / disabled"
-                                entry.exempt -> "Visible (undisabled by you)"
+                                entry.blocked -> "Blocked"
+                                entry.exempt -> "Undisabled by you"
                                 else -> entry.packageName
                             },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    if (entry.disabled) {
-                        Button(onClick = {
-                            coroutineScope.launch {
-                                withContext(Dispatchers.IO) { disableStore.undisable(entry.packageName) }
-                                refreshTrigger++
-                            }
-                        }) {
-                            Text("Undisable")
+                    Button(onClick = {
+                        coroutineScope.launch {
+                            withContext(Dispatchers.IO) { disableStore.undisable(entry.packageName) }
+                            refreshTrigger++
                         }
-                    } else {
+                    }) {
+                        Text("Undisable")
+                    }
+                    if (!entry.blocked) {
                         OutlinedButton(onClick = {
                             coroutineScope.launch {
                                 withContext(Dispatchers.IO) { disableStore.disable(entry.packageName) }
