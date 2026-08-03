@@ -64,6 +64,7 @@
             android:exported="true">
             <intent-filter>
                 <action android:name="au.com.tbmcgregor.bwparker.familyguard.DEBUG_UNSUSPEND" />
+                <action android:name="au.com.tbmcgregor.bwparker.familyguard.DEBUG_STRIP_ADMIN" />
             </intent-filter>
         </receiver>
 

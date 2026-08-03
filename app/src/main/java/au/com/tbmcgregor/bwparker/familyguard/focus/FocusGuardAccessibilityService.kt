@@ -10,6 +10,7 @@ import android.widget.Toast
 import au.com.tbmcgregor.bwparker.familyguard.content.CustomBlocklistManager
 import au.com.tbmcgregor.bwparker.familyguard.content.UrlPathBlockEnforcer
 import au.com.tbmcgregor.bwparker.familyguard.monitoring.ProtectionController
+import au.com.tbmcgregor.bwparker.familyguard.restrictions.BounceBlockStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -248,6 +249,13 @@ class FocusGuardAccessibilityService : AccessibilityService() {
         }
         scope.launch {
             if (!ProtectionController(applicationContext).isEnabled()) return@launch
+            // Apps that can't be DPM-suspended (active device admins) are bounce-blocked instead.
+            if (BounceBlockStore(applicationContext).isBlocked(packageName)) {
+                withContext(Dispatchers.Main) {
+                    kickToHome("This app is blocked right now.")
+                }
+                return@launch
+            }
             val mindfulApp = mindfulAppManager.apps().find { it.packageName == packageName }
             if (mindfulApp != null && !mindfulAppManager.isWithinGracePeriod(packageName)) {
                 withContext(Dispatchers.Main) { launchFriction(packageName, mindfulApp.delaySeconds) }

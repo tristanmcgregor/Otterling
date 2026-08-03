@@ -9,32 +9,50 @@ import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.util.Log
 import au.com.tbmcgregor.bwparker.familyguard.admin.DeviceAdminReceiverImpl
+import au.com.tbmcgregor.bwparker.familyguard.restrictions.ActiveAdminRemover
+import au.com.tbmcgregor.bwparker.familyguard.restrictions.BounceBlockStore
 
 /**
- * DEBUG-ONLY receiver: clears live blocks (DPM suspensions + user-disabled packages).
+ * DEBUG-ONLY receiver: clears live blocks OR tries to strip another app's device admin and
+ * suspend it (usually fails for production admins -- falls back to bounce-block).
  *
+ * Clear all suspensions:
  *   adb shell am broadcast -a au.com.tbmcgregor.bwparker.familyguard.DEBUG_UNSUSPEND \
  *     -n au.com.tbmcgregor.bwparker.familyguard/.monitoring.DebugUnsuspendReceiver
  *
- * Optional: --esa packages pkg1,pkg2 to only unsuspend those packages.
+ * Strip admin + suspend / bounce (e.g. Accountable2You):
+ *   adb shell am broadcast -a au.com.tbmcgregor.bwparker.familyguard.DEBUG_STRIP_ADMIN \
+ *     -n au.com.tbmcgregor.bwparker.familyguard/.monitoring.DebugUnsuspendReceiver \
+ *     --esa packages com.accountable2you.ap1.googleplay
  */
 class DebugUnsuspendReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
         if ((context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) == 0) return
+        val action = intent?.action.orEmpty()
         val packages = intent?.getStringArrayExtra(EXTRA_PACKAGES)
         val pending = goAsync()
         Thread {
             try {
-                if (packages.isNullOrEmpty()) {
-                    clearAll(context)
-                } else {
-                    val dpm = context.getSystemService(DevicePolicyManager::class.java) ?: return@Thread
-                    val admin = ComponentName(context, DeviceAdminReceiverImpl::class.java)
-                    val failed = dpm.setPackagesSuspended(admin, packages, false)
-                    Log.i(TAG, "Unsuspended ${packages.toList()}; failed=${failed.toList()}")
+                when {
+                    action.endsWith("DEBUG_STRIP_ADMIN") -> {
+                        val bounce = BounceBlockStore(context)
+                        for (pkg in packages?.toList().orEmpty()) {
+                            val ok = ActiveAdminRemover.suspendEvenIfAdmin(context, pkg)
+                            if (!ok) bounce.setBlocked(pkg, blocked = true)
+                            else bounce.setBlocked(pkg, blocked = false)
+                            Log.i(TAG, "strip+suspend $pkg -> suspendOk=$ok bounce=${!ok}")
+                        }
+                    }
+                    packages.isNullOrEmpty() -> clearAll(context)
+                    else -> {
+                        val dpm = context.getSystemService(DevicePolicyManager::class.java) ?: return@Thread
+                        val admin = ComponentName(context, DeviceAdminReceiverImpl::class.java)
+                        val failed = dpm.setPackagesSuspended(admin, packages, false)
+                        Log.i(TAG, "Unsuspended ${packages.toList()}; failed=${failed.toList()}")
+                    }
                 }
             } catch (t: Throwable) {
-                Log.e(TAG, "Unsuspend failed", t)
+                Log.e(TAG, "DebugUnsuspend failed", t)
             } finally {
                 pending.finish()
             }
@@ -42,6 +60,7 @@ class DebugUnsuspendReceiver : BroadcastReceiver() {
     }
 
     private fun clearAll(context: Context) {
+        BounceBlockStore(context).clearAll()
         val pm = context.packageManager
         val dpm = context.getSystemService(DevicePolicyManager::class.java) ?: return
         val admin = ComponentName(context, DeviceAdminReceiverImpl::class.java)

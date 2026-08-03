@@ -6,6 +6,8 @@ import android.content.Context
 import android.util.Log
 import au.com.tbmcgregor.bwparker.familyguard.admin.DeviceAdminReceiverImpl
 import au.com.tbmcgregor.bwparker.familyguard.data.AppDatabase
+import au.com.tbmcgregor.bwparker.familyguard.restrictions.ActiveAdminRemover
+import au.com.tbmcgregor.bwparker.familyguard.restrictions.BounceBlockStore
 import au.com.tbmcgregor.bwparker.familyguard.tamper.TamperEventLogger
 import java.time.DayOfWeek
 import java.time.LocalDate
@@ -33,7 +35,7 @@ import kotlinx.coroutines.sync.withLock
  * enforcement managers -- this is also what makes time-windowed rules transition on time even
  * without the trigger app being reopened, since it's called every few minutes regardless.
  */
-class HabitRuleManager(context: Context) {
+class HabitRuleManager(private val context: Context) {
     private val dao = AppDatabase.getInstance(context).habitRuleDao()
     private val detectedHabitDao = AppDatabase.getInstance(context).detectedHabitDao()
     private val proofManager = HabitProofManager(context)
@@ -307,10 +309,31 @@ class HabitRuleManager(context: Context) {
 
     private fun setSuspended(packageName: String, suspended: Boolean) {
         val dpm = devicePolicyManager ?: return
+        val bounce = BounceBlockStore(context)
         try {
-            dpm.setPackagesSuspended(adminComponent, arrayOf(packageName), suspended)
+            if (suspended) {
+                // Device-admin apps (e.g. Accountable2You) refuse setPackagesSuspended. Android
+                // also won't let Device Owner strip another production app's admin -- try anyway,
+                // then fall back to accessibility bounce so blocking still works without disable-user.
+                val failed = dpm.setPackagesSuspended(adminComponent, arrayOf(packageName), true)
+                if (failed.isEmpty()) {
+                    bounce.setBlocked(packageName, blocked = false)
+                    return
+                }
+                Log.w(TAG, "Suspend refused for $packageName -- trying admin strip then bounce fallback")
+                if (ActiveAdminRemover.suspendEvenIfAdmin(context, packageName)) {
+                    bounce.setBlocked(packageName, blocked = false)
+                } else {
+                    bounce.setBlocked(packageName, blocked = true)
+                    Log.i(TAG, "Registered $packageName for accessibility bounce-block")
+                }
+            } else {
+                bounce.setBlocked(packageName, blocked = false)
+                dpm.setPackagesSuspended(adminComponent, arrayOf(packageName), false)
+            }
         } catch (error: SecurityException) {
             Log.e(TAG, "Not authorized to suspend $packageName", error)
+            if (suspended) bounce.setBlocked(packageName, blocked = true)
         } catch (error: IllegalArgumentException) {
             Log.e(TAG, "Cannot suspend $packageName (not installed?)", error)
         }
