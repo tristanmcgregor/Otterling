@@ -719,12 +719,11 @@ class MainActivity : ComponentActivity() {
                 Text("No apps tracked as blocked.", style = MaterialTheme.typography.bodySmall)
             }
             entries.forEach { entry ->
-                Row(
+                Column(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Column(modifier = Modifier.weight(1f)) {
+                    Column(modifier = Modifier.fillMaxWidth()) {
                         Text(entry.label, style = MaterialTheme.typography.bodyLarge)
                         Text(
                             when {
@@ -736,22 +735,35 @@ class MainActivity : ComponentActivity() {
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    Button(onClick = {
-                        coroutineScope.launch {
-                            withContext(Dispatchers.IO) { disableStore.undisable(entry.packageName) }
-                            refreshTrigger++
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Button(
+                            onClick = {
+                                coroutineScope.launch {
+                                    withContext(Dispatchers.IO) {
+                                        disableStore.undisable(entry.packageName)
+                                    }
+                                    refreshTrigger++
+                                }
+                            },
+                        ) {
+                            Text("Undisable")
                         }
-                    }) {
-                        Text("Undisable")
-                    }
-                    if (!entry.blocked) {
-                        OutlinedButton(onClick = {
-                            coroutineScope.launch {
-                                withContext(Dispatchers.IO) { disableStore.disable(entry.packageName) }
-                                refreshTrigger++
+                        if (!entry.blocked) {
+                            OutlinedButton(
+                                onClick = {
+                                    coroutineScope.launch {
+                                        withContext(Dispatchers.IO) {
+                                            disableStore.disable(entry.packageName)
+                                        }
+                                        refreshTrigger++
+                                    }
+                                },
+                            ) {
+                                Text("Disable again")
                             }
-                        }) {
-                            Text("Disable again")
                         }
                     }
                 }
