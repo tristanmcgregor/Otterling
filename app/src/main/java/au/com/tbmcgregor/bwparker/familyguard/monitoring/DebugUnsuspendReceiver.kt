@@ -20,8 +20,13 @@ import au.com.tbmcgregor.bwparker.familyguard.restrictions.PackageDisableStore
  *   adb shell am broadcast -a au.com.tbmcgregor.bwparker.familyguard.DEBUG_UNSUSPEND \
  *     -n au.com.tbmcgregor.bwparker.familyguard/.monitoring.DebugUnsuspendReceiver
  *
- * Strip admin + suspend / disable (e.g. Accountable2You):
+ * Strip admin + suspend / hide (e.g. Accountable2You):
  *   adb shell am broadcast -a au.com.tbmcgregor.bwparker.familyguard.DEBUG_STRIP_ADMIN \
+ *     -n au.com.tbmcgregor.bwparker.familyguard/.monitoring.DebugUnsuspendReceiver \
+ *     --esa packages com.accountable2you.ap1.googleplay
+ *
+ * Force hide/disable (skip suspend):
+ *   adb shell am broadcast -a au.com.tbmcgregor.bwparker.familyguard.DEBUG_DISABLE \
  *     -n au.com.tbmcgregor.bwparker.familyguard/.monitoring.DebugUnsuspendReceiver \
  *     --esa packages com.accountable2you.ap1.googleplay
  */
@@ -34,13 +39,23 @@ class DebugUnsuspendReceiver : BroadcastReceiver() {
         Thread {
             try {
                 when {
+                    action.endsWith("DEBUG_DISABLE") -> {
+                        val disableStore = PackageDisableStore(context)
+                        for (pkg in packages?.toList().orEmpty()) {
+                            val ok = disableStore.disable(pkg)
+                            Log.i(TAG, "force-disable $pkg -> $ok")
+                        }
+                    }
                     action.endsWith("DEBUG_STRIP_ADMIN") -> {
                         val disableStore = PackageDisableStore(context)
                         for (pkg in packages?.toList().orEmpty()) {
                             val ok = ActiveAdminRemover.suspendEvenIfAdmin(context, pkg)
-                            if (!ok) disableStore.disable(pkg)
-                            else disableStore.release(pkg)
-                            Log.i(TAG, "strip+suspend $pkg -> suspendOk=$ok disabled=${!ok}")
+                            if (!ok) {
+                                val disabled = disableStore.disable(pkg)
+                                Log.i(TAG, "strip+suspend $pkg -> suspendOk=false disableOk=$disabled")
+                            } else {
+                                Log.i(TAG, "strip+suspend $pkg -> suspendOk=true")
+                            }
                         }
                     }
                     packages.isNullOrEmpty() -> clearAll(context)

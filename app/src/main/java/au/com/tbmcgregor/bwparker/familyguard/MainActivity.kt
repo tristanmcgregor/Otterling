@@ -712,9 +712,8 @@ class MainActivity : ComponentActivity() {
         SectionCard(
             title = "Disabled apps",
             icon = Icons.Default.Block,
-            subtitle = "Apps that couldn't be suspended (usually because they are a device admin) " +
-                "are disabled instead. Undisable re-enables them and stops automatic re-disable " +
-                "until you tap Disable again.",
+            subtitle = "Apps that couldn't be suspended (e.g. device admins) are hidden instead. " +
+                "Undisable brings them back and stops automatic re-hide until you tap Disable again.",
         ) {
             if (entries.isEmpty()) {
                 Text("No apps disabled via this fallback.", style = MaterialTheme.typography.bodySmall)
@@ -729,8 +728,8 @@ class MainActivity : ComponentActivity() {
                         Text(entry.label, style = MaterialTheme.typography.bodyLarge)
                         Text(
                             when {
-                                entry.disabled -> "Disabled"
-                                entry.exempt -> "Enabled (undisabled by you)"
+                                entry.disabled -> "Hidden / disabled"
+                                entry.exempt -> "Visible (undisabled by you)"
                                 else -> entry.packageName
                             },
                             style = MaterialTheme.typography.bodySmall,

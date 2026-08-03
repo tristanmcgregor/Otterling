@@ -7,7 +7,7 @@ import android.util.Log
 import au.com.tbmcgregor.bwparker.familyguard.admin.DeviceAdminReceiverImpl
 
 /**
- * Shared suspend → strip-admin → disable-user fallback used by habit rules, manual blocks,
+ * Shared suspend → strip-admin → hide/disable-user fallback used by habit rules, manual blocks,
  * budgets, and reward apps.
  */
 object PackageBlockEnforcer {
@@ -40,16 +40,24 @@ object PackageBlockEnforcer {
         }
 
         if (suspended) {
+            // Suspended successfully — drop any prior hide/disable tracking.
             disableStore.release(packageName)
             return
         }
 
-        Log.w(TAG, "Suspend refused for $packageName -- trying admin strip then disable-user")
+        Log.w(TAG, "Suspend refused for $packageName -- trying admin strip then hide/disable")
         if (ActiveAdminRemover.suspendEvenIfAdmin(context, packageName)) {
             disableStore.release(packageName)
             return
         }
 
-        disableStore.disable(packageName)
+        if (!disableStore.disable(packageName)) {
+            Log.e(
+                TAG,
+                "Could not hide/disable $packageName. Device Owner can't disable-user without " +
+                    "privileged permission; hide also fails while the package is an active device admin. " +
+                    "One-time: adb shell pm disable-user --user 0 $packageName && adb shell pm enable $packageName",
+            )
+        }
     }
 }
