@@ -9,6 +9,7 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <uses-permission android:name="android.permission.SEND_SMS" />
     <!-- Needed to list 3rd-party apps to protect/block; Android 11+ hides other apps' details
          by default (package visibility). Fine for a sideloaded parental-control app that is
          never distributed via Play Store. -->

@@ -9,6 +9,8 @@ import android.content.pm.PackageManager
 import android.net.VpnService
 import android.os.ParcelFileDescriptor
 import android.util.Log
+import au.com.tbmcgregor.bwparker.familyguard.alerts.AlertReporter
+import au.com.tbmcgregor.bwparker.familyguard.alerts.AlertSeverity
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
@@ -302,6 +304,18 @@ class VpnFilterService : VpnService() {
             return
         }
         val blocked = blocklist.isBlocked(query.questionName)
+        if (blocked) {
+            scope.launch {
+                runCatching {
+                    AlertReporter(applicationContext).report(
+                        type = "VPN_BLOCK",
+                        details = "Blocked ${query.questionName}",
+                        severity = AlertSeverity.WARNING,
+                        debounceKey = "VPN_BLOCK|${query.questionName}",
+                    )
+                }.onFailure { Log.w(TAG, "VPN block alert failed", it) }
+            }
+        }
         val response = if (blocked) {
             DnsMessage.buildBlockedResponse(packet.payload)
         } else {

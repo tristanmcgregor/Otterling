@@ -68,6 +68,7 @@ import au.com.tbmcgregor.bwparker.familyguard.ui.AccessibilityServiceSection
 import au.com.tbmcgregor.bwparker.familyguard.ui.AppPickerDialog
 import au.com.tbmcgregor.bwparker.familyguard.ui.BlockedWebsitesSettingsSection
 import au.com.tbmcgregor.bwparker.familyguard.ui.DashboardScreen
+import au.com.tbmcgregor.bwparker.familyguard.ui.GuardianSmsAlertsSection
 import au.com.tbmcgregor.bwparker.familyguard.ui.HabitShareSettingsScreen
 import au.com.tbmcgregor.bwparker.familyguard.ui.InstalledAppInfo
 import au.com.tbmcgregor.bwparker.familyguard.ui.MindfulAppsSection
@@ -172,6 +173,7 @@ class MainActivity : ComponentActivity() {
                             },
                         ) {
                             ProtectionControlSection()
+                            GuardianSmsAlertsSection(applicationContext)
                             DeviceOwnerSection()
                             RestrictionsSection()
                             UninstallProtectionSection()

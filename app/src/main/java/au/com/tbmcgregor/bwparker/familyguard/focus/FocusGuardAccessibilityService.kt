@@ -7,6 +7,9 @@ import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.Toast
+import au.com.tbmcgregor.bwparker.familyguard.alerts.AlertReporter
+import au.com.tbmcgregor.bwparker.familyguard.alerts.AlertSeverity
+import au.com.tbmcgregor.bwparker.familyguard.alerts.GuardianAlertSettings
 import au.com.tbmcgregor.bwparker.familyguard.content.CustomBlocklistManager
 import au.com.tbmcgregor.bwparker.familyguard.content.UrlPathBlockEnforcer
 import au.com.tbmcgregor.bwparker.familyguard.monitoring.ProtectionController
@@ -19,6 +22,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.Locale
 
 /**
  * One shared accessibility service backing all the self-improvement features: it watches which
@@ -38,11 +42,13 @@ class FocusGuardAccessibilityService : AccessibilityService() {
     private var currentPackage: String? = null
     private var lastReelsBounceMillis = 0L
     private var lastPathBlockMillis = 0L
+    private var lastTriggerScanMillis = 0L
 
     private lateinit var mindfulAppManager: MindfulAppManager
     private lateinit var budgetManager: AppTimeBudgetManager
     private lateinit var habitShareSyncManager: HabitShareSyncManager
     private lateinit var customBlocklist: CustomBlocklistManager
+    private lateinit var alertSettings: GuardianAlertSettings
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -50,6 +56,7 @@ class FocusGuardAccessibilityService : AccessibilityService() {
         budgetManager = AppTimeBudgetManager(applicationContext)
         habitShareSyncManager = HabitShareSyncManager(applicationContext)
         customBlocklist = CustomBlocklistManager(applicationContext)
+        alertSettings = GuardianAlertSettings(applicationContext)
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -75,6 +82,7 @@ class FocusGuardAccessibilityService : AccessibilityService() {
             packageName in UrlPathBlockEnforcer.YOUTUBE_PACKAGES
         ) {
             blockPathRulesIfPresent(packageName)
+            checkTriggerWords(packageName)
         }
     }
 
@@ -248,6 +256,7 @@ class FocusGuardAccessibilityService : AccessibilityService() {
         }
         scope.launch {
             if (!ProtectionController(applicationContext).isEnabled()) return@launch
+            maybeReportWatchedApp(packageName)
             val mindfulApp = mindfulAppManager.apps().find { it.packageName == packageName }
             if (mindfulApp != null && !mindfulAppManager.isWithinGracePeriod(packageName)) {
                 withContext(Dispatchers.Main) { launchFriction(packageName, mindfulApp.delaySeconds) }
@@ -261,6 +270,59 @@ class FocusGuardAccessibilityService : AccessibilityService() {
                 }
                 startTicking(packageName)
             }
+        }
+    }
+
+    private suspend fun maybeReportWatchedApp(packageName: String) {
+        if (!::alertSettings.isInitialized) return
+        if (packageName !in alertSettings.watchedPackages()) return
+        runCatching {
+            AlertReporter(applicationContext).report(
+                type = "WATCHED_APP",
+                details = "Opened $packageName",
+                severity = AlertSeverity.WARNING,
+                debounceKey = "WATCHED_APP|$packageName",
+            )
+        }.onFailure { Log.w(TAG, "Watched-app alert failed", it) }
+    }
+
+    /**
+     * Scans browser omnibox / YouTube a11y text for configured trigger words and reports yellow hits.
+     */
+    private fun checkTriggerWords(packageName: String) {
+        if (!ProtectionController(applicationContext).isEnabled()) return
+        if (!::alertSettings.isInitialized) return
+        val words = alertSettings.triggerWords()
+        if (words.isEmpty()) return
+        val now = System.currentTimeMillis()
+        if (now - lastTriggerScanMillis < TRIGGER_SCAN_DEBOUNCE_MS) return
+        lastTriggerScanMillis = now
+
+        val root = rootInActiveWindow ?: return
+        val texts = mutableListOf<String>()
+        val ids = mutableListOf<String>()
+        collectNodeInfo(root, texts = texts, resourceIds = ids, maxNodes = 180)
+        val haystack = buildString {
+            if (packageName in UrlPathBlockEnforcer.BROWSER_PACKAGES) {
+                UrlPathBlockEnforcer.extractBrowserUrl(root)?.let { append(it).append(' ') }
+            }
+            texts.forEach { append(it).append(' ') }
+        }.lowercase(Locale.US)
+        if (haystack.isBlank()) return
+
+        val hit = words.firstOrNull { word ->
+            haystack.contains(word.lowercase(Locale.US))
+        } ?: return
+
+        scope.launch {
+            runCatching {
+                AlertReporter(applicationContext).report(
+                    type = "TRIGGER_WORD",
+                    details = "\"$hit\" seen in $packageName",
+                    severity = AlertSeverity.WARNING,
+                    debounceKey = "TRIGGER_WORD|$hit|$packageName",
+                )
+            }.onFailure { Log.w(TAG, "Trigger-word alert failed", it) }
         }
     }
 
@@ -353,6 +415,7 @@ class FocusGuardAccessibilityService : AccessibilityService() {
         const val TICK_SECONDS = 5
         const val HABIT_POLL_MILLIS = 1_000L
         const val PATH_BLOCK_DEBOUNCE_MS = 800L
+        const val TRIGGER_SCAN_DEBOUNCE_MS = 2_000L
         val SUB_FEATURE_HINTS = listOf("shorts", "reel")
 
         // Facebook (main app + Lite) -- Reels blocking is scoped to these so the rest of the app

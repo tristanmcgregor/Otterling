@@ -12,6 +12,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.provider.Settings
 import android.util.Log
+import au.com.tbmcgregor.bwparker.familyguard.alerts.AlertReporter
 import au.com.tbmcgregor.bwparker.familyguard.content.AppSuspensionManager
 import au.com.tbmcgregor.bwparker.familyguard.content.VpnFilterManager
 import au.com.tbmcgregor.bwparker.familyguard.focus.AppTimeBudgetManager
@@ -80,6 +81,8 @@ class ProtectionEnforcementService : Service() {
                     }
                     runCatching { CompanionAppGuard.reapplyAll(applicationContext) }
                         .onFailure { Log.w(TAG, "Companion protection reapply failed", it) }
+                    runCatching { AlertReporter(applicationContext).flushOutbox() }
+                        .onFailure { Log.w(TAG, "SMS outbox flush failed", it) }
                     runCatching { restrictionsManager.detectDriftAndReapply(tamperLogger) }
                         .onFailure { Log.w(TAG, "Restriction drift check failed", it) }
                     runCatching { checkAccessibilityGuard(tamperLogger) }
@@ -150,6 +153,26 @@ class ProtectionEnforcementService : Service() {
                 )
             }
             AccessibilityGuardActivity.launch(applicationContext)
+        }
+        // Companion (Accountable2You) accessibility should stay on when installed.
+        val enabled = Settings.Secure.getString(
+            contentResolver,
+            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
+        ).orEmpty()
+        for (pkg in CompanionAppGuard.PACKAGES) {
+            val installed = runCatching {
+                packageManager.getApplicationInfo(pkg, 0)
+                true
+            }.getOrDefault(false)
+            if (!installed) continue
+            if (!enabled.contains(pkg, ignoreCase = true)) {
+                scope.launch {
+                    tamperLogger.log(
+                        type = "COMPANION_A11Y_DISABLED",
+                        details = "Companion accessibility off for $pkg",
+                    )
+                }
+            }
         }
     }
 

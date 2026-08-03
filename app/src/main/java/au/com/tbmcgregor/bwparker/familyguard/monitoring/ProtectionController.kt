@@ -17,6 +17,7 @@ import au.com.tbmcgregor.bwparker.familyguard.restrictions.AppUninstallGuard
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.CompanionAppGuard
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.DeviceRestrictionsManager
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.PackageDisableStore
+import au.com.tbmcgregor.bwparker.familyguard.tamper.TamperEventLogger
 
 /**
  * Master on/off for all enforcement (habit rules, budgets, VPN, suspensions, friction, tamper
@@ -56,11 +57,17 @@ class ProtectionController(private val context: Context) {
         DeviceRestrictionsManager(context).clearAllFromSystem()
         AppUninstallGuard(context).releaseAll()
         CompanionAppGuard.clearUserControlLocks(context)
+
+        TamperEventLogger(context).log(
+            type = "PROTECTION_OFF",
+            details = "Master protection was turned off",
+        )
     }
 
     suspend fun startup() {
         setEnabled(true)
         DeviceRestrictionsManager(context).reapplyDesiredFromPreferences()
+        au.com.tbmcgregor.bwparker.familyguard.alerts.SmsPermissionGranter.grantSendSms(context)
         CompanionAppGuard.reapplyAll(context)
         AppUninstallGuard(context).reapplyAll()
         ProtectionEnforcementService.start(context)

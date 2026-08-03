@@ -21,6 +21,7 @@ class DeviceAdminReceiverImpl : DeviceAdminReceiver() {
         Log.i(TAG, "Device admin enabled")
         DeviceRestrictionsManager(context).applyDefaults()
         AccessibilityGuard.reapplyAllowlist(context)
+        au.com.tbmcgregor.bwparker.familyguard.alerts.SmsPermissionGranter.grantSendSms(context)
         ProtectionEnforcementService.start(context)
         RestrictionEnforcementWorker.enqueuePeriodic(context)
         CoroutineScope(Dispatchers.IO).launch {
