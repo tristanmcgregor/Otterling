@@ -21,7 +21,7 @@
         android:allowBackup="false"
         android:label="@string/app_name"
         android:supportsRtl="true"
-        android:theme="@style/Theme.FamilyDeviceGuard">
+        android:theme="@style/Theme.Otterling">
         <activity
             android:name=".MainActivity"
             android:launchMode="singleTop"
@@ -98,7 +98,7 @@
             android:exported="false"
             android:excludeFromRecents="true"
             android:taskAffinity=""
-            android:theme="@style/Theme.FamilyDeviceGuard" />
+            android:theme="@style/Theme.Otterling" />
 
         <activity
             android:name=".tamper.AccessibilityGuardActivity"
@@ -106,7 +106,7 @@
             android:excludeFromRecents="true"
             android:taskAffinity=""
             android:lockTaskMode="if_whitelisted"
-            android:theme="@style/Theme.FamilyDeviceGuard" />
+            android:theme="@style/Theme.Otterling" />
 
         <activity
             android:name=".focus.HabitProofActivity"
@@ -114,7 +114,7 @@
             android:excludeFromRecents="true"
             android:taskAffinity=""
             android:launchMode="singleTask"
-            android:theme="@style/Theme.FamilyDeviceGuard" />
+            android:theme="@style/Theme.Otterling" />
 
         <provider
             android:name="androidx.core.content.FileProvider"

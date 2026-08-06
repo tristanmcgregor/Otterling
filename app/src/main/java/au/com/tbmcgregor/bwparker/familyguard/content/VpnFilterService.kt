@@ -34,8 +34,12 @@ import kotlinx.coroutines.sync.withLock
 
 /**
  * Local, always-on VpnService that filters DNS lookups (plus a short list of known public
- * DNS-over-HTTPS/DoT resolver IPs, refused outright) against a downloaded domain blocklist
- * ([DomainBlocklistManager]), without decrypting or inspecting any actual web traffic.
+ * DNS-over-HTTPS/DoT resolver IPs, refused outright) without decrypting or inspecting any actual
+ * web traffic. Every query is checked against a downloaded local domain blocklist
+ * ([DomainBlocklistManager]) first -- always-on defense in depth -- then, if not already blocked,
+ * forwarded to a configurable cloud filter server ([CloudFilterSettings]) as the primary category
+ * filter (Canopy-style), falling back to a hardcoded public resolver only if the cloud filter is
+ * unconfigured or unreachable.
  *
  * Captures a full default route (every IPv4 destination) because a [VpnService] that captures all
  * app traffic but only has routes for a handful of specific IPs makes every *other* destination
@@ -50,8 +54,8 @@ import kotlinx.coroutines.sync.withLock
  *
  * Registered as the device's mandatory VPN via [VpnFilterManager], which uses Device Owner's
  * `DevicePolicyManager.setAlwaysOnVpnPackage(..., lockdownEnabled = true)` -- once set, Android
- * blocks all network access unless this service is running, and the always-on VPN setting itself
- * is locked out of the user-facing Settings UI.
+ * blocks all network access (including a second VPN app's own tunnel) unless this service is
+ * running, and the always-on VPN setting itself is locked out of the user-facing Settings UI.
  *
  * IPv6 isn't captured (no IPv6 address/route is ever added to the [Builder]), so it's blocked
  * outright for captured apps rather than relayed -- acceptable for now since this only matters on
@@ -119,8 +123,9 @@ class VpnFilterService : VpnService() {
 
     private fun startVpn() {
         val blocklist = DomainBlocklistManager(applicationContext)
+        val cloudFilterSettings = CloudFilterSettings(applicationContext)
         val builder = Builder()
-            .setSession("Family Device Guard Filter")
+            .setSession("Otterling Filter")
             .setMtu(MTU)
             // A /32 tun address with the DNS server pointed at that *same* address was the bug:
             // the kernel treats traffic to an interface's own local address as local delivery, so
@@ -163,7 +168,7 @@ class VpnFilterService : VpnService() {
         )
         connectionScope = generationScope
         workerJob = scope.launch {
-            runCatching { runPacketLoop(tun, blocklist, generationScope) }
+            runCatching { runPacketLoop(tun, blocklist, cloudFilterSettings, generationScope) }
                 .onFailure { Log.e(TAG, "Packet loop crashed", it) }
             // The packet loop returned. If this coroutine is still active and the service is still
             // meant to be running, the loop exited unexpectedly (transient tun read IOException/EOF
@@ -203,7 +208,12 @@ class VpnFilterService : VpnService() {
         }
     }
 
-    private fun runPacketLoop(tun: ParcelFileDescriptor, blocklist: DomainBlocklistManager, relayScope: CoroutineScope) {
+    private fun runPacketLoop(
+        tun: ParcelFileDescriptor,
+        blocklist: DomainBlocklistManager,
+        cloudFilterSettings: CloudFilterSettings,
+        relayScope: CoroutineScope,
+    ) {
         val input = FileInputStream(tun.fileDescriptor)
         val output = FileOutputStream(tun.fileDescriptor)
         val writeLock = Mutex()
@@ -282,7 +292,7 @@ class VpnFilterService : VpnService() {
                         // (this alone used to be enough to make apps that fire off many DNS
                         // lookups in quick succession, e.g. Spotify resolving several
                         // edge/access-point hostnames at once, see lookups time out).
-                        relayScope.launch { handleDnsPacket(packet, writeToTun, blocklist) }
+                        relayScope.launch { handleDnsPacket(packet, writeToTun, blocklist, cloudFilterSettings) }
                     } else {
                         udpRelay.handle(packet)
                     }
@@ -297,12 +307,18 @@ class VpnFilterService : VpnService() {
         packet: IpPacket,
         writeToTun: suspend (ByteArray) -> Unit,
         blocklist: DomainBlocklistManager,
+        cloudFilterSettings: CloudFilterSettings,
     ) {
         val query = DnsMessage.parseQuery(packet.payload)
         if (query == null) {
             Log.d(TAG, "DNS: unparseable query (${packet.payload.size} bytes) from ${packet.sourceAddress}:${packet.sourcePort}")
             return
         }
+        // The local adult-domain list is always applied client-side first, regardless of whether
+        // the cloud filter is configured or reachable -- this is the "defense in depth" fail-safe:
+        // known adult domains stay blocked even offline or if the cloud filter server is down,
+        // rather than relying entirely on a network round-trip to a server outside this device's
+        // control.
         val blocked = blocklist.isBlocked(query.questionName)
         if (blocked) {
             scope.launch {
@@ -319,7 +335,7 @@ class VpnFilterService : VpnService() {
         val response = if (blocked) {
             DnsMessage.buildBlockedResponse(packet.payload)
         } else {
-            forwardToUpstream(packet.payload)
+            forwardQuery(packet.payload, cloudFilterSettings)
         }
         if (response == null) {
             Log.d(TAG, "DNS: '${query.questionName}' upstream lookup failed/timed out -- no reply sent")
@@ -334,13 +350,29 @@ class VpnFilterService : VpnService() {
         }
     }
 
+    /**
+     * Forwards a non-locally-blocked query to the cloud filter first (the Canopy-style category
+     * filter is the primary decision-maker for everything the local list doesn't already know
+     * about), falling back to [UPSTREAM_DNS] only if the cloud filter is unconfigured or
+     * unreachable -- so a cloud outage degrades to "unfiltered beyond the local adult list"
+     * instead of "no DNS at all".
+     */
+    private fun forwardQuery(queryBytes: ByteArray, cloudFilterSettings: CloudFilterSettings): ByteArray? {
+        if (cloudFilterSettings.isEnabled()) {
+            val cloudResponse = forwardToHost(queryBytes, cloudFilterSettings.host(), cloudFilterSettings.port())
+            if (cloudResponse != null) return cloudResponse
+            Log.w(TAG, "Cloud filter unreachable -- falling back to last-resort upstream")
+        }
+        return forwardToHost(queryBytes, UPSTREAM_DNS, DNS_PORT)
+    }
+
     /** Uses a protect()-ed socket so this outbound query doesn't loop back into the VPN itself. */
-    private fun forwardToUpstream(queryBytes: ByteArray): ByteArray? {
+    private fun forwardToHost(queryBytes: ByteArray, host: String, port: Int): ByteArray? {
         return try {
             DatagramSocket().use { socket ->
                 protect(socket)
                 socket.soTimeout = UPSTREAM_TIMEOUT_MS
-                val upstream = InetSocketAddress(InetAddress.getByName(UPSTREAM_DNS), DNS_PORT)
+                val upstream = InetSocketAddress(InetAddress.getByName(host), port)
                 socket.send(DatagramPacket(queryBytes, queryBytes.size, upstream))
                 val responseBuffer = ByteArray(2048)
                 val responsePacket = DatagramPacket(responseBuffer, responseBuffer.size)
@@ -348,7 +380,7 @@ class VpnFilterService : VpnService() {
                 responseBuffer.copyOf(responsePacket.length)
             }
         } catch (error: IOException) {
-            Log.w(TAG, "Upstream DNS query failed", error)
+            Log.w(TAG, "DNS query to $host:$port failed", error)
             null
         }
     }
@@ -374,7 +406,7 @@ class VpnFilterService : VpnService() {
             NotificationChannel(CHANNEL_ID, "Content filter VPN active", NotificationManager.IMPORTANCE_MIN),
         )
         return Notification.Builder(this, CHANNEL_ID)
-            .setContentTitle("Family Device Guard")
+            .setContentTitle("Otterling")
             .setContentText("Content filtering is active")
             .setSmallIcon(android.R.drawable.ic_lock_lock)
             .setOngoing(true)

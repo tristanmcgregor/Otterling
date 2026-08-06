@@ -174,7 +174,7 @@ fun DashboardScreen(context: Context, onOpenSettings: () -> Unit) {
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
                     Text(
-                        "Family Device Guard",
+                        "Otterling",
                         style = MaterialTheme.typography.headlineMedium,
                         fontWeight = FontWeight.Bold,
                     )

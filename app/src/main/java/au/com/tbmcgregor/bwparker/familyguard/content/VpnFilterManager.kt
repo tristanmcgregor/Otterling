@@ -9,16 +9,17 @@ import au.com.tbmcgregor.bwparker.familyguard.admin.DeviceAdminReceiverImpl
 
 /**
  * Registers [VpnFilterService] as the device's mandatory always-on VPN via Device Owner's
- * [DevicePolicyManager.setAlwaysOnVpnPackage]. The always-on VPN setting is locked out of the
- * user-facing Settings UI either way. Requires Device Owner -- no consent dialog is shown, unlike
- * a normal app calling `VpnService.prepare()`.
+ * [DevicePolicyManager.setAlwaysOnVpnPackage], with `lockdownEnabled = true`. The always-on VPN
+ * setting is locked out of the user-facing Settings UI either way. Requires Device Owner -- no
+ * consent dialog is shown, unlike a normal app calling `VpnService.prepare()`.
  *
- * Deliberately does NOT pass `lockdownEnabled = true`: lockdown requires every single connection
- * to have an explicit route through the tunnel, and this VPN only captures DNS + a handful of
- * known DoH/DoT resolver IPs (see [VpnFilterService]) rather than a full default route, since
- * routing everything would require reimplementing a general TCP/IP NAT relay. Under lockdown,
- * anything without an explicit route gets no path at all instead of falling back to the normal
- * network -- which is what caused the "no internet" incident this comment is here to explain.
+ * Lockdown is safe now because [VpnFilterService] captures a full default route
+ * (`addRoute("0.0.0.0", 0)`) and relays every non-DNS connection back out itself via
+ * [TcpRelayManager]/[UdpRelayManager] -- every destination has an explicit path through the
+ * tunnel, so lockdown's "no path at all without an explicit route" behavior doesn't strand
+ * anything. This also means another VPN app cannot get a path around the filter: with lockdown
+ * on, Android refuses all network access to anything other than this VPN, so a second VPN's own
+ * tunnel simply never gets network access to establish over.
  *
  * Also reconciles with [PrivateDnsFilterManager]: device-wide strict/forced-host Private DNS gets
  * validated on *every* active network, including this filter VPN's own network the moment it
@@ -48,7 +49,8 @@ class VpnFilterManager(private val context: Context) {
     }
 
     /**
-     * Starts the filter service and locks it in as the mandatory always-on VPN (no lockdown).
+     * Starts the filter service and locks it in as the mandatory always-on VPN, with lockdown
+     * enabled -- no other VPN and no cleartext bypass gets network access while this is set.
      * Blocking call (the Private DNS reconciliation may perform a connectivity check) -- call off
      * the main thread.
      */
@@ -63,7 +65,7 @@ class VpnFilterManager(private val context: Context) {
         // receiver on Android 12+), we must NOT let that abort the always-on registration, or the
         // VPN silently never comes back after a restart.
         val registered = try {
-            dpm.setAlwaysOnVpnPackage(adminComponent, context.packageName, false)
+            dpm.setAlwaysOnVpnPackage(adminComponent, context.packageName, true)
             suppressConflictingPrivateDns()
             true
         } catch (error: SecurityException) {
@@ -88,6 +90,9 @@ class VpnFilterManager(private val context: Context) {
             false
         } else {
             try {
+                // lockdownEnabled is moot once vpnPackage is null (nothing to lock down to), but
+                // the platform still requires a value -- false here so a partially-failed clear
+                // never leaves the device in a lockdown state with no VPN package registered.
                 dpm.setAlwaysOnVpnPackage(adminComponent, null, false)
                 true
             } catch (error: SecurityException) {
@@ -135,9 +140,9 @@ class VpnFilterManager(private val context: Context) {
         val dpm = devicePolicyManager ?: return
         runCatching {
             val current = dpm.getAlwaysOnVpnPackage(adminComponent)
-            if (current != context.packageName) {
-                Log.w(TAG, "Always-on VPN drifted (was $current) -- re-registering")
-                dpm.setAlwaysOnVpnPackage(adminComponent, context.packageName, false)
+            if (current != context.packageName || !isLockdownEnabled()) {
+                Log.w(TAG, "Always-on VPN drifted (was $current, lockdown=${isLockdownEnabled()}) -- re-registering")
+                dpm.setAlwaysOnVpnPackage(adminComponent, context.packageName, true)
                 suppressConflictingPrivateDns()
             }
         }.onFailure { Log.w(TAG, "Watchdog always-on re-registration failed", it) }

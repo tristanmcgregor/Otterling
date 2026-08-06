@@ -17,5 +17,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "FamilyDeviceGuard"
+rootProject.name = "Otterling"
 include(":app")

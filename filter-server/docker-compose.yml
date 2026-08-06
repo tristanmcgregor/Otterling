@@ -1,0 +1,14 @@
+services:
+  adguardhome:
+    image: adguard/adguardhome:latest
+    container_name: otterling-filter-server
+    restart: unless-stopped
+    ports:
+      # AdGuard Home's setup wizard / admin UI.
+      - "${ADMIN_UI_PORT:-3000}:3000/tcp"
+      # Plain DNS -- this is what the Otterling app's "Filter server host/port" setting points at.
+      - "${DNS_PORT:-53}:53/tcp"
+      - "${DNS_PORT:-53}:53/udp"
+    volumes:
+      - ./work:/opt/adguardhome/work
+      - ./conf:/opt/adguardhome/conf

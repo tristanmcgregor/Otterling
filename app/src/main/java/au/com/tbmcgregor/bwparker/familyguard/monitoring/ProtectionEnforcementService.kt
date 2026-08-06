@@ -196,7 +196,7 @@ class ProtectionEnforcementService : Service() {
             NotificationChannel(CHANNEL_ID, "Device protection active", NotificationManager.IMPORTANCE_MIN),
         )
         return Notification.Builder(this, CHANNEL_ID)
-            .setContentTitle("Family Device Guard")
+            .setContentTitle("Otterling")
             .setContentText("Protections are active")
             .setSmallIcon(android.R.drawable.ic_lock_lock)
             .setOngoing(true)

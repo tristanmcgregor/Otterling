@@ -13,3 +13,6 @@ app/libs/*.jar
 macos/FocusLock/.build/
 macos/FocusLock/.swiftpm/
 
+# Independent nested git repo (Play Store variant) -- never tracked by this repo.
+TrittyBlocker-Playstore/
+

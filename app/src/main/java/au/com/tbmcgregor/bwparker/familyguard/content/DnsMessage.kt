@@ -28,6 +28,28 @@ object DnsMessage {
         return name.toString().takeIf { it.isNotEmpty() }?.let { Query(it) }
     }
 
+    /** Builds a minimal standalone "A" query for [name] -- used only by the cloud filter
+     *  reachability probe (real client queries are relayed verbatim, never built here). */
+    fun buildQuery(name: String): ByteArray {
+        val header = byteArrayOf(
+            0x12, 0x34, // arbitrary transaction ID
+            0x01, 0x00, // flags: standard query, recursion desired
+            0x00, 0x01, // QDCOUNT = 1
+            0x00, 0x00, // ANCOUNT
+            0x00, 0x00, // NSCOUNT
+            0x00, 0x00, // ARCOUNT
+        )
+        val question = ArrayList<Byte>()
+        name.split('.').forEach { label ->
+            question.add(label.length.toByte())
+            label.forEach { question.add(it.code.toByte()) }
+        }
+        question.add(0) // root label
+        question.add(0x00); question.add(0x01) // QTYPE = A
+        question.add(0x00); question.add(0x01) // QCLASS = IN
+        return header + question.toByteArray()
+    }
+
     /** Builds an NXDOMAIN response reusing the original query's header/question section. */
     fun buildBlockedResponse(queryBytes: ByteArray): ByteArray {
         if (queryBytes.size < 12) return queryBytes

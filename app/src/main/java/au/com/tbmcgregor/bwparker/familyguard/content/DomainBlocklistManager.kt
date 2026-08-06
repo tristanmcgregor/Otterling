@@ -7,8 +7,10 @@ import java.net.URL
 
 /**
  * A downloaded, cached, hosts-file-format domain blocklist used by [VpnFilterService] to decide
- * which DNS lookups to block. Defaults to StevenBlack's "porn-only" hosts list (the standard
- * combined adult-content blocklist referenced by most parental-control tools).
+ * which DNS lookups to block -- the always-on, client-side defense-in-depth layer that stays
+ * effective even if the cloud filter ([CloudFilterSettings]) is unreachable. Defaults to two
+ * adult-focused hosts lists (StevenBlack's "porn-only" list plus The Blocklist Project's porn
+ * list) so a single source going stale or changing format doesn't silently narrow coverage.
  */
 class DomainBlocklistManager(private val context: Context) {
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -40,7 +42,7 @@ class DomainBlocklistManager(private val context: Context) {
     fun lastUpdatedMillis(): Long = prefs.getLong(KEY_LAST_UPDATED, 0L)
 
     fun sourceUrls(): List<String> =
-        prefs.getStringSet(KEY_SOURCES, setOf(DEFAULT_SOURCE))?.toList() ?: listOf(DEFAULT_SOURCE)
+        prefs.getStringSet(KEY_SOURCES, DEFAULT_SOURCES)?.toList() ?: DEFAULT_SOURCES.toList()
 
     fun setSourceUrls(urls: Set<String>) {
         prefs.edit().putStringSet(KEY_SOURCES, urls).apply()
@@ -103,5 +105,8 @@ class DomainBlocklistManager(private val context: Context) {
         private const val KEY_SOURCES = "source_urls"
         const val DEFAULT_SOURCE =
             "https://raw.githubusercontent.com/StevenBlack/hosts/master/alternates/porn-only/hosts"
+        const val DEFAULT_SOURCE_2 =
+            "https://raw.githubusercontent.com/blocklistproject/Lists/master/porn.txt"
+        val DEFAULT_SOURCES = setOf(DEFAULT_SOURCE, DEFAULT_SOURCE_2)
     }
 }

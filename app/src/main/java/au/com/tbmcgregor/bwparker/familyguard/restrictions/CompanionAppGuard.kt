@@ -11,7 +11,7 @@ import au.com.tbmcgregor.bwparker.familyguard.data.AppDatabase
 import au.com.tbmcgregor.bwparker.familyguard.data.ProtectedApp
 
 /**
- * Companion apps that Family Device Guard permanently shields: uninstall blocked, user-control
+ * Companion apps that Otterling permanently shields: uninstall blocked, user-control
  * locked (no force-stop / clear-data from Settings on API 30+), always permitted for accessibility,
  * and never suspended/hidden by habit rules or manual blocks.
  */

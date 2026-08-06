@@ -148,7 +148,7 @@ private fun AccessibilityGuardScreen(onOpenSettings: () -> Unit, onResolved: () 
         )
         Spacer(Modifier.height(16.dp))
         Text(
-            "The required accessibility service was turned off. Family Device Guard can't enforce " +
+            "The required accessibility service was turned off. Otterling can't enforce " +
                 "friction screens, time budgets, or habit-based unlocks until it's back on.",
             style = MaterialTheme.typography.bodyLarge,
             color = onError.copy(alpha = 0.9f),
@@ -167,7 +167,7 @@ private fun AccessibilityGuardScreen(onOpenSettings: () -> Unit, onResolved: () 
                 listOf(
                     "Open device Settings",
                     "Go to Accessibility",
-                    "Find \"Family Device Guard\"",
+                    "Find \"Otterling\"",
                     "Turn the switch on",
                 ).forEachIndexed { index, step ->
                     Text(

@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">Family Device Guard</string>
+    <string name="app_name">Otterling</string>
     <string name="device_admin_disable_warning">Disabling this admin removes parental controls from this device.</string>
-    <string name="focus_guard_accessibility_description">Powers friction screens, daily time budgets, and habit-tracker rewards for the self-improvement features in Family Device Guard.</string>
+    <string name="focus_guard_accessibility_description">Powers friction screens, daily time budgets, and habit-tracker rewards for the self-improvement features in Otterling.</string>
 </resources>

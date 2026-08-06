@@ -215,7 +215,7 @@ class MainActivity : ComponentActivity() {
             verticalArrangement = Arrangement.spacedBy(24.dp),
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("Family Device Guard", style = MaterialTheme.typography.headlineMedium)
+                Text("Otterling", style = MaterialTheme.typography.headlineMedium)
                 Text(
                     "Parental controls for this device",
                     style = MaterialTheme.typography.bodyMedium,

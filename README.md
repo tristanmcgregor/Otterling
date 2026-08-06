@@ -1,4 +1,4 @@
-# Family Device Guard
+# Otterling
 
 Samsung Knox parental-control app for Android 9+ (`minSdk 28`).
 
@@ -52,7 +52,7 @@ license required:
 
 - Block Safe Mode boot, factory reset, USB debugging, guest mode/additional
   users (`UserManager` restrictions).
-- Block app uninstall for Family Device Guard itself (`setUninstallBlocked`).
+- Block app uninstall for Otterling itself (`setUninstallBlocked`).
 - **Protect apps from uninstall**: enter any other app's package name (e.g.
   `com.facebook.katana`) and tap **Protect** to block it too, via the same
   `setUninstallBlocked` call — it works for any package when called by the
@@ -70,15 +70,15 @@ while the app isn't open, so a restriction cleared in the background could
 stay cleared until you next open the app. `RestrictionEnforcementWorker` is a
 `WorkManager` job (every 15 minutes, independent of the app process) that
 re-checks and reapplies restrictions/blocked-apps/protected-apps as a backup.
-For best reliability, also exclude Family Device Guard from Samsung's
-battery optimization: Settings → Apps → Family Device Guard → Battery →
+For best reliability, also exclude Otterling from Samsung's
+battery optimization: Settings → Apps → Otterling → Battery →
 **Unrestricted**, and remove it from any "Sleeping apps"/"Deep sleeping
 apps" list under Settings → Battery and device care.
 
 **Physical Samsung test results**:
 
-- Safe Mode hardware-key boot: **blocked successfully** while Family Device
-  Guard was Device Owner.
+- Safe Mode hardware-key boot: **blocked successfully** while Otterling
+  was Device Owner.
 - Bootloader recovery-menu factory reset (power + volume-up): **not yet
   tested** because this path is destructive. Some MDM vendors report that this
   Samsung-specific path may need Knox `RestrictionPolicy`; test it on a
@@ -126,6 +126,47 @@ The home screen is now a minimal status view (Device Owner state + an
 
 The PIN itself is never stored — only a salted PBKDF2 (120k iterations,
 SHA-256) hash, protected by `EncryptedSharedPreferences`.
+
+## Phase 7 — NSFW cloud filter VPN (Canopy-style)
+
+`VpnFilterService` is registered as the device's mandatory always-on VPN with
+lockdown enabled (`DevicePolicyManager.setAlwaysOnVpnPackage(..., lockdownEnabled = true)`),
+via `VpnFilterManager`. With lockdown on, Android refuses all network access to
+anything other than this VPN, so a second VPN app installed on the device
+cannot get network access to establish its own tunnel — there is no bypass
+path around the filter via another VPN.
+
+DNS is filtered in two layers:
+
+1. **Local, always-on**: every query is checked against a downloaded
+   adult-domain blocklist (`DomainBlocklistManager`, defaulting to StevenBlack's
+   porn-only list + The Blocklist Project's porn list) — this applies
+   regardless of network conditions.
+2. **Cloud, primary**: anything not already locally blocked is forwarded to a
+   configurable cloud filter server (`CloudFilterSettings`, set from Settings →
+   Content Filter VPN → "Cloud filter server") — see `filter-server/` for the
+   AdGuard Home Docker stack to deploy. If the cloud filter is unset or
+   unreachable, queries fall back to a hardcoded public resolver instead of
+   failing outright; the local list from step 1 still applies either way.
+
+Known public DoH/DoT resolver IPs (Cloudflare, Google, Quad9, OpenDNS) are
+refused outright so apps can't dodge filtering by hardcoding their own
+encrypted resolver.
+
+**Verification checklist** (needs a physical Knox/Device-Owner test device —
+not yet run against real hardware):
+
+1. With Device Owner active, enable the Content Filter VPN in Settings — the
+   app's "Lockdown" status row should read **Active**.
+2. Install a second VPN app and try to connect — it should fail to establish
+   any tunnel while lockdown holds.
+3. With a cloud filter server configured and reachable: adult domains resolve
+   to NXDOMAIN; ordinary sites resolve normally.
+4. Stop the cloud filter server briefly: known adult domains from the local
+   list still get NXDOMAIN; other domains keep resolving via the fallback
+   resolver.
+5. Apps added to the VPN bypass list (e.g. Android Auto) still work and are
+   not filtered.
 
 ## Secret handling
 
