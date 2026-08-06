@@ -29,11 +29,20 @@ import Foundation
     /// Unlocks the bundle (clears the immutable flag) before removing it from the list.
     func removeProtectedApp(executableName: String, reply: @escaping (Data) -> Void)
 
-    /// Always allowed, from any account. Points every network service's DNS at Cloudflare's
-    /// content-filtering resolver and blocks alternate/DoH resolvers so it can't be sidestepped.
+    /// Always allowed, from any account. Points every network service's DNS at the configured
+    /// cloud content filter (or Cloudflare Family as fallback) and blocks alternate/DoH resolvers
+    /// so it can't be sidestepped.
     func enableDNSEnforcement(reply: @escaping (Data) -> Void)
     /// Requires the calling account to be in the `admin` group (i.e. the Guardian account).
     func disableDNSEnforcement(reply: @escaping (Data) -> Void)
+
+    /// Always allowed, from any account -- picking where the cloud filter points doesn't reduce
+    /// protection (Cloudflare Family stays the fallback either way).
+    func setCloudFilterHost(_ host: String, reply: @escaping (Data) -> Void)
+    /// Turning ON is always allowed; turning OFF (falling back to Cloudflare Family only) requires
+    /// the calling account to be in the `admin` group, same asymmetry as disabling DNS enforcement
+    /// outright.
+    func setCloudFilterEnabled(_ enabled: Bool, reply: @escaping (Data) -> Void)
 }
 
 public enum FocusLockCodec {

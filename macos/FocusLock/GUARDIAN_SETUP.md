@@ -1,8 +1,9 @@
 # Guardian Account Setup
 
-FocusLock's tamper-resistance is a **social/account boundary**, not a purely technical one: the
-daemon rejects `removeBlockedApp`, `removeBlockedDomain`, and `endSessionEarly` from any account
-that isn't in the macOS `admin` group. That only works if your day-to-day account genuinely
+Otterling's tamper-resistance is a **social/account boundary**, not a purely technical one: the
+daemon rejects `removeBlockedApp`, `removeBlockedDomain`, `disableDNSEnforcement`, and
+`setCloudFilterEnabled(false)` from any account that isn't in the macOS `admin` group. That only
+works if your day-to-day account genuinely
 *isn't* an admin, and the one admin account's password is genuinely out of your reach.
 
 This doc is the one-time setup to get there, plus the honest limits of the model.
@@ -71,7 +72,7 @@ permanent once added: there's no timer to wait out, only removal by the Guardian
 - **Reformatting the disk.** The nuclear option always exists for whoever has physical access to
   the machine and a way to boot something else.
 
-None of this is unique to FocusLock -- it's true of every self-control tool that runs as software
+None of this is unique to Otterling -- it's true of every self-control tool that runs as software
 on hardware you administer. The Guardian-account split raises the bar from "one click in Settings"
 to "needs another person's cooperation, or a deliberate act of reinstalling the OS," which is the
 realistic ceiling for this kind of tool.

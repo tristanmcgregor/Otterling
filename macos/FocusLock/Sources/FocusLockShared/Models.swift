@@ -43,36 +43,56 @@ public struct ProtectedApp: Codable, Hashable, Identifiable, Sendable {
 /// Blocking is unconditional and permanent: anything in `blockedApps`/`blockedDomains` is
 /// enforced 24/7, with no timer or session to wait out. The only way off the list is removal,
 /// which the daemon restricts to the Guardian admin account. `protectedApps` are the inverse:
-/// kept alive and undeletable rather than blocked. `dnsEnforcementEnabled` mandates Cloudflare's
-/// content-filtering DNS system-wide and blocks alternate resolvers, same asymmetry: anyone can
-/// turn it on, only the Guardian can turn it off.
+/// kept alive and undeletable rather than blocked. `dnsEnforcementEnabled` mandates content-
+/// filtering DNS system-wide and blocks alternate resolvers, same asymmetry: anyone can turn it
+/// on, only the Guardian can turn it off. `cloudFilterHost`/`cloudFilterEnabled` pick which
+/// resolver is used while DNS enforcement is on (a configurable cloud filter as primary, falling
+/// back to Cloudflare Family if disabled or unresolved -- see `DNSEnforcer`).
 public struct FocusLockState: Codable, Sendable {
     public var blockedApps: [BlockedApp]
     public var blockedDomains: [String]
     public var protectedApps: [ProtectedApp]
     public var dnsEnforcementEnabled: Bool
+    public var cloudFilterHost: String
+    public var cloudFilterEnabled: Bool
 
     public init(
         blockedApps: [BlockedApp] = [],
         blockedDomains: [String] = [],
         protectedApps: [ProtectedApp] = [],
-        dnsEnforcementEnabled: Bool = false
+        // Only the true "no state.json exists yet" path uses this default (see StateStore) --
+        // fresh installs ship with NSFW content filtering already on, matching the product's
+        // primary job. An existing install upgrading from a build that predates this field always
+        // decodes real JSON (even if this specific key is missing from it), which hits the
+        // decoder below instead and correctly defaults to `false` there -- so an existing user's
+        // "off" is never silently flipped on by this change.
+        dnsEnforcementEnabled: Bool = true,
+        cloudFilterHost: String = FocusLockConstants.defaultCloudFilterHost,
+        cloudFilterEnabled: Bool = true
     ) {
         self.blockedApps = blockedApps
         self.blockedDomains = blockedDomains
         self.protectedApps = protectedApps
         self.dnsEnforcementEnabled = dnsEnforcementEnabled
+        self.cloudFilterHost = cloudFilterHost
+        self.cloudFilterEnabled = cloudFilterEnabled
     }
 
-    // Custom decode so a state.json written before `dnsEnforcementEnabled` existed doesn't fail
-    // to decode wholesale and get silently replaced with a blank state (losing every existing
-    // blocked/protected entry) -- missing keys just default instead.
+    // Custom decode so a state.json written before `dnsEnforcementEnabled` (or these newer cloud
+    // filter fields) existed doesn't fail to decode wholesale and get silently replaced with a
+    // blank state (losing every existing blocked/protected entry) -- missing keys just default
+    // instead. `dnsEnforcementEnabled` defaults to `false` here specifically (not the `init`
+    // default above) so upgrading an existing install never turns content filtering on without
+    // the Guardian's say-so; the cloud filter fields default on since they only pick which
+    // resolver an *already-enabled* DNS enforcement uses.
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         blockedApps = try container.decodeIfPresent([BlockedApp].self, forKey: .blockedApps) ?? []
         blockedDomains = try container.decodeIfPresent([String].self, forKey: .blockedDomains) ?? []
         protectedApps = try container.decodeIfPresent([ProtectedApp].self, forKey: .protectedApps) ?? []
         dnsEnforcementEnabled = try container.decodeIfPresent(Bool.self, forKey: .dnsEnforcementEnabled) ?? false
+        cloudFilterHost = try container.decodeIfPresent(String.self, forKey: .cloudFilterHost) ?? FocusLockConstants.defaultCloudFilterHost
+        cloudFilterEnabled = try container.decodeIfPresent(Bool.self, forKey: .cloudFilterEnabled) ?? true
     }
 }
 

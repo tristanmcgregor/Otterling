@@ -117,7 +117,8 @@ final class XPCService: NSObject, FocusLockXPCProtocol {
             state.dnsEnforcementEnabled = true
         }
         // Apply immediately -- don't wait for the enforcement loop's 15s DNS cadence.
-        DNSEnforcer.apply()
+        let state = stateStore.snapshot()
+        DNSEnforcer.apply(cloudHost: state.cloudFilterHost, cloudEnabled: state.cloudFilterEnabled)
         onStateChanged()
         reply(FocusLockCodec.encode(FocusLockResult.ok))
     }
@@ -133,5 +134,41 @@ final class XPCService: NSObject, FocusLockXPCProtocol {
         DNSEnforcer.remove()
         onStateChanged()
         reply(FocusLockCodec.encode(FocusLockResult.ok))
+    }
+
+    func setCloudFilterHost(_ host: String, reply: @escaping (Data) -> Void) {
+        let normalized = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalized.isEmpty else {
+            reply(FocusLockCodec.encode(FocusLockResult.denied("Empty host")))
+            return
+        }
+        stateStore.mutate { state in
+            state.cloudFilterHost = normalized
+        }
+        reapplyDNSIfEnforcing()
+        onStateChanged()
+        reply(FocusLockCodec.encode(FocusLockResult.ok))
+    }
+
+    func setCloudFilterEnabled(_ enabled: Bool, reply: @escaping (Data) -> Void) {
+        if !enabled && !isCallerAdmin() {
+            reply(FocusLockCodec.encode(FocusLockResult.denied("Only the Guardian admin account can turn off the cloud filter.")))
+            return
+        }
+        stateStore.mutate { state in
+            state.cloudFilterEnabled = enabled
+        }
+        reapplyDNSIfEnforcing()
+        onStateChanged()
+        reply(FocusLockCodec.encode(FocusLockResult.ok))
+    }
+
+    /// Re-resolves and re-asserts DNS immediately (rather than waiting for the enforcement loop's
+    /// 15s cadence) whenever the cloud filter host/toggle changes while DNS enforcement is
+    /// already on -- otherwise a host edit wouldn't visibly take effect for up to 15s.
+    private func reapplyDNSIfEnforcing() {
+        let state = stateStore.snapshot()
+        guard state.dnsEnforcementEnabled else { return }
+        DNSEnforcer.apply(cloudHost: state.cloudFilterHost, cloudEnabled: state.cloudFilterEnabled)
     }
 }

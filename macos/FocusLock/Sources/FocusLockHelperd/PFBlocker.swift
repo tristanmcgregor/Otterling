@@ -3,12 +3,14 @@ import FocusLockShared
 
 /// Secondary defense layer: blocks DNS-over-TLS (port 853) and a handful of well-known public
 /// DNS-over-HTTPS resolver IPs so a browser can't sidestep the /etc/hosts redirect (while site
-/// blocking is active) or the mandated Cloudflare resolver (while DNS enforcement is on) by
-/// resolving through its own encrypted resolver instead of the system one. The IP list
-/// deliberately includes Cloudflare's *unfiltered* 1.1.1.1/1.0.0.1 -- when DNS enforcement wants
-/// the filtered 1.1.1.3/1.0.0.3, blocking the unfiltered pair closes the obvious "just point at
-/// Cloudflare's other IP" bypass. `EnforcementLoop` activates this whenever either site blocking
-/// or DNS enforcement is on.
+/// blocking is active) or the mandated cloud filter / Cloudflare Family resolver (while DNS
+/// enforcement is on) by resolving through its own encrypted resolver instead of the system one.
+/// The IP list deliberately includes Cloudflare's *unfiltered* 1.1.1.1/1.0.0.1 -- when DNS
+/// enforcement wants a filtered resolver instead, blocking the unfiltered pair closes the obvious
+/// "just point at Cloudflare's other IP" bypass. `EnforcementLoop` activates this whenever either
+/// site blocking or DNS enforcement is on, and passes it the cloud filter host's currently
+/// resolved IPs (`DNSEnforcer.lastResolvedIPs`) so that host is never at risk of being blocked by
+/// its own rules.
 ///
 /// This is deliberately narrow -- it does not attempt a general-purpose firewall. Rules are
 /// loaded into a *named* pf anchor, and /etc/pf.conf is only ever touched to add one marked
@@ -25,15 +27,24 @@ enum PFBlocker {
         "208.67.222.222", "208.67.220.220", // OpenDNS
     ]
 
-    static func apply(active: Bool) {
+    /// [allowedResolverIPs]: the current cloud filter host's resolved addresses (see
+    /// `DNSEnforcer.lastResolvedIPs`) -- explicitly passed on :53 ahead of the block rules below so
+    /// the cloud filter itself is never at risk of being self-blocked, even if a future rule change
+    /// makes the block list broader or its IP happens to coincide with one already blocked.
+    static func apply(active: Bool, allowedResolverIPs: [String] = []) {
         ensureAnchorReferenced()
-        writeAnchorRules(active: active)
+        writeAnchorRules(active: active, allowedResolverIPs: allowedResolverIPs)
         reload()
     }
 
     private static func ensureAnchorReferenced() {
         guard let original = try? String(contentsOfFile: pfConfPath, encoding: .utf8) else { return }
-        guard !original.contains(FocusLockConstants.pfConfMarkerBegin) else { return }
+        // Also checks the previous (FocusLock-branded) marker: if an older build already added the
+        // anchor reference under that text, skip re-adding it under the new marker -- otherwise
+        // pf.conf would end up with the same anchor name declared twice, which fails `pfctl -n`
+        // validation and silently blocks every future pf rule change.
+        guard !original.contains(FocusLockConstants.pfConfMarkerBegin),
+              !original.contains(FocusLockConstants.legacyPFConfMarkerBegin) else { return }
 
         let block = [
             FocusLockConstants.pfConfMarkerBegin,
@@ -50,7 +61,7 @@ enum PFBlocker {
         try? candidate.write(toFile: pfConfPath, atomically: true, encoding: .utf8)
     }
 
-    private static func writeAnchorRules(active: Bool) {
+    private static func writeAnchorRules(active: Bool, allowedResolverIPs: [String]) {
         try? FileManager.default.createDirectory(
             atPath: (FocusLockConstants.pfAnchorFilePath as NSString).deletingLastPathComponent,
             withIntermediateDirectories: true
@@ -66,6 +77,13 @@ enum PFBlocker {
         // briefly fell back to those resolvers (or used DoH to them) while system DNS was still
         // settling on Cloudflare Family (1.1.1.3).
         var lines = ["# Managed by FocusLockHelperd -- forces DNS through the system resolver"]
+        // Explicit pass rules for the cloud filter host go first: with `quick`, the first matching
+        // rule wins, so these must be evaluated before the block rules below to guarantee the
+        // cloud filter itself is always reachable on :53 regardless of what else is blocked there.
+        for ip in allowedResolverIPs {
+            lines.append("pass quick proto udp from any to \(ip) port 53")
+            lines.append("pass quick proto tcp from any to \(ip) port 53")
+        }
         lines.append("block drop quick proto udp from any to any port 853")
         lines.append("block drop quick proto tcp from any to any port 853")
         // Port 53 only (plus global 853 DoT above). Do NOT block 443 on these IPs -- Chrome

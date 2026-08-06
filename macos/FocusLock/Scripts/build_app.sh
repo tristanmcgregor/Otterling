@@ -1,6 +1,7 @@
 #!/bin/bash
-# Assembles FocusLock.app from the SwiftPM build products and code-signs it, including the
-# embedded FocusLockHelperd LaunchDaemon that SMAppService registers.
+# Assembles Otterling.app (display name; internal executable/bundle IDs stay FocusLock*) from the
+# SwiftPM build products and code-signs it, including the embedded FocusLockHelperd LaunchDaemon
+# that SMAppService registers.
 #
 # Usage: Scripts/build_app.sh "Apple Development: Your Name (TEAMID)"
 #
@@ -19,7 +20,13 @@ fi
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_DIR="$PROJECT_DIR/.build/debug"
-APP_NAME="FocusLock"
+# EXECUTABLE_NAME matches the SwiftPM product names in Package.swift (unchanged -- renaming these
+# would mean large Package.swift/target churn for no user-facing benefit). APP_NAME/DISPLAY_NAME
+# is purely the install path and Info.plist branding -- bundle/Mach/LaunchDaemon IDs stay as
+# au.com.tbmcgregor.bwparker.focuslock* so an existing install isn't orphaned by this rename.
+EXECUTABLE_NAME="FocusLock"
+APP_NAME="Otterling"
+DISPLAY_NAME="Otterling"
 BUNDLE_ID="au.com.tbmcgregor.bwparker.focuslock"
 HELPER_LABEL="au.com.tbmcgregor.bwparker.focuslock.helperd"
 INSTALL_PATH="/Applications/${APP_NAME}.app"
@@ -33,7 +40,7 @@ mkdir -p "$INSTALL_PATH/Contents/MacOS"
 mkdir -p "$INSTALL_PATH/Contents/Library/LaunchDaemons"
 mkdir -p "$INSTALL_PATH/Contents/Resources"
 
-cp "$BUILD_DIR/FocusLock" "$INSTALL_PATH/Contents/MacOS/FocusLock"
+cp "$BUILD_DIR/${EXECUTABLE_NAME}" "$INSTALL_PATH/Contents/MacOS/${EXECUTABLE_NAME}"
 cp "$BUILD_DIR/FocusLockHelperd" "$INSTALL_PATH/Contents/MacOS/FocusLockHelperd"
 
 tee "$INSTALL_PATH/Contents/Info.plist" > /dev/null <<PLIST
@@ -42,11 +49,13 @@ tee "$INSTALL_PATH/Contents/Info.plist" > /dev/null <<PLIST
 <plist version="1.0">
 <dict>
     <key>CFBundleExecutable</key>
-    <string>FocusLock</string>
+    <string>${EXECUTABLE_NAME}</string>
     <key>CFBundleIdentifier</key>
     <string>${BUNDLE_ID}</string>
     <key>CFBundleName</key>
     <string>${APP_NAME}</string>
+    <key>CFBundleDisplayName</key>
+    <string>${DISPLAY_NAME}</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
@@ -85,7 +94,7 @@ PLIST
 
 echo "==> Code-signing (daemon first, then app bundle)"
 codesign --force --options runtime --sign "$SIGN_IDENTITY" "$INSTALL_PATH/Contents/MacOS/FocusLockHelperd"
-codesign --force --options runtime --sign "$SIGN_IDENTITY" "$INSTALL_PATH/Contents/MacOS/FocusLock"
+codesign --force --options runtime --sign "$SIGN_IDENTITY" "$INSTALL_PATH/Contents/MacOS/${EXECUTABLE_NAME}"
 codesign --force --options runtime --sign "$SIGN_IDENTITY" "$INSTALL_PATH"
 
 echo "==> Verifying signatures"

@@ -36,11 +36,13 @@ enum HostsFileBlocker {
         var result: [String] = []
         var inBlock = false
         for line in content.components(separatedBy: "\n") {
-            if line == FocusLockConstants.hostsMarkerBegin {
+            // Recognizes both the current and the previous (FocusLock-branded) marker text, so an
+            // upgrade cleans up a block written by an older build instead of leaving it orphaned.
+            if line == FocusLockConstants.hostsMarkerBegin || line == FocusLockConstants.legacyHostsMarkerBegin {
                 inBlock = true
                 continue
             }
-            if line == FocusLockConstants.hostsMarkerEnd {
+            if line == FocusLockConstants.hostsMarkerEnd || line == FocusLockConstants.legacyHostsMarkerEnd {
                 inBlock = false
                 continue
             }

@@ -7,7 +7,7 @@ import FocusLockShared
 /// this from a Standard account gets exactly the same "denied" replies as the GUI would.
 func printUsage() {
     print("""
-    focuslockctl -- FocusLock command-line control
+    focuslockctl -- Otterling command-line control
 
     Blocking is unconditional and permanent: anything added below is enforced 24/7 until
     removed. Adding is always allowed; removing requires the Guardian admin account.
@@ -24,14 +24,18 @@ func printUsage() {
 
       focuslockctl enable-dns
       focuslockctl disable-dns                     (Guardian admin account only)
+      focuslockctl set-filter-host <host>
 
     Protected apps (e.g. an accountability app) can't be quit -- the daemon relaunches them
     within seconds -- or deleted -- their bundle is locked with the filesystem-level immutable
-    flag, which only root can clear, so a Standard account can't touch it even with sudo.
+    flag, which only root can clear, so a Standard account can't touch it even with sudo. This is
+    optional and not required for content filtering.
 
-    DNS enforcement points every network service at Cloudflare's content-filtering resolver
-    (1.1.1.3 / 1.0.0.3) and blocks alternate/DoH resolvers so it can't be sidestepped by just
-    picking a different one.
+    Content filter (NSFW): a downloaded local adult-domain hosts list is applied unconditionally,
+    always. DNS enforcement additionally points every network service at a configurable cloud
+    filter server (`set-filter-host`, default bartholomew.help) and blocks alternate/DoH/DoT
+    resolvers so it can't be sidestepped by just picking a different one -- falling back to
+    Cloudflare Family (1.1.1.3 / 1.0.0.3) if the cloud filter is off or its host can't be resolved.
 
     The Guardian account password is set manually in System Settings (see GUARDIAN_SETUP.md);
     the phone PIN is set manually on the device.
@@ -52,7 +56,8 @@ func formatState(_ state: FocusLockState) -> String {
     for app in state.protectedApps {
         lines.append("  - \(app.displayName) [\(app.executableName)] @ \(app.bundlePath)")
     }
-    lines.append("DNS enforcement: \(state.dnsEnforcementEnabled ? "ON (Cloudflare-filtered)" : "off")")
+    lines.append("DNS enforcement: \(state.dnsEnforcementEnabled ? "ON" : "off")")
+    lines.append("Cloud filter host: \(state.cloudFilterHost) (\(state.cloudFilterEnabled ? "enabled" : "disabled, Cloudflare Family fallback only"))")
     return lines.joined(separator: "\n")
 }
 
@@ -121,6 +126,10 @@ Task {
 
     case "disable-dns":
         printResult(await client.disableDNSEnforcement())
+
+    case "set-filter-host":
+        guard arguments.count >= 3 else { printUsage(); finished = true; exit(1) }
+        printResult(await client.setCloudFilterHost(arguments[2]))
 
     default:
         printUsage()

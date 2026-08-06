@@ -2,10 +2,11 @@ import Foundation
 import FocusLockShared
 
 /// Periodically re-asserts the current block state: kills matching processes, (re)applies
-/// site/content blocking, keeps protected apps alive and locked, and (re)points DNS at
-/// Cloudflare's filtered resolver when enabled. Runs independently of XPC calls so a reboot or a
-/// killed GUI app doesn't lift anything -- this loop reads persisted state straight off disk via
-/// `stateStore`.
+/// site/content blocking (Guardian's manual list plus the always-on downloaded adult-domain hosts
+/// list from `AdultBlocklistManager`), keeps protected apps alive and locked, and (re)points DNS
+/// at the cloud content filter (or Cloudflare Family as fallback) when enabled. Runs independently
+/// of XPC calls so a reboot or a killed GUI app doesn't lift anything -- this loop reads persisted
+/// state straight off disk via `stateStore`.
 ///
 /// Blocking is unconditional: anything in blockedApps/blockedDomains is enforced 24/7 as soon as
 /// it's added, with no session/timer to wait out. It only stops once the Guardian removes it.
@@ -20,6 +21,7 @@ final class EnforcementLoop {
     // mutation plus every timer tick) only touches the filesystem/pf when something changed.
     private var lastAppliedDomains: [String] = []
     private var lastAppliedPFActive = false
+    private var lastAppliedAllowedResolverIPs: [String] = []
 
     // Debounces relaunch attempts per app so a slow-starting process (which won't show up in a
     // process scan for a second or two) doesn't get `open`'d again on every tick before it's had
@@ -58,27 +60,38 @@ final class EnforcementLoop {
             guard let self, let stateStore = self.stateStore else { return }
             let state = stateStore.snapshot()
 
-            let domainsToBlock = state.blockedDomains
+            // Cheap staleness check -- only actually dispatches a download (on its own background
+            // queue) if the cache is missing or a day old, so this never stalls this tick.
+            AdultBlocklistManager.shared.refreshIfStale()
+            // Always merged in, independent of dnsEnforcementEnabled: this is the local, always-on
+            // defense in depth that keeps blocking known adult domains even with the cloud filter
+            // off or unreachable -- mirrors the Android app's local blocklist being applied
+            // client-side regardless of the VPN's cloud-filter state.
+            let domainsToBlock = Array(Set(state.blockedDomains).union(AdultBlocklistManager.shared.domains())).sorted()
             if domainsToBlock != self.lastAppliedDomains {
                 HostsFileBlocker.apply(domains: domainsToBlock)
                 self.lastAppliedDomains = domainsToBlock
             }
 
-            let siteBlockActive = !domainsToBlock.isEmpty
-            let pfActive = siteBlockActive || state.dnsEnforcementEnabled
-            if pfActive != self.lastAppliedPFActive {
-                PFBlocker.apply(active: pfActive)
-                self.lastAppliedPFActive = pfActive
-            }
-
+            // Resolved (or re-resolved) before pf below, so pf's allowlist reflects this tick's
+            // address rather than lagging a tick behind whenever the cloud host's IP changes.
             if state.dnsEnforcementEnabled {
                 let now = Date()
                 if self.lastDNSCheckAt == nil || now.timeIntervalSince(self.lastDNSCheckAt!) >= self.dnsCheckInterval {
-                    DNSEnforcer.apply()
+                    DNSEnforcer.apply(cloudHost: state.cloudFilterHost, cloudEnabled: state.cloudFilterEnabled)
                     self.lastDNSCheckAt = now
                 }
             } else {
                 self.lastDNSCheckAt = nil
+            }
+
+            let siteBlockActive = !domainsToBlock.isEmpty
+            let pfActive = siteBlockActive || state.dnsEnforcementEnabled
+            let allowedResolverIPs = DNSEnforcer.lastResolvedIPs
+            if pfActive != self.lastAppliedPFActive || allowedResolverIPs != self.lastAppliedAllowedResolverIPs {
+                PFBlocker.apply(active: pfActive, allowedResolverIPs: allowedResolverIPs)
+                self.lastAppliedPFActive = pfActive
+                self.lastAppliedAllowedResolverIPs = allowedResolverIPs
             }
 
             let killed = AppBlockEnforcer.enforce(blockedApps: state.blockedApps)

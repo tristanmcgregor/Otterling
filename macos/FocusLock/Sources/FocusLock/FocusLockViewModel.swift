@@ -9,9 +9,15 @@ final class FocusLockViewModel: ObservableObject {
     @Published var state = FocusLockState()
     @Published var errorMessage: String?
     @Published var newDomainText: String = ""
+    @Published var cloudFilterHostText: String = ""
+    @Published var cloudFilterTestResult: String?
+    @Published var cloudFilterTesting = false
 
     private let client = FocusLockXPCClient()
     private var pollTask: Task<Void, Never>?
+    // Seeds cloudFilterHostText from server state exactly once (on first load), then never again
+    // -- otherwise the 1s poll would clobber an in-progress edit before the user taps Save.
+    private var didSeedHostText = false
 
     func startPolling() {
         guard pollTask == nil else { return }
@@ -26,6 +32,10 @@ final class FocusLockViewModel: ObservableObject {
     func refreshOnce() async {
         if let status = await client.getStatus() {
             state = status
+            if !didSeedHostText {
+                cloudFilterHostText = status.cloudFilterHost
+                didSeedHostText = true
+            }
         }
     }
 
@@ -65,6 +75,31 @@ final class FocusLockViewModel: ObservableObject {
 
     func disableDNSEnforcement() {
         Task { await handle(await client.disableDNSEnforcement()) }
+    }
+
+    func saveCloudFilterHost() {
+        let host = cloudFilterHostText.trimmingCharacters(in: .whitespaces)
+        guard !host.isEmpty else { return }
+        Task { await handle(await client.setCloudFilterHost(host)) }
+    }
+
+    func setCloudFilterEnabled(_ enabled: Bool) {
+        Task { await handle(await client.setCloudFilterEnabled(enabled)) }
+    }
+
+    func testCloudFilterReachability() {
+        let host = cloudFilterHostText.trimmingCharacters(in: .whitespaces)
+        guard !host.isEmpty else {
+            cloudFilterTestResult = "Enter a host first."
+            return
+        }
+        cloudFilterTesting = true
+        cloudFilterTestResult = nil
+        Task {
+            let reachable = await CloudFilterProbe.testReachable(host: host)
+            cloudFilterTestResult = reachable ? "Filter server reachable." : "Filter server unreachable."
+            cloudFilterTesting = false
+        }
     }
 
     private func handle(_ result: FocusLockResult) async {

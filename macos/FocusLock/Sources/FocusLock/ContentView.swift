@@ -22,7 +22,7 @@ struct ContentView: View {
             }
         }
         .padding(20)
-        .frame(width: 440, height: 780)
+        .frame(width: 440, height: 860)
         .onAppear { viewModel.startPolling() }
         .alert(
             "Action denied",
@@ -55,13 +55,17 @@ struct ContentView: View {
                 .font(.system(size: 28))
                 .foregroundStyle((isBlocking || isProtecting || isEnforcingDNS) ? .red : .green)
             VStack(alignment: .leading, spacing: 2) {
-                Text("FocusLock").font(.title3).bold()
-                if isBlocking || isProtecting || isEnforcingDNS {
+                Text("Otterling").font(.title3).bold()
+                if isEnforcingDNS {
+                    Text("NSFW filter active - only the Guardian can undo this")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                } else if isBlocking || isProtecting {
                     Text("Active 24/7 - only the Guardian can undo this")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 } else {
-                    Text("Nothing blocked or protected")
+                    Text("Content filter off")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
@@ -134,7 +138,7 @@ struct ContentView: View {
                 Spacer()
                 Button("+ Protect App...") { pickProtectedApp() }
             }
-            Text("Can't be quit or deleted -- relaunched automatically and locked against removal. Use this for accountability apps you don't want to be able to get around.")
+            Text("Optional: keeps selected apps from being quit or deleted -- relaunched automatically and locked against removal. Not required for content filtering; useful for e.g. an accountability app you don't want to be able to get around.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             if viewModel.state.protectedApps.isEmpty {
@@ -160,13 +164,13 @@ struct ContentView: View {
 
     private var dnsSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("DNS Enforcement").font(.headline)
-            Text("Points every network connection at Cloudflare's content-filtering DNS (blocks malware and adult content) and blocks alternate/DoH resolvers so it can't be sidestepped by switching DNS providers.")
+            Text("Content filter (NSFW)").font(.headline)
+            Text("Points system DNS at your own cloud filter server (Canopy-style AdGuard Home) as the primary content filter, and blocks alternate/DoH/DoT resolvers so it can't be sidestepped by switching DNS providers. Falls back to Cloudflare's filtered DNS if the cloud filter is off or its host can't be resolved. A downloaded local adult-domain hosts list is applied unconditionally either way, regardless of this toggle.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             HStack {
                 if viewModel.state.dnsEnforcementEnabled {
-                    Label("Enforced (Cloudflare-filtered)", systemImage: "checkmark.shield.fill")
+                    Label("Enforced (cloud + local adult lists)", systemImage: "checkmark.shield.fill")
                         .foregroundStyle(.green)
                     Spacer()
                     Button("Disable...") { viewModel.disableDNSEnforcement() }
@@ -176,6 +180,27 @@ struct ContentView: View {
                         .foregroundStyle(.secondary)
                     Spacer()
                     Button("Enable") { viewModel.enableDNSEnforcement() }
+                }
+            }
+
+            Divider()
+
+            Toggle(isOn: Binding(
+                get: { viewModel.state.cloudFilterEnabled },
+                set: { viewModel.setCloudFilterEnabled($0) }
+            )) {
+                Text("Use cloud filter server").font(.subheadline)
+            }
+            HStack {
+                TextField("bartholomew.help", text: $viewModel.cloudFilterHostText)
+                    .onSubmit { viewModel.saveCloudFilterHost() }
+                Button("Save") { viewModel.saveCloudFilterHost() }
+            }
+            HStack {
+                Button("Test filter server") { viewModel.testCloudFilterReachability() }
+                    .disabled(viewModel.cloudFilterTesting)
+                if let result = viewModel.cloudFilterTestResult {
+                    Text(result).font(.caption).foregroundStyle(.secondary)
                 }
             }
         }
