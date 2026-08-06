@@ -38,7 +38,7 @@ class CloudFilterSettings(context: Context) {
         prefs.edit().putBoolean(KEY_ENABLED, enabled).apply()
     }
 
-    fun host(): String = securePrefs.getString(KEY_HOST, "").orEmpty()
+    fun host(): String = securePrefs.getString(KEY_HOST, DEFAULT_HOST).orEmpty().ifBlank { DEFAULT_HOST }
 
     fun setHost(host: String) {
         securePrefs.edit().putString(KEY_HOST, host.trim()).apply()
@@ -82,6 +82,7 @@ class CloudFilterSettings(context: Context) {
         const val KEY_ENABLED = "enabled"
         const val KEY_HOST = "host"
         const val KEY_PORT = "port"
+        const val DEFAULT_HOST = "bartholomew.help"
         const val DEFAULT_PORT = 53
     }
 }
