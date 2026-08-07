@@ -6,6 +6,21 @@ update host). The tree copy in git is documentation only. The question that matt
 weakened, removed, or made conditional/bypassable?** Code style, unrelated bugs, and refactors are
 not this checklist's concern -- only changes that could let the person being filtered escape it.
 
+### Scope (what is production today)
+
+Only the **Android Otterling app** (`app/`) is a finished, shipping client right now. Future
+clients in this monorepo (e.g. `macos/FocusLock/` and any later sibling apps) are still being
+developed and are **not** in production use.
+
+- Enforce sections 1–7 against **production** surfaces: Android `app/` and the live
+  `filter-server/` host stack phones depend on.
+- **Do not FAIL** a release solely for changes that stay entirely inside unfinished client trees
+  (paths outside `app/` and `filter-server/`, such as `macos/`). Accept those changes; when such
+  an app is finished and put into production, extend this checklist via the ratchet /
+  `strengthen_checklist.sh` before treating it as a production gate.
+- If a diff also changes `app/` or `filter-server/`, review those parts fully — unfinished-app
+  work must not become a vehicle to weaken production code.
+
 A **FAIL** on any single item below means the whole diff fails review, even if everything else
 about it is fine and even if the change looks accidental/refactor-shaped. When in doubt, FAIL and
 let a human sort it out -- a false FAIL costs a re-review; a false PASS ships a bypass to a
@@ -111,7 +126,10 @@ weakened, nothing else here matters, because a bypassed build could ship anyway.
   number must not be gutted (e.g. `report()` becoming a no-op, or the debounce/cap logic being
   replaced with something that silently drops all alerts).
 
-## 7. General red flags (any file)
+## 7. General red flags (production surfaces)
+
+Applies to Android `app/` and live `filter-server/` (and any shared code those production
+surfaces call). Unfinished client trees alone are covered by the allow list below.
 
 - Any new `adb`/shell-invoked debug backdoor, hidden broadcast action, or exported component that
   lets a non-Guardian account disable protections, matching the existing "always allowed to add,
@@ -127,8 +145,12 @@ weakened, nothing else here matters, because a bypassed build could ship anyway.
 
 ## Allow list (do not FAIL on these alone)
 
+- Changes that stay entirely inside unfinished / not-yet-shipping clients (e.g. `macos/` and
+  other future app directories outside `app/` and `filter-server/`). The Android app is the only
+  finished client today; accept WIP client work until those apps are done and this checklist is
+  extended to cover them.
 - Refactors, renames, or comment/doc changes in files *not* listed above.
-- New features that don't touch anything in sections 1-6.
+- New features that don't touch anything in sections 1-6 (for production Android / filter-server).
 - Version bumps (`versionCode`/`versionName` in `app/build.gradle.kts`) -- expected on every
   release.
 - UI copy changes that don't alter the underlying enforcement logic.
