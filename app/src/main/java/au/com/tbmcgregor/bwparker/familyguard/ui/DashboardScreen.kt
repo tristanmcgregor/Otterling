@@ -118,6 +118,7 @@ fun DashboardScreen(context: Context, onOpenSettings: () -> Unit) {
     var showDomainDialog by remember { mutableStateOf(false) }
     var showMenu by remember { mutableStateOf(false) }
     var showDebugLogs by remember { mutableStateOf(false) }
+    var showCheckUpdates by remember { mutableStateOf(false) }
     var habitsRefreshing by remember { mutableStateOf(false) }
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     val scope = rememberCoroutineScope()
@@ -158,6 +159,9 @@ fun DashboardScreen(context: Context, onOpenSettings: () -> Unit) {
     if (showDebugLogs) {
         DebugLogsDialog(onDismiss = { showDebugLogs = false })
     }
+    if (showCheckUpdates) {
+        CheckForUpdatesDialog(context = context, onDismiss = { showCheckUpdates = false })
+    }
 
     Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         Column(
@@ -189,6 +193,13 @@ fun DashboardScreen(context: Context, onOpenSettings: () -> Unit) {
                         Icon(Icons.Default.MoreVert, contentDescription = "More")
                     }
                     DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                        DropdownMenuItem(
+                            text = { Text("Check for updates") },
+                            onClick = {
+                                showMenu = false
+                                showCheckUpdates = true
+                            },
+                        )
                         DropdownMenuItem(
                             text = { Text("Debug logs") },
                             onClick = {

@@ -4,22 +4,28 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.SystemUpdate
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import au.com.tbmcgregor.bwparker.familyguard.BuildConfig
 import au.com.tbmcgregor.bwparker.familyguard.alerts.AlertReporter
 import au.com.tbmcgregor.bwparker.familyguard.alerts.AlertSeverity
@@ -29,6 +35,91 @@ import au.com.tbmcgregor.bwparker.familyguard.updates.UpdateCheckResult
 import au.com.tbmcgregor.bwparker.familyguard.updates.UpdateManifest
 import au.com.tbmcgregor.bwparker.familyguard.updates.UpdateSettings
 import kotlinx.coroutines.launch
+
+/**
+ * Overflow-menu / quick entry for the same gated update path as [UpdateSection].
+ * Auto-checks on open; still requires the pinned release cert + manifest SHA checks.
+ */
+@Composable
+fun CheckForUpdatesDialog(context: Context, onDismiss: () -> Unit) {
+    val coroutineScope = rememberCoroutineScope()
+    val updateManager = remember { ApprovedUpdateManager(context) }
+    var checking by remember { mutableStateOf(true) }
+    var installing by remember { mutableStateOf(false) }
+    var statusMessage by remember { mutableStateOf("Checking…") }
+    var availableManifest by remember { mutableStateOf<UpdateManifest?>(null) }
+
+    fun runCheck() {
+        checking = true
+        statusMessage = "Checking…"
+        availableManifest = null
+        coroutineScope.launch {
+            when (val result = updateManager.checkForUpdate()) {
+                is UpdateCheckResult.UpToDate -> statusMessage = "Already up to date."
+                is UpdateCheckResult.UpdateAvailable -> {
+                    availableManifest = result.manifest
+                    statusMessage = "Update available: ${result.manifest.versionName}"
+                }
+                is UpdateCheckResult.Error -> statusMessage = "Check failed: ${result.message}"
+            }
+            checking = false
+        }
+    }
+
+    LaunchedEffect(Unit) { runCheck() }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = { Icon(Icons.Default.SystemUpdate, contentDescription = null) },
+        title = { Text("App updates") },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text(
+                    "Current version: ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                if (BuildConfig.RELEASE_CERT_SHA256.isBlank()) {
+                    Text(
+                        "This build has no pinned release certificate, so it cannot install updates.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                Text(statusMessage, style = MaterialTheme.typography.bodyMedium)
+                availableManifest?.let { manifest ->
+                    Button(
+                        enabled = !installing && !checking,
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = {
+                            installing = true
+                            statusMessage = "Downloading and verifying…"
+                            coroutineScope.launch {
+                                statusMessage = when (val result = updateManager.downloadVerifyAndInstall(manifest)) {
+                                    is InstallResult.Started -> "Verified — installing now."
+                                    is InstallResult.Rejected -> "Rejected: ${result.reason}"
+                                }
+                                installing = false
+                            }
+                        },
+                    ) {
+                        Text("Install verified update (${manifest.versionName})")
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Close") }
+        },
+        dismissButton = {
+            TextButton(onClick = { runCheck() }, enabled = !checking && !installing) {
+                Text("Check again")
+            }
+        },
+    )
+}
 
 @Composable
 fun UpdateSection(context: Context) {
