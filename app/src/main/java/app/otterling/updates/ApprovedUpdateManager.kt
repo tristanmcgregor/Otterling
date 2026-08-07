@@ -12,15 +12,8 @@ import app.otterling.BuildConfig
 import app.otterling.content.CloudFilterSettings
 import java.io.File
 import java.net.HttpURLConnection
-import java.net.Inet4Address
-import java.net.InetAddress
-import java.net.InetSocketAddress
-import java.net.Socket
 import java.net.URL
 import java.security.MessageDigest
-import javax.net.ssl.HttpsURLConnection
-import javax.net.ssl.SSLSocket
-import javax.net.ssl.SSLSocketFactory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -171,14 +164,14 @@ class ApprovedUpdateManager(private val context: Context) {
     }
 
     private fun httpGet(url: String): String {
-        val connection = openConnectionPreferIpv4(url)
+        val connection = openUpdateConnection(url)
         connection.connectTimeout = 15_000
         connection.readTimeout = 15_000
         return connection.inputStream.bufferedReader().use { it.readText() }
     }
 
     private fun downloadTo(url: String, destination: File) {
-        val connection = openConnectionPreferIpv4(url)
+        val connection = openUpdateConnection(url)
         connection.connectTimeout = 15_000
         connection.readTimeout = 60_000
         connection.inputStream.use { input ->
@@ -187,41 +180,14 @@ class ApprovedUpdateManager(private val context: Context) {
     }
 
     /**
-     * Prefer IPv4 when the update host has a stale AAAA (common for vpn.bartholomew.help).
-     * Keep the hostname in the URL so SNI/certs stay correct; only the TCP dial is forced to A.
+     * Plain HTTPS to the update host. (Previous Prefer-IPv4 SSLSocketFactory wrappers caused
+     * TLSV1_ALERT_INTERNAL_ERROR on some Android builds once the stale AAAA was removed.)
      */
-    private fun openConnectionPreferIpv4(urlString: String): HttpURLConnection {
-        val url = URL(urlString)
-        val host = url.host ?: throw IllegalArgumentException("URL missing host")
-        val ipv4 = runCatching {
-            InetAddress.getAllByName(host).firstOrNull { it is Inet4Address }
-        }.getOrNull()
-
-        if (ipv4 == null || url.protocol != "https") {
-            return url.openConnection() as HttpURLConnection
-        }
-
-        val connection = url.openConnection() as HttpsURLConnection
-        val defaultFactory = HttpsURLConnection.getDefaultSSLSocketFactory()
-        connection.sslSocketFactory = object : SSLSocketFactory() {
-            private fun layered(hostname: String, port: Int): SSLSocket {
-                val plain = Socket()
-                plain.connect(InetSocketAddress(ipv4, port), 15_000)
-                // Hostname (not the IP) so the factory sets SNI correctly.
-                return defaultFactory.createSocket(plain, hostname, port, true) as SSLSocket
-            }
-
-            override fun getDefaultCipherSuites(): Array<String> = defaultFactory.defaultCipherSuites
-            override fun getSupportedCipherSuites(): Array<String> = defaultFactory.supportedCipherSuites
-            override fun createSocket(s: Socket, peerHost: String, port: Int, autoClose: Boolean): Socket =
-                defaultFactory.createSocket(s, peerHost, port, autoClose)
-            override fun createSocket(peerHost: String, port: Int): Socket = layered(peerHost, port)
-            override fun createSocket(peerHost: String, port: Int, localAddress: InetAddress, localPort: Int): Socket =
-                layered(peerHost, port)
-            override fun createSocket(address: InetAddress, port: Int): Socket = layered(host, port)
-            override fun createSocket(address: InetAddress, port: Int, localAddress: InetAddress, localPort: Int): Socket =
-                layered(host, port)
-        }
+    private fun openUpdateConnection(urlString: String): HttpURLConnection {
+        val connection = URL(urlString).openConnection() as HttpURLConnection
+        connection.instanceFollowRedirects = true
+        // Prefer HTTP/1.1 behaviour; avoids odd ALPN paths with the update Caddy.
+        connection.setRequestProperty("Connection", "close")
         return connection
     }
 

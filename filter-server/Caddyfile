@@ -1,10 +1,11 @@
 # Static host for signed Otterling update manifests/APKs + GitHub webhook reverse-proxy.
 # See SELF_LOCKOUT.md. Files at /var/lib/otterling/updates; webhook on host :9070.
 {
-	# UDP/443 is blocked on this host (CBLOCK). Stick to TCP HTTP/1.1+2 so phones don't
-	# attempt QUIC/HTTP3 and fail in confusing ways.
+	# UDP/443 is blocked on this host (CBLOCK). Force HTTP/1.1 only — some Android
+	# TLS stacks + HTTP/2/h3 negotiation against this Caddy build end in
+	# TLSV1_ALERT_INTERNAL_ERROR on update checks.
 	servers {
-		protocols h1 h2
+		protocols h1
 	}
 }
 
@@ -12,6 +13,16 @@
 # docker-proxy's IPv4 DNAT to the container gets connection-refused (phones talking A records).
 {$UPDATE_HOST:vpn.bartholomew.help} {
 	bind 0.0.0.0
+
+	# Prefer the ISRG Root X1–anchored chain for Android trust-store compatibility
+	# (Generation Y / YE1 short chains can fail on some phone TLS stacks).
+	tls {
+		issuer acme {
+			preferred_chains {
+				root_common_name "ISRG Root X1"
+			}
+		}
+	}
 
 	handle /hooks/github* {
 		# network_mode: host — webhook listens on the host, not host.docker.internal.
