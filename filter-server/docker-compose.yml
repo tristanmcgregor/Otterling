@@ -18,9 +18,14 @@ services:
     image: mitmproxy/mitmproxy:latest
     container_name: otterling-mitmproxy
     restart: unless-stopped
+    # Host unbound/CleanBrowsing NXDOMAINs social domains (e.g. reddit.com). Use public DNS so
+    # mitmproxy can still dial those hosts and apply path/title filtering instead of returning 502.
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
     ports:
-      # The Otterling app's "Filter proxy" setting CONNECTs here for all port 80/443 TCP traffic.
-      - "${PROXY_PORT:-8080}:8080/tcp"
+      # Internal listen is always 8080; host port is usually 8090 with port8080_mux.py on 8080.
+      - "${PROXY_PORT:-8090}:8080/tcp"
     volumes:
       # Persists the generated CA (mitmproxy creates ~/.mitmproxy/mitmproxy-ca-cert.pem here on
       # first run if this is empty) plus any other mitmproxy state across container restarts.
