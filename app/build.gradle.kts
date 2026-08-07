@@ -39,11 +39,10 @@ val releaseCertSha256 = System.getenv("RELEASE_CERT_SHA256")
     ?: ""
 
 android {
-    namespace = "au.com.tbmcgregor.bwparker.familyguard"
+    namespace = "app.otterling"
     compileSdk = 36
 
     defaultConfig {
-        // Product package for new installs (Kotlin source namespace stays historical).
         applicationId = "app.otterling"
         minSdk = 28
         targetSdk = 36

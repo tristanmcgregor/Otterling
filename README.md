@@ -209,7 +209,7 @@ release key that never touches the daily account.**
   See [`filter-server/SELF_LOCKOUT.md`](filter-server/SELF_LOCKOUT.md).
 - [`.github/workflows/update-review.yml`](.github/workflows/update-review.yml) is advisory only —
   it must not sign or publish.
-- [`ApprovedUpdateManager`](app/src/main/java/au/com/tbmcgregor/bwparker/familyguard/updates/ApprovedUpdateManager.kt)
+- [`ApprovedUpdateManager`](app/src/main/java/app/otterling/updates/ApprovedUpdateManager.kt)
   is the *only* code path on the phone that installs anything. Settings → **App updates** → "Check
   for update" fetches `manifest.json`, downloads the referenced APK, and verifies (a) its SHA-256
   matches the manifest and (b) its signing certificate fingerprint matches

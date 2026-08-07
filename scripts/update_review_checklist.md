@@ -54,7 +54,7 @@ pinned host copy (`/var/lib/otterling/ci/checklist.md`), not whatever is in the 
 This is the mechanism that makes every other item on this list actually matter. If this is
 weakened, nothing else here matters, because a bypassed build could ship anyway.
 
-- [`ApprovedUpdateManager.kt`](../app/src/main/java/au/com/tbmcgregor/bwparker/familyguard/updates/ApprovedUpdateManager.kt):
+- [`ApprovedUpdateManager.kt`](../app/src/main/java/app/otterling/updates/ApprovedUpdateManager.kt):
   `downloadVerifyAndInstall` must still (a) reject when `BuildConfig.RELEASE_CERT_SHA256` is
   blank, (b) reject on a SHA-256 mismatch, (c) reject when the downloaded APK's signing
   certificate fingerprint doesn't match the pinned one -- via `signingCertSha256`. FAIL any diff
@@ -79,24 +79,24 @@ weakened, nothing else here matters, because a bypassed build could ship anyway.
 
 ## 2. VPN lockdown (Android)
 
-- [`VpnFilterManager.kt`](../app/src/main/java/au/com/tbmcgregor/bwparker/familyguard/content/VpnFilterManager.kt):
+- [`VpnFilterManager.kt`](../app/src/main/java/app/otterling/content/VpnFilterManager.kt):
   `enable()`/`ensureActive()` must keep calling `setAlwaysOnVpnPackage(admin, packageName, true)`
   -- the `true` (lockdown) argument specifically. FAIL any diff that changes it to `false` or makes
   it conditional on anything other than Device Owner availability.
-- [`VpnFilterService.kt`](../app/src/main/java/au/com/tbmcgregor/bwparker/familyguard/content/VpnFilterService.kt):
+- [`VpnFilterService.kt`](../app/src/main/java/app/otterling/content/VpnFilterService.kt):
   the full default route (`addRoute("0.0.0.0", 0)`) and the `KNOWN_DOH_IPS` refusal list must
   remain. FAIL any diff that narrows the captured route or removes/empties that IP list.
 
 ## 3. Filter proxy fail-closed behavior (Android)
 
-- [`TcpRelayManager.kt`](../app/src/main/java/au/com/tbmcgregor/bwparker/familyguard/content/TcpRelayManager.kt):
+- [`TcpRelayManager.kt`](../app/src/main/java/app/otterling/content/TcpRelayManager.kt):
   when `proxyConfig.enabled` and the destination is port 80/443, a failed CONNECT (bad auth,
   proxy unreachable, non-2xx response) must still result in an RST with **no** fallback to a
   direct connection. FAIL any diff that adds an else-branch/fallback that connects directly to the
   real destination after a proxy failure.
-- [`VpnFilterService.kt`](../app/src/main/java/au/com/tbmcgregor/bwparker/familyguard/content/VpnFilterService.kt):
+- [`VpnFilterService.kt`](../app/src/main/java/app/otterling/content/VpnFilterService.kt):
   the QUIC (UDP/443) drop while the proxy is enabled must remain.
-- [`CaCertInstaller.kt`](../app/src/main/java/au/com/tbmcgregor/bwparker/familyguard/content/CaCertInstaller.kt)
+- [`CaCertInstaller.kt`](../app/src/main/java/app/otterling/content/CaCertInstaller.kt)
   and its call sites in `VpnFilterManager` (`enable()`/`ensureActive()`) must remain -- this is
   what makes the proxy's interception actually work at all; removing the call sites doesn't break
   anything visibly (HTTPS would just fail), so specifically check it's still wired up, not just
@@ -104,7 +104,7 @@ weakened, nothing else here matters, because a bypassed build could ship anyway.
 
 ## 4. Local content blocklists
 
-- [`DomainBlocklistManager.kt`](../app/src/main/java/au/com/tbmcgregor/bwparker/familyguard/content/DomainBlocklistManager.kt):
+- [`DomainBlocklistManager.kt`](../app/src/main/java/app/otterling/content/DomainBlocklistManager.kt):
   `DEFAULT_SOURCES` must not be emptied, and `isBlocked()` must not be short-circuited to always
   return `false` or made to ignore the loaded domain set.
 - `filter-server/mitm_nsfw_addon.py`: the block-on-domain-match / block-on-path-pattern / block-
