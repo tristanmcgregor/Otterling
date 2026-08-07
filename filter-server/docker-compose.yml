@@ -4,11 +4,12 @@ services:
     container_name: otterling-filter-server
     restart: unless-stopped
     ports:
-      # AdGuard Home's setup wizard / admin UI.
+      # Admin UI (AdGuard moves here after setup; keep it on 3000 — host firewall blocks docker→:80).
       - "${ADMIN_UI_PORT:-3000}:3000/tcp"
       # Plain DNS -- fallback/failsafe layer + used by anything not going through the proxy.
-      - "${DNS_PORT:-53}:53/tcp"
-      - "${DNS_PORT:-53}:53/udp"
+      # Bind to LAN IP so we don't clash with unbound/systemd-resolved on 127.0.0.1:53.
+      - "${DNS_BIND:-192.168.0.254}:${DNS_PORT:-53}:53/tcp"
+      - "${DNS_BIND:-192.168.0.254}:${DNS_PORT:-53}:53/udp"
     volumes:
       - ./work:/opt/adguardhome/work
       - ./conf:/opt/adguardhome/conf
