@@ -13,9 +13,9 @@ plane -- not in git)" table). This doc is the integration contract between the t
 
 ## What you need to do on the server
 
-`release.sh` doesn't know about this dashboard yet -- it needs to be taught to write two files to
-`/var/lib/otterling/review/` (create the directory if it doesn't exist; `chmod 755` it and
-`chmod 644` the files so the read-only bind-mounted Caddy container can read them):
+`release.sh` on the update host writes two files to `/var/lib/otterling/review/` (create the
+directory if it doesn't exist; `chmod 755` it and `chmod 644` the files so the read-only
+bind-mounted Caddy container can read them):
 
 - **`status.json`** -- the current/most recent run only, overwritten each time.
 - **`history.json`** -- a JSON array of past runs, most recent first, capped at some reasonable
@@ -129,5 +129,5 @@ docker run --rm caddy:alpine caddy hash-password --plaintext 'your-password-here
 docker compose up -d updates
 ```
 
-Until `release.sh` is updated to write `status.json`, the dashboard will show "No review data
-yet" -- that's expected, not a bug in this page.
+If `status.json` is missing, the dashboard shows "No review data yet" (no release has written
+status yet, or the host `release.sh` predates the dashboard wiring).

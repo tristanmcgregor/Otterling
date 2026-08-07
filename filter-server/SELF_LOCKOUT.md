@@ -135,10 +135,9 @@ Example success on commit `d8e50cc`: “AI approved — published v0.1.0”.
 `https://vpn.bartholomew.help/review` (HTTP Basic Auth -- see `.env.example`) shows the current/
 last release's status, the AI's full raw review output, and recent history. It's a static page in
 git (`filter-server/review-dashboard/`); the actual data comes from `/var/lib/otterling/review/`,
-which `release.sh` must be taught to write -- see
-[`review-dashboard/README.md`](review-dashboard/README.md) for the exact JSON shape and a
-drop-in reference snippet. Until `release.sh` writes those files, the page just says "no review
-data yet" -- that's expected.
+which `release.sh` writes on every run -- see
+[`review-dashboard/README.md`](review-dashboard/README.md) for the JSON shape. If those files
+are missing, the page says "no review data yet".
 
 ## Manual release (debug)
 
