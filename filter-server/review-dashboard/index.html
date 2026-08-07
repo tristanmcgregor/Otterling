@@ -18,6 +18,9 @@
     --fail: #f85149;
     --pending: #d29922;
     --idle: #6e7681;
+    --add: #3fb950;
+    --del: #f85149;
+    --hunk: #79c0ff;
   }
   @media (prefers-color-scheme: light) {
     :root {
@@ -34,31 +37,24 @@
     margin: 0;
     background: var(--bg);
     color: var(--text);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     padding: 24px;
-    max-width: 920px;
+    max-width: 1100px;
     margin-inline: auto;
   }
-  h1 {
-    font-size: 1.3rem;
-    margin: 0 0 4px;
-  }
-  .subtitle {
-    color: var(--text-dim);
-    font-size: 0.85rem;
-    margin-bottom: 24px;
-  }
+  h1 { font-size: 1.35rem; margin: 0 0 4px; }
+  .subtitle { color: var(--text-dim); font-size: 0.85rem; margin-bottom: 20px; }
   .panel {
     background: var(--panel);
     border: 1px solid var(--panel-border);
     border-radius: 12px;
-    padding: 20px;
-    margin-bottom: 20px;
+    padding: 18px 20px;
+    margin-bottom: 16px;
   }
   .status-row {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 10px;
     flex-wrap: wrap;
   }
   .badge {
@@ -75,11 +71,18 @@
   .badge.fail { background: color-mix(in srgb, var(--fail) 20%, transparent); color: var(--fail); }
   .badge.pending { background: color-mix(in srgb, var(--pending) 20%, transparent); color: var(--pending); }
   .badge.idle { background: color-mix(in srgb, var(--idle) 25%, transparent); color: var(--idle); }
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 10px;
+    border-radius: 999px;
+    background: var(--mono-bg);
+    border: 1px solid var(--panel-border);
+    font-size: 0.78rem;
+    color: var(--text-dim);
+  }
   .dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: currentColor;
+    width: 8px; height: 8px; border-radius: 50%; background: currentColor;
   }
   .pending .dot { animation: pulse 1.2s ease-in-out infinite; }
   @keyframes pulse {
@@ -89,34 +92,116 @@
   .meta {
     color: var(--text-dim);
     font-size: 0.85rem;
-    line-height: 1.6;
+    line-height: 1.65;
+    margin-top: 12px;
   }
-  .meta code {
+  .meta code, code {
     background: var(--mono-bg);
     padding: 1px 6px;
     border-radius: 4px;
     font-size: 0.82rem;
   }
-  .section-title {
+  .phases {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 14px;
+  }
+  .phase {
     font-size: 0.75rem;
+    padding: 4px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--panel-border);
+    color: var(--text-dim);
+  }
+  .phase.active {
+    border-color: var(--pending);
+    color: var(--pending);
+    background: color-mix(in srgb, var(--pending) 12%, transparent);
+  }
+  .phase.done {
+    border-color: var(--pass);
+    color: var(--pass);
+  }
+  .phase.failed {
+    border-color: var(--fail);
+    color: var(--fail);
+  }
+  .section-title {
+    font-size: 0.72rem;
     text-transform: uppercase;
     letter-spacing: 0.06em;
     color: var(--text-dim);
-    margin: 20px 0 8px;
+    margin: 0 0 8px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
   }
-  pre.ai-output {
+  .tabs {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin: 16px 0 10px;
+  }
+  .tab {
+    appearance: none;
+    border: 1px solid var(--panel-border);
+    background: transparent;
+    color: var(--text-dim);
+    border-radius: 999px;
+    padding: 5px 12px;
+    font-size: 0.8rem;
+    cursor: pointer;
+  }
+  .tab.active {
+    color: var(--text);
+    border-color: color-mix(in srgb, var(--text) 35%, var(--panel-border));
+    background: color-mix(in srgb, var(--text) 8%, transparent);
+  }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+  pre.mono {
     background: var(--mono-bg);
     border: 1px solid var(--panel-border);
     border-radius: 8px;
     padding: 14px;
-    font-size: 0.82rem;
+    font-size: 0.8rem;
     line-height: 1.5;
     white-space: pre-wrap;
     word-break: break-word;
-    max-height: 480px;
-    overflow-y: auto;
+    max-height: 560px;
+    overflow: auto;
     margin: 0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   }
+  pre.mono.stream-live::after {
+    content: "▍";
+    display: inline-block;
+    width: 0.55em;
+    margin-left: 2px;
+    background: var(--pending);
+    animation: pulse 1s steps(1) infinite;
+    vertical-align: text-bottom;
+  }
+  .diff-line.add { color: var(--add); }
+  .diff-line.del { color: var(--del); }
+  .diff-line.hunk { color: var(--hunk); }
+  .diff-line.meta { color: var(--text-dim); }
+  .file-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    max-height: 420px;
+    overflow: auto;
+  }
+  .file-list li {
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--panel-border);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.8rem;
+  }
+  .file-list li:last-child { border-bottom: none; }
   table {
     width: 100%;
     border-collapse: collapse;
@@ -131,16 +216,12 @@
   th {
     color: var(--text-dim);
     font-weight: 600;
-    font-size: 0.75rem;
+    font-size: 0.72rem;
     text-transform: uppercase;
     letter-spacing: 0.04em;
   }
   tr:last-child td { border-bottom: none; }
-  .empty {
-    color: var(--text-dim);
-    font-size: 0.9rem;
-    padding: 8px 0;
-  }
+  .empty { color: var(--text-dim); font-size: 0.9rem; padding: 8px 0; }
   .error-banner {
     background: color-mix(in srgb, var(--fail) 15%, transparent);
     border: 1px solid var(--fail);
@@ -148,7 +229,7 @@
     border-radius: 8px;
     padding: 12px 16px;
     font-size: 0.85rem;
-    margin-bottom: 20px;
+    margin-bottom: 16px;
     display: none;
   }
   .refresh-note {
@@ -156,27 +237,65 @@
     font-size: 0.75rem;
     text-align: right;
   }
+  .grid-2 {
+    display: grid;
+    grid-template-columns: 1.2fr 0.8fr;
+    gap: 16px;
+  }
+  @media (max-width: 800px) {
+    .grid-2 { grid-template-columns: 1fr; }
+  }
 </style>
 </head>
 <body>
   <h1>Otterling release review</h1>
-  <div class="subtitle">Server-side AI review status for the gated release pipeline -- see filter-server/SELF_LOCKOUT.md.</div>
+  <div class="subtitle">Live server-side AI review for the gated release pipeline — see <code>filter-server/SELF_LOCKOUT.md</code>.</div>
 
   <div id="error-banner" class="error-banner"></div>
 
   <div class="panel">
     <div class="status-row">
       <span id="status-badge" class="badge idle"><span class="dot"></span><span id="status-label">No data yet</span></span>
-      <span id="commit-sha" class="meta"></span>
+      <span id="phase-chip" class="chip" hidden></span>
+      <span id="commit-sha" class="chip" hidden></span>
+      <span id="stream-chip" class="chip" hidden>streaming</span>
     </div>
-    <div id="meta" class="meta" style="margin-top: 12px;"></div>
+    <div id="meta" class="meta">No release has run yet.</div>
+    <div id="phases" class="phases" hidden></div>
 
-    <div class="section-title">AI review output</div>
-    <pre id="ai-output" class="ai-output">Waiting for review-status.json...</pre>
+    <div class="tabs" role="tablist">
+      <button class="tab active" data-tab="ai" type="button">AI output</button>
+      <button class="tab" data-tab="files" type="button">Files</button>
+      <button class="tab" data-tab="diff" type="button">Diff</button>
+      <button class="tab" data-tab="stat" type="button">Diff stat</button>
+    </div>
+
+    <div id="tab-ai" class="tab-panel active">
+      <div class="section-title">
+        <span>Model reasoning (live)</span>
+        <span id="ai-meta" class="chip" hidden></span>
+      </div>
+      <pre id="ai-output" class="mono">Waiting for status.json…</pre>
+    </div>
+
+    <div id="tab-files" class="tab-panel">
+      <div class="section-title"><span>Changed files in review range</span><span id="files-count" class="chip" hidden></span></div>
+      <ul id="files-list" class="file-list"><li class="empty">No file list yet.</li></ul>
+    </div>
+
+    <div id="tab-diff" class="tab-panel">
+      <div class="section-title"><span>Cumulative diff</span><span id="diff-meta" class="chip" hidden></span></div>
+      <pre id="diff-output" class="mono">No diff published yet.</pre>
+    </div>
+
+    <div id="tab-stat" class="tab-panel">
+      <div class="section-title"><span>Diff --stat</span></div>
+      <pre id="stat-output" class="mono">No stat yet.</pre>
+    </div>
   </div>
 
   <div class="panel">
-    <div class="section-title" style="margin-top: 0;">Recent releases</div>
+    <div class="section-title" style="margin-top:0;">Recent releases</div>
     <div id="history-container"><div class="empty">No history yet.</div></div>
   </div>
 
@@ -184,7 +303,15 @@
 
 <script>
 const DATA_BASE = "/review-data";
-const POLL_MS = 5000;
+const POLL_IDLE_MS = 5000;
+const POLL_LIVE_MS = 1000;
+const PHASES = ["preparing", "ai_review", "building", "publishing", "done"];
+
+let pollTimer = null;
+let activeTab = "ai";
+let lastDiffUrl = null;
+let stickAiScroll = true;
+let stickDiffScroll = true;
 
 function escapeHtml(str) {
   return String(str ?? "").replace(/[&<>"']/g, (c) => ({
@@ -200,44 +327,158 @@ function badgeClassFor(state, verdict) {
 }
 
 function labelFor(state, verdict) {
-  if (state === "reviewing") return "Reviewing...";
+  if (state === "reviewing") return "Reviewing…";
   if (state === "done" && verdict === "PASS") return "PASS";
   if (state === "done" && verdict === "FAIL") return "FAIL";
   return "Idle";
 }
 
 function formatTime(iso) {
-  if (!iso) return "--";
+  if (!iso) return "—";
+  try { return new Date(iso).toLocaleString(); }
+  catch { return iso; }
+}
+
+function phaseLabel(phase) {
+  return ({
+    preparing: "Preparing",
+    ai_review: "AI review",
+    building: "Building APK",
+    publishing: "Publishing",
+    done: "Done",
+    failed: "Failed",
+  })[phase] || phase || "—";
+}
+
+function setChip(el, text, show) {
+  if (!show || !text) {
+    el.hidden = true;
+    el.textContent = "";
+    return;
+  }
+  el.hidden = false;
+  el.textContent = text;
+}
+
+function renderPhases(current, state, verdict) {
+  const wrap = document.getElementById("phases");
+  if (!current && state !== "reviewing") {
+    wrap.hidden = true;
+    wrap.innerHTML = "";
+    return;
+  }
+  wrap.hidden = false;
+  const failed = verdict === "FAIL" || current === "failed";
+  const doneIdx = PHASES.indexOf(current === "failed" ? "publishing" : (current || "preparing"));
+  wrap.innerHTML = PHASES.map((p, idx) => {
+    let cls = "phase";
+    if (failed && p === "done") cls += " failed";
+    else if (state === "done" && verdict === "PASS" && idx <= PHASES.indexOf("done")) cls += " done";
+    else if (p === current) cls += " active";
+    else if (doneIdx >= 0 && idx < doneIdx && state === "reviewing") cls += " done";
+    const label = p === "done" && failed ? "Failed" : phaseLabel(p);
+    return `<span class="${cls}">${escapeHtml(label)}</span>`;
+  }).join("");
+}
+
+function renderAi(data) {
+  const output = document.getElementById("ai-output");
+  const prevStick = stickAiScroll && (output.scrollTop + output.clientHeight >= output.scrollHeight - 40);
+  const text = data.ai_output
+    || (data.state === "reviewing"
+      ? (data.phase === "ai_review"
+          ? "Waiting for first tokens…"
+          : `In progress (${phaseLabel(data.phase)}) — AI output appears during the review phase.`)
+      : "No AI output recorded for this run.");
+  output.textContent = text;
+  output.classList.toggle("stream-live", !!data.ai_streaming);
+  setChip(document.getElementById("ai-meta"), data.model || "", !!data.model);
+  if (prevStick) output.scrollTop = output.scrollHeight;
+}
+
+function renderFiles(files) {
+  const list = document.getElementById("files-list");
+  const count = document.getElementById("files-count");
+  if (!Array.isArray(files) || files.length === 0) {
+    list.innerHTML = '<li class="empty">No file list yet.</li>';
+    setChip(count, "", false);
+    return;
+  }
+  setChip(count, `${files.length} files`, true);
+  list.innerHTML = files.map((f) => `<li>${escapeHtml(f)}</li>`).join("");
+}
+
+function colorizeDiff(text) {
+  return text.split("\n").map((line) => {
+    let cls = "";
+    if (line.startsWith("+++") || line.startsWith("---") || line.startsWith("diff ") || line.startsWith("index ")) cls = "meta";
+    else if (line.startsWith("@@")) cls = "hunk";
+    else if (line.startsWith("+")) cls = "add";
+    else if (line.startsWith("-")) cls = "del";
+    return `<span class="diff-line ${cls}">${escapeHtml(line) || " "}</span>`;
+  }).join("\n");
+}
+
+async function loadDiff(url) {
+  const el = document.getElementById("diff-output");
+  const meta = document.getElementById("diff-meta");
+  if (!url) {
+    el.textContent = "No diff published yet.";
+    setChip(meta, "", false);
+    return;
+  }
   try {
-    return new Date(iso).toLocaleString();
-  } catch {
-    return iso;
+    const res = await fetch(url, { cache: "no-store" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    let text = await res.text();
+    const bytes = new Blob([text]).size;
+    const truncated = text.length > 400_000;
+    if (truncated) text = text.slice(0, 400_000) + "\n\n…[diff truncated for display]";
+    const prevStick = stickDiffScroll && (el.scrollTop + el.clientHeight >= el.scrollHeight - 40);
+    el.innerHTML = colorizeDiff(text);
+    setChip(meta, truncated ? `~${Math.round(bytes / 1024)} KB (truncated)` : `${Math.round(bytes / 1024)} KB`, true);
+    if (prevStick) el.scrollTop = el.scrollHeight;
+  } catch (e) {
+    el.textContent = `Could not load diff: ${e.message || e}`;
+    setChip(meta, "", false);
   }
 }
 
 function renderStatus(data) {
   const badge = document.getElementById("status-badge");
   const label = document.getElementById("status-label");
-  const cls = badgeClassFor(data.state, data.verdict);
-  badge.className = "badge " + cls;
+  badge.className = "badge " + badgeClassFor(data.state, data.verdict);
   label.textContent = labelFor(data.state, data.verdict);
 
-  document.getElementById("commit-sha").innerHTML = data.commit_sha
-    ? `<code>${escapeHtml(data.commit_sha.slice(0, 12))}</code>`
-    : "";
+  setChip(document.getElementById("commit-sha"), data.commit_sha ? data.commit_sha.slice(0, 12) : "", !!data.commit_sha);
+  setChip(document.getElementById("phase-chip"), phaseLabel(data.phase), !!data.phase);
+  setChip(document.getElementById("stream-chip"), data.ai_streaming ? "streaming tokens" : "", !!data.ai_streaming);
 
-  const metaParts = [];
-  if (data.commit_message) metaParts.push(escapeHtml(data.commit_message));
-  if (data.started_at) metaParts.push(`Started: ${formatTime(data.started_at)}`);
-  if (data.finished_at) metaParts.push(`Finished: ${formatTime(data.finished_at)}`);
-  if (data.verdict_reason) metaParts.push(escapeHtml(data.verdict_reason));
-  if (data.published_version) metaParts.push(`Published: v${escapeHtml(data.published_version)}`);
-  document.getElementById("meta").innerHTML = metaParts.join(" &middot; ") || "No release has run yet.";
+  const parts = [];
+  if (data.commit_message) parts.push(escapeHtml(data.commit_message));
+  if (data.review_range) parts.push(`Range <code>${escapeHtml(data.review_range)}</code>`);
+  if (data.started_at) parts.push(`Started ${formatTime(data.started_at)}`);
+  if (data.finished_at) parts.push(`Finished ${formatTime(data.finished_at)}`);
+  if (data.verdict_reason) parts.push(escapeHtml(data.verdict_reason));
+  if (data.published_version) parts.push(`Published <code>v${escapeHtml(data.published_version)}</code>`);
+  if (data.updated_at && data.state === "reviewing") parts.push(`Updated ${formatTime(data.updated_at)}`);
+  document.getElementById("meta").innerHTML = parts.join(" · ") || "No release has run yet.";
 
-  const output = document.getElementById("ai-output");
-  output.textContent = data.ai_output || (data.state === "reviewing"
-    ? "Review in progress -- output will appear once the AI finishes."
-    : "No AI output recorded for this run.");
+  renderPhases(data.phase, data.state, data.verdict);
+  renderAi(data);
+  renderFiles(data.files_changed);
+
+  const stat = document.getElementById("stat-output");
+  stat.textContent = data.diff_stat || "No stat yet.";
+
+  if (data.diff_url && data.diff_url !== lastDiffUrl) {
+    lastDiffUrl = data.diff_url;
+    loadDiff(data.diff_url);
+  } else if (!data.diff_url) {
+    lastDiffUrl = null;
+  }
+
+  return data.state === "reviewing" || !!data.ai_streaming;
 }
 
 function renderHistory(list) {
@@ -249,16 +490,19 @@ function renderHistory(list) {
   const rows = list.map((entry) => {
     const cls = badgeClassFor(entry.state, entry.verdict);
     const label = labelFor(entry.state, entry.verdict);
+    const files = Array.isArray(entry.files_changed) ? entry.files_changed.length : "";
     return `<tr>
       <td><span class="badge ${cls}"><span class="dot"></span>${escapeHtml(label)}</span></td>
       <td><code>${escapeHtml((entry.commit_sha || "").slice(0, 12))}</code></td>
       <td>${escapeHtml(entry.commit_message || "")}</td>
+      <td>${escapeHtml(entry.review_range || "")}</td>
       <td>${escapeHtml(entry.published_version ? "v" + entry.published_version : "")}</td>
+      <td>${files !== "" ? files : "—"}</td>
       <td>${formatTime(entry.finished_at || entry.started_at)}</td>
     </tr>`;
   }).join("");
   container.innerHTML = `<table>
-    <thead><tr><th>Verdict</th><th>Commit</th><th>Message</th><th>Version</th><th>When</th></tr></thead>
+    <thead><tr><th>Verdict</th><th>Commit</th><th>Message</th><th>Range</th><th>Version</th><th>Files</th><th>When</th></tr></thead>
     <tbody>${rows}</tbody>
   </table>`;
 }
@@ -269,15 +513,20 @@ async function fetchJson(path) {
   return response.json();
 }
 
+function schedulePoll(live) {
+  clearTimeout(pollTimer);
+  pollTimer = setTimeout(refresh, live ? POLL_LIVE_MS : POLL_IDLE_MS);
+}
+
 async function refresh() {
   const errorBanner = document.getElementById("error-banner");
+  let live = false;
   try {
     const status = await fetchJson(`${DATA_BASE}/status.json`);
-    renderStatus(status);
+    live = renderStatus(status);
     errorBanner.style.display = "none";
-  } catch (error) {
-    errorBanner.textContent = "No review data yet -- release.sh hasn't been wired up to write "
-      + "status.json yet (see filter-server/review-dashboard/README.md), or no release has run.";
+  } catch {
+    errorBanner.textContent = "No review data yet — waiting for release.sh to write status.json.";
     errorBanner.style.display = "block";
   }
 
@@ -285,15 +534,33 @@ async function refresh() {
     const history = await fetchJson(`${DATA_BASE}/history.json`);
     renderHistory(history);
   } catch {
-    // History is best-effort -- the status banner above already reports the missing-data case.
+    // best-effort
   }
 
   document.getElementById("refresh-note").textContent =
-    `Last checked ${new Date().toLocaleTimeString()} -- refreshes every ${POLL_MS / 1000}s`;
+    `Last checked ${new Date().toLocaleTimeString()} — refreshes every ${live ? 1 : 5}s` +
+    (live ? " (live)" : "");
+  schedulePoll(live);
 }
 
+document.querySelectorAll(".tab").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    activeTab = btn.dataset.tab;
+    document.querySelectorAll(".tab").forEach((b) => b.classList.toggle("active", b === btn));
+    document.querySelectorAll(".tab-panel").forEach((p) => p.classList.toggle("active", p.id === `tab-${activeTab}`));
+  });
+});
+
+document.getElementById("ai-output").addEventListener("scroll", (e) => {
+  const el = e.target;
+  stickAiScroll = el.scrollTop + el.clientHeight >= el.scrollHeight - 40;
+});
+document.getElementById("diff-output").addEventListener("scroll", (e) => {
+  const el = e.target;
+  stickDiffScroll = el.scrollTop + el.clientHeight >= el.scrollHeight - 40;
+});
+
 refresh();
-setInterval(refresh, POLL_MS);
 </script>
 </body>
 </html>
