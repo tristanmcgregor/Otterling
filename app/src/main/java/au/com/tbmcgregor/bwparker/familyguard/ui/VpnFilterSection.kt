@@ -328,6 +328,9 @@ fun VpnFilterSection(context: Context) {
             onClick = {
                 proxyTestBusy = true
                 coroutineScope.launch {
+                    // Same as "Test filter server": persist the host field before probing, otherwise
+                    // editing the host box and tapping Test proxy still hits the previously saved host.
+                    cloudFilterSettings.setHost(cloudHost)
                     proxyPort.toIntOrNull()?.let { cloudFilterSettings.setProxyPort(it) }
                     cloudFilterSettings.setProxyUser(proxyUser)
                     cloudFilterSettings.setProxyPassword(proxyPassword)

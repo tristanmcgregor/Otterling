@@ -2,6 +2,7 @@ package au.com.tbmcgregor.bwparker.familyguard.content
 
 import android.util.Log
 import java.io.IOException
+import java.net.Inet4Address
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
@@ -167,7 +168,12 @@ class TcpRelayManager(
             // VpnFilterService), not the global Dispatchers.IO, so it's safe to block here
             // directly without an extra withContext hop.
             if (useProxy) {
-                socket.connect(InetSocketAddress(InetAddress.getByName(proxyConfig.host), proxyConfig.port), CONNECT_TIMEOUT_MS)
+                // Prefer IPv4 when the filter hostname has a stale/unused AAAA (Android often
+                // tries IPv6 first and the CONNECT never reaches the proxy).
+                val proxyAddr = InetAddress.getAllByName(proxyConfig.host)
+                    .firstOrNull { it is Inet4Address }
+                    ?: InetAddress.getByName(proxyConfig.host)
+                socket.connect(InetSocketAddress(proxyAddr, proxyConfig.port), CONNECT_TIMEOUT_MS)
                 socket.tcpNoDelay = true
                 // Prefer a real hostname (from a DNS answer this device itself already saw) over
                 // the bare destination IP on the CONNECT line -- purely cosmetic/best-effort: the
