@@ -13,7 +13,8 @@ GitHub webhook → https://vpn.bartholomew.help/hooks/github
 Host service (root) verifies secret → pulls that commit
         ↓
 AI review of last_published_sha..candidate (cumulative — not push parent..HEAD)
-  vs /var/lib/otterling/ci/checklist.md
+  Queued pushes coalesce to the newest tip — one review of last_published..tip,
+  not one build per intermediate commit.
         ↓
 PASS → sign APK → write /var/lib/otterling/updates/
       → update last_published_sha (+ manifest/index gitSha)
