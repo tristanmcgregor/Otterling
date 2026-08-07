@@ -12,16 +12,23 @@ GitHub webhook → https://vpn.bartholomew.help/hooks/github
         ↓
 Host service (root) verifies secret → pulls that commit
         ↓
-AI review vs /var/lib/otterling/ci/checklist.md
+AI review of last_published_sha..candidate (cumulative — not push parent..HEAD)
+  vs /var/lib/otterling/ci/checklist.md
         ↓
 PASS → sign APK → write /var/lib/otterling/updates/
-FAIL → refuse publish
+      → update last_published_sha (+ manifest/index gitSha)
+FAIL → refuse publish; last_published_sha unchanged
+      (next push still reviews the failed commits until fixed/reverted)
         ↓
 Commit status on GitHub: context otterling/release
   pending → success ("AI approved — published vX") or failure ("AI rejected: …")
         ↓
 Phones: Settings → App updates → Check for update
 ```
+
+**Why cumulative:** if commit A fails review and commit B is a tiny unrelated fix, reviewing
+only `B^..B` would miss A's changes still in the tree. The gate always diffs everything
+since the last *published* SHA (`/var/lib/otterling/updates/last_published_sha`).
 
 First successful publish (2026-08-07): `otterling-0.1.0.apk` at
 `https://vpn.bartholomew.help/updates/` with GitHub status `otterling/release` = success.
@@ -36,7 +43,7 @@ The live gate always uses the pinned host checklist. A release compares any cand
 |--------|------|
 | `otterling-github-webhook.service` | Listens `0.0.0.0:9070`; Caddy proxies `/hooks/github` |
 | `/var/lib/otterling/ci/webhook_server.py` | HMAC-verify + spawn release |
-| `/var/lib/otterling/ci/release.sh` | Pull → AI → sign → publish |
+| `/var/lib/otterling/ci/release.sh` | Pull → cumulative AI review → sign → publish |
 | `/var/lib/otterling/ci/github_status.sh` | Posts `otterling/release` commit status |
 | `/var/lib/otterling/ci/deploy_filter_server.sh` | Rsyncs AI-approved `filter-server/` onto live stack |
 | `/var/lib/otterling/ci/apps.conf` | Which monorepo components release may publish/deploy |
@@ -45,7 +52,9 @@ The live gate always uses the pinned host checklist. A release compares any cand
 | `/var/lib/otterling/ci/secrets.env` | Keys (mode 600, root only) |
 | `/var/lib/otterling/ci/secrets/release.jks` | Release signing keystore |
 | `/var/lib/otterling/ci/android-sdk` | Android SDK for `assembleRelease` |
-| `/var/lib/otterling/updates/` | Live APK + `manifest.json` |
+| `/var/lib/otterling/ci/release.lock` | Serializes overlapping releases (`flock`) |
+| `/var/lib/otterling/updates/` | Live APK + `manifest.json` + `index.json` |
+| `/var/lib/otterling/updates/last_published_sha` | Review base for the next release (updated only on PASS) |
 
 ## Host networking notes
 
@@ -119,10 +128,21 @@ Example success on commit `d8e50cc`: “AI approved — published v0.1.0”.
 ## Manual release (debug)
 
 ```bash
-sudo otterling-release --git-sha <commitsha> --before <parentsha>
-# or
+sudo otterling-release --git-sha <commitsha>
+# Emergency only (overrides last_published_sha; logged loudly):
+sudo otterling-release --git-sha <commitsha> --before <review-base-sha>
+# or a local tree (still prefers last_published_sha when that commit is in the tree):
 sudo otterling-release /home/admin/Otterling
 ```
+
+Seed / repair the review base (must match the live published APK's commit):
+
+```bash
+echo '<full-sha>' | sudo tee /var/lib/otterling/updates/last_published_sha
+sudo chmod 644 /var/lib/otterling/updates/last_published_sha
+```
+
+If `last_published_sha` is missing, releases **fail closed** (no publish) until seeded.
 
 Logs: `/var/lib/otterling/ci/logs/`
 
