@@ -70,6 +70,7 @@
                 <action android:name="au.com.tbmcgregor.bwparker.familyguard.DEBUG_STRIP_ADMIN" />
                 <action android:name="au.com.tbmcgregor.bwparker.familyguard.DEBUG_DISABLE" />
                 <action android:name="au.com.tbmcgregor.bwparker.familyguard.DEBUG_PERMIT_A11Y" />
+                <action android:name="au.com.tbmcgregor.bwparker.familyguard.DEBUG_ALLOW_UNINSTALL" />
             </intent-filter>
         </receiver>
 

@@ -85,6 +85,7 @@ import java.text.DateFormat
 import java.util.Date
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
@@ -125,10 +126,43 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * DEBUG-ONLY: clear Otterling uninstall-block / hide for packages (and default A2Y leftovers).
+     *   adb shell am start -n …/.MainActivity --ez clear_a2y_policies true -f 0x10008000
+     */
+    private fun applyDebugClearA2yPolicies(intent: Intent?) {
+        if (!isDebuggable) return
+        if (intent?.getBooleanExtra("clear_a2y_policies", false) != true) return
+        val dpm = getSystemService(android.app.admin.DevicePolicyManager::class.java) ?: return
+        val admin = android.content.ComponentName(
+            this,
+            au.com.tbmcgregor.bwparker.familyguard.admin.DeviceAdminReceiverImpl::class.java,
+        )
+        val targets = listOf(
+            "com.accountable2you.ap1.googleplay",
+            "com.accountable2you.reportsapp",
+        )
+        // Delete DB rows first so EnforcementService reapply can't immediately re-block.
+        kotlinx.coroutines.runBlocking {
+            val dao = au.com.tbmcgregor.bwparker.familyguard.data.AppDatabase
+                .getInstance(applicationContext).protectedAppDao()
+            targets.forEach { runCatching { dao.delete(it) } }
+        }
+        for (pkg in targets) {
+            runCatching { dpm.setUninstallBlocked(admin, pkg, false) }
+            runCatching { dpm.setApplicationHidden(admin, pkg, false) }
+            runCatching { dpm.setPackagesSuspended(admin, arrayOf(pkg), false) }
+        }
+        au.com.tbmcgregor.bwparker.familyguard.restrictions.AccessibilityGuard
+            .reapplyAllowlist(applicationContext)
+        android.util.Log.e("MainActivity", "Cleared A2Y leftover DPM policies for $targets")
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
         applyDebugUnsuspend(intent)
+        applyDebugClearA2yPolicies(intent)
         if (wantsDebugSettings(intent)) recreate()
     }
 
@@ -140,6 +174,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         applyDebugUnsuspend(intent)
+        applyDebugClearA2yPolicies(intent)
         requestNotificationPermissionIfNeeded()
         requestBatteryOptimizationExemptionIfNeeded()
         if (ProtectionController(applicationContext).isEnabled()) {

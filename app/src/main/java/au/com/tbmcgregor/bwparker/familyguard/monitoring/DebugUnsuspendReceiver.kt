@@ -34,6 +34,11 @@ import au.com.tbmcgregor.bwparker.familyguard.restrictions.PackageDisableStore
  * Re-apply accessibility allowlist:
  *   adb shell am broadcast -a au.com.tbmcgregor.bwparker.familyguard.DEBUG_PERMIT_A11Y \
  *     -n au.com.tbmcgregor.bwparker.familyguard/.monitoring.DebugUnsuspendReceiver
+ *
+ * Clear Otterling uninstall-block / unhide for packages (so they can be uninstalled):
+ *   adb shell am broadcast -a au.com.tbmcgregor.bwparker.familyguard.DEBUG_ALLOW_UNINSTALL \
+ *     -n au.com.tbmcgregor.bwparker.familyguard/.monitoring.DebugUnsuspendReceiver \
+ *     --esa packages com.accountable2you.ap1.googleplay
  */
 class DebugUnsuspendReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
@@ -44,6 +49,36 @@ class DebugUnsuspendReceiver : BroadcastReceiver() {
         Thread {
             try {
                 when {
+                    action.endsWith("DEBUG_ALLOW_UNINSTALL") -> {
+                        val dpm = context.getSystemService(DevicePolicyManager::class.java) ?: return@Thread
+                        val admin = ComponentName(context, DeviceAdminReceiverImpl::class.java)
+                        val dao = au.com.tbmcgregor.bwparker.familyguard.data.AppDatabase
+                            .getInstance(context).protectedAppDao()
+                        val fromArray = packages?.toList().orEmpty()
+                        val fromString = intent?.getStringExtra("package")
+                            ?.split(',')
+                            ?.map { it.trim() }
+                            ?.filter { it.isNotEmpty() }
+                            .orEmpty()
+                        val targets = (fromArray + fromString).ifEmpty {
+                            listOf(
+                                "com.accountable2you.ap1.googleplay",
+                                "com.accountable2you.reportsapp",
+                            )
+                        }
+                        Log.i(TAG, "DEBUG_ALLOW_UNINSTALL targets=$targets")
+                        for (pkg in targets) {
+                            runCatching { dpm.setUninstallBlocked(admin, pkg, false) }
+                                .onSuccess { Log.i(TAG, "setUninstallBlocked(false) ok $pkg") }
+                                .onFailure { Log.w(TAG, "setUninstallBlocked(false) failed for $pkg", it) }
+                            runCatching { dpm.setApplicationHidden(admin, pkg, false) }
+                                .onSuccess { Log.i(TAG, "setApplicationHidden(false) ok $pkg") }
+                                .onFailure { Log.w(TAG, "setApplicationHidden(false) failed for $pkg", it) }
+                            runCatching { dpm.setPackagesSuspended(admin, arrayOf(pkg), false) }
+                            kotlinx.coroutines.runBlocking { runCatching { dao.delete(pkg) } }
+                        }
+                        AccessibilityGuard.reapplyAllowlist(context)
+                    }
                     action.endsWith("DEBUG_PERMIT_A11Y") -> {
                         AccessibilityGuard.reapplyAllowlist(context)
                         Log.i(TAG, "Reapplied accessibility allowlist")
