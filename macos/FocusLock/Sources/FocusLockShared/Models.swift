@@ -26,7 +26,7 @@ public struct ProtectedApp: Codable, Hashable, Identifiable, Sendable {
     public var id: String { executableName }
     public let displayName: String
     public let executableName: String
-    /// Full path to the .app bundle, e.g. "/Applications/Accountable2You.app". Used both to
+    /// Full path to the .app bundle, e.g. "/Applications/Safari.app". Used both to
     /// apply the immutable flag and to relaunch it via `open`.
     public let bundlePath: String
 

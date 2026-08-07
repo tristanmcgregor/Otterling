@@ -25,14 +25,6 @@ object PackageBlockEnforcer {
             return
         }
 
-        if (CompanionAppGuard.isCompanion(packageName)) {
-            Log.i(TAG, "Skip block for companion app $packageName")
-            disableStore.undisable(packageName)
-            runCatching { dpm.setPackagesSuspended(admin, arrayOf(packageName), false) }
-            runCatching { dpm.setApplicationHidden(admin, packageName, false) }
-            return
-        }
-
         if (disableStore.isExempt(packageName)) {
             Log.i(TAG, "Skip block for $packageName -- user undisabled (exempt)")
             return

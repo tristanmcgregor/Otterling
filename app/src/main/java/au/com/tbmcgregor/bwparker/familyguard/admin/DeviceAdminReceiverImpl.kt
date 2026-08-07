@@ -7,7 +7,6 @@ import android.util.Log
 import au.com.tbmcgregor.bwparker.familyguard.R
 import au.com.tbmcgregor.bwparker.familyguard.monitoring.ProtectionEnforcementService
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.AccessibilityGuard
-import au.com.tbmcgregor.bwparker.familyguard.restrictions.CompanionAppGuard
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.DeviceRestrictionsManager
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.RestrictionEnforcementWorker
 import au.com.tbmcgregor.bwparker.familyguard.tamper.TamperEventLogger
@@ -24,9 +23,6 @@ class DeviceAdminReceiverImpl : DeviceAdminReceiver() {
         au.com.tbmcgregor.bwparker.familyguard.alerts.SmsPermissionGranter.grantSendSms(context)
         ProtectionEnforcementService.start(context)
         RestrictionEnforcementWorker.enqueuePeriodic(context)
-        CoroutineScope(Dispatchers.IO).launch {
-            CompanionAppGuard.reapplyAll(context)
-        }
     }
 
     override fun onDisabled(context: Context, intent: Intent) {

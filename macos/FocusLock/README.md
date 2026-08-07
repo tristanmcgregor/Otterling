@@ -114,12 +114,12 @@ focuslockctl set-filter-host vpn.bartholomew.help
 focuslockctl enable-dns
 focuslockctl add-domain reddit.com
 focuslockctl add-app "Steam" steam_osx
-focuslockctl add-protected-app "Accountable2You" Accountable2You "/Applications/Accountable2You.app"
+focuslockctl add-protected-app "Safari" Safari "/Applications/Safari.app"
 focuslockctl status
 ```
 
 For a protected app, `executableName` is the actual binary inside `Contents/MacOS/` (usually,
-but not always, the same as the app's display name -- check with `ls "/Applications/Accountable2You.app/Contents/MacOS/"`
+but not always, the same as the app's display name -- check with `ls "/Applications/Safari.app/Contents/MacOS/"`
 if unsure), and `bundlePath` is the full path to the `.app` itself. The GUI's "+ Protect App..."
 button fills both in for you from a file picker.
 

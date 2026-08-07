@@ -9,7 +9,7 @@ import au.com.tbmcgregor.bwparker.familyguard.admin.DeviceAdminReceiverImpl
 
 /**
  * Best-effort helpers for apps that refuse [DevicePolicyManager.setPackagesSuspended] because they
- * are an active device admin (e.g. Accountable2You).
+ * are an active device admin.
  *
  * Android will not let a Device Owner strip another production app's device admin, so callers
  * should fall back to [PackageDisableStore] when this returns false.

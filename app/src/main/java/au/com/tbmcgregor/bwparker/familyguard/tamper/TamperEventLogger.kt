@@ -15,7 +15,6 @@ class TamperEventLogger(context: Context) {
             "ACCESSIBILITY_DISABLED",
             "ADMIN_DISABLE_REQUESTED",
             "PROTECTION_OFF",
-            "COMPANION_A11Y_DISABLED",
             -> AlertSeverity.CRITICAL
             "RESTRICTION_DRIFT" -> AlertSeverity.WARNING
             else -> AlertSeverity.INFO

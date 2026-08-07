@@ -23,15 +23,11 @@ import au.com.tbmcgregor.bwparker.familyguard.focus.FocusGuardAccessibilityServi
  *   see `AccessibilityGuardActivity`.
  * - [reapplyAllowlist] closes the one real gap that would otherwise remain: without it, the user
  *   could enable a *different* accessibility service as a workaround for whatever ours enforces.
- *   The allowlist always includes this app, currently-enabled accessibility packages, and known
- *   companion apps (e.g. Accountable2You) so those don't get locked out after a suspend/hide cycle.
+ *   The allowlist always includes this app, currently-enabled accessibility packages, and any
+ *   packages previously remembered via [permitPackage].
  */
 object AccessibilityGuard {
     private const val TAG = "AccessibilityGuard"
-
-    /** Accountability / companion apps whose accessibility we always keep permitted. */
-    val ALWAYS_PERMITTED_PACKAGES: List<String>
-        get() = CompanionAppGuard.PACKAGES
 
     fun ourComponentName(context: Context): String =
         ComponentName(context, FocusGuardAccessibilityService::class.java).flattenToString()
@@ -56,24 +52,24 @@ object AccessibilityGuard {
 
     /**
      * Re-derives the permitted-accessibility-services allowlist from currently enabled packages,
-     * this app, [ALWAYS_PERMITTED_PACKAGES], and any packages previously remembered via
-     * [permitPackage]. Safe to call repeatedly/periodically.
+     * this app, and any packages previously remembered via [permitPackage]. Safe to call
+     * repeatedly/periodically.
      */
     fun reapplyAllowlist(context: Context) {
         val dpm = context.getSystemService(DevicePolicyManager::class.java) ?: return
         val admin = ComponentName(context, DeviceAdminReceiverImpl::class.java)
         val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val remembered = prefs.getStringSet(KEY_PERMITTED, emptySet()).orEmpty()
+            .filterNot { it in LEGACY_REMOVED_PACKAGES }
         val currentlyEnabledPackages = enabledComponents(context)
             ?.mapNotNull { it.substringBefore('/', missingDelimiterValue = "").takeIf(String::isNotBlank) }
+            ?.filterNot { it in LEGACY_REMOVED_PACKAGES }
             ?: emptyList()
         val allowlist = (
             currentlyEnabledPackages +
                 context.packageName +
-                ALWAYS_PERMITTED_PACKAGES +
                 remembered
             ).distinct()
-        // Remember current allowlist members so a temporary disable of A2Y doesn't lock it out.
         prefs.edit().putStringSet(KEY_PERMITTED, allowlist.toSet()).apply()
         try {
             dpm.setPermittedAccessibilityServices(admin, allowlist)
@@ -86,6 +82,7 @@ object AccessibilityGuard {
 
     /** Adds [packageName] to the remembered permit list and reapplies immediately. */
     fun permitPackage(context: Context, packageName: String) {
+        if (packageName in LEGACY_REMOVED_PACKAGES) return
         val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val next = prefs.getStringSet(KEY_PERMITTED, emptySet()).orEmpty().toMutableSet()
         next.add(packageName)
@@ -95,4 +92,10 @@ object AccessibilityGuard {
 
     private const val PREFS_NAME = "accessibility_guard"
     private const val KEY_PERMITTED = "permitted_packages"
+
+    /** Former companion packages no longer shielded by Otterling. */
+    private val LEGACY_REMOVED_PACKAGES = setOf(
+        "com.accountable2you.ap1.googleplay",
+        "com.accountable2you.reportsapp",
+    )
 }

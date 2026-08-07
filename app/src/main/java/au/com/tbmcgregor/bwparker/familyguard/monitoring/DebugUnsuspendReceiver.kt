@@ -11,7 +11,6 @@ import android.util.Log
 import au.com.tbmcgregor.bwparker.familyguard.admin.DeviceAdminReceiverImpl
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.AccessibilityGuard
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.ActiveAdminRemover
-import au.com.tbmcgregor.bwparker.familyguard.restrictions.CompanionAppGuard
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.PackageDisableStore
 
 /**
@@ -22,17 +21,17 @@ import au.com.tbmcgregor.bwparker.familyguard.restrictions.PackageDisableStore
  *   adb shell am broadcast -a au.com.tbmcgregor.bwparker.familyguard.DEBUG_UNSUSPEND \
  *     -n au.com.tbmcgregor.bwparker.familyguard/.monitoring.DebugUnsuspendReceiver
  *
- * Strip admin + suspend / hide (e.g. Accountable2You):
+ * Strip admin + suspend / hide:
  *   adb shell am broadcast -a au.com.tbmcgregor.bwparker.familyguard.DEBUG_STRIP_ADMIN \
  *     -n au.com.tbmcgregor.bwparker.familyguard/.monitoring.DebugUnsuspendReceiver \
- *     --esa packages com.accountable2you.ap1.googleplay
+ *     --esa packages com.example.target
  *
  * Force hide/disable (skip suspend):
  *   adb shell am broadcast -a au.com.tbmcgregor.bwparker.familyguard.DEBUG_DISABLE \
  *     -n au.com.tbmcgregor.bwparker.familyguard/.monitoring.DebugUnsuspendReceiver \
- *     --esa packages com.accountable2you.ap1.googleplay
+ *     --esa packages com.example.target
  *
- * Re-permit companion accessibility (Accountable2You etc.):
+ * Re-apply accessibility allowlist:
  *   adb shell am broadcast -a au.com.tbmcgregor.bwparker.familyguard.DEBUG_PERMIT_A11Y \
  *     -n au.com.tbmcgregor.bwparker.familyguard/.monitoring.DebugUnsuspendReceiver
  */
@@ -46,17 +45,8 @@ class DebugUnsuspendReceiver : BroadcastReceiver() {
             try {
                 when {
                     action.endsWith("DEBUG_PERMIT_A11Y") -> {
-                        AccessibilityGuard.ALWAYS_PERMITTED_PACKAGES.forEach {
-                            AccessibilityGuard.permitPackage(context, it)
-                        }
                         AccessibilityGuard.reapplyAllowlist(context)
-                        Log.i(TAG, "Reapplied accessibility allowlist including companions")
-                    }
-                    action.endsWith("DEBUG_PROTECT_COMPANIONS") -> {
-                        kotlinx.coroutines.runBlocking {
-                            CompanionAppGuard.reapplyAll(context)
-                        }
-                        Log.i(TAG, "Companion protections reapplied")
+                        Log.i(TAG, "Reapplied accessibility allowlist")
                     }
                     action.endsWith("DEBUG_DISABLE") -> {
                         val disableStore = PackageDisableStore(context)

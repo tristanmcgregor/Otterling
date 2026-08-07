@@ -22,7 +22,6 @@ import au.com.tbmcgregor.bwparker.familyguard.focus.HabitShareSyncManager
 import au.com.tbmcgregor.bwparker.familyguard.focus.RewardLedgerManager
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.AccessibilityGuard
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.AppUninstallGuard
-import au.com.tbmcgregor.bwparker.familyguard.restrictions.CompanionAppGuard
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.DeviceRestrictionsManager
 import au.com.tbmcgregor.bwparker.familyguard.tamper.AccessibilityGuardActivity
 import au.com.tbmcgregor.bwparker.familyguard.tamper.TamperEventLogger
@@ -68,8 +67,6 @@ class ProtectionEnforcementService : Service() {
             val rewardLedgerManager = RewardLedgerManager(applicationContext)
             val habitRuleManager = HabitRuleManager(applicationContext)
             loopJob = scope.launch {
-                runCatching { CompanionAppGuard.reapplyAll(applicationContext) }
-                    .onFailure { Log.w(TAG, "Companion protection reapply failed", it) }
                 runCatching { suspensionManager.reapplyAll() }
                     .onFailure { Log.w(TAG, "Blocked-app reapply failed", it) }
                 runCatching { uninstallGuard.reapplyAll() }
@@ -79,8 +76,6 @@ class ProtectionEnforcementService : Service() {
                         stopSelf()
                         break
                     }
-                    runCatching { CompanionAppGuard.reapplyAll(applicationContext) }
-                        .onFailure { Log.w(TAG, "Companion protection reapply failed", it) }
                     runCatching { AlertReporter(applicationContext).flushOutbox() }
                         .onFailure { Log.w(TAG, "SMS outbox flush failed", it) }
                     runCatching { restrictionsManager.detectDriftAndReapply(tamperLogger) }
@@ -153,26 +148,6 @@ class ProtectionEnforcementService : Service() {
                 )
             }
             AccessibilityGuardActivity.launch(applicationContext)
-        }
-        // Companion (Accountable2You) accessibility should stay on when installed.
-        val enabled = Settings.Secure.getString(
-            contentResolver,
-            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
-        ).orEmpty()
-        for (pkg in CompanionAppGuard.PACKAGES) {
-            val installed = runCatching {
-                packageManager.getApplicationInfo(pkg, 0)
-                true
-            }.getOrDefault(false)
-            if (!installed) continue
-            if (!enabled.contains(pkg, ignoreCase = true)) {
-                scope.launch {
-                    tamperLogger.log(
-                        type = "COMPANION_A11Y_DISABLED",
-                        details = "Companion accessibility off for $pkg",
-                    )
-                }
-            }
         }
     }
 

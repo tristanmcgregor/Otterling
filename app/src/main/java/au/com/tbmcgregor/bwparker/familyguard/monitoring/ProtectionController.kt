@@ -5,16 +5,18 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
+import android.os.Build
 import android.util.Log
 import au.com.tbmcgregor.bwparker.familyguard.admin.DeviceAdminReceiverImpl
 import au.com.tbmcgregor.bwparker.familyguard.content.AppSuspensionManager
 import au.com.tbmcgregor.bwparker.familyguard.content.VpnFilterManager
+import au.com.tbmcgregor.bwparker.familyguard.data.AppDatabase
 import au.com.tbmcgregor.bwparker.familyguard.focus.BudgetEnforcer
 import au.com.tbmcgregor.bwparker.familyguard.focus.HabitRuleManager
 import au.com.tbmcgregor.bwparker.familyguard.focus.RewardAppManager
 import au.com.tbmcgregor.bwparker.familyguard.focus.RewardLedgerManager
+import au.com.tbmcgregor.bwparker.familyguard.restrictions.AccessibilityGuard
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.AppUninstallGuard
-import au.com.tbmcgregor.bwparker.familyguard.restrictions.CompanionAppGuard
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.DeviceRestrictionsManager
 import au.com.tbmcgregor.bwparker.familyguard.restrictions.PackageDisableStore
 import au.com.tbmcgregor.bwparker.familyguard.tamper.TamperEventLogger
@@ -56,7 +58,11 @@ class ProtectionController(private val context: Context) {
 
         DeviceRestrictionsManager(context).clearAllFromSystem()
         AppUninstallGuard(context).releaseAll()
-        CompanionAppGuard.clearUserControlLocks(context)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val dpm = context.getSystemService(DevicePolicyManager::class.java)
+            val admin = ComponentName(context, DeviceAdminReceiverImpl::class.java)
+            runCatching { dpm?.setUserControlDisabledPackages(admin, emptyList()) }
+        }
 
         TamperEventLogger(context).log(
             type = "PROTECTION_OFF",
@@ -68,7 +74,7 @@ class ProtectionController(private val context: Context) {
         setEnabled(true)
         DeviceRestrictionsManager(context).reapplyDesiredFromPreferences()
         au.com.tbmcgregor.bwparker.familyguard.alerts.SmsPermissionGranter.grantSendSms(context)
-        CompanionAppGuard.reapplyAll(context)
+        clearLegacyCompanionProtections()
         AppUninstallGuard(context).reapplyAll()
         ProtectionEnforcementService.start(context)
         if (prefs.getBoolean(KEY_VPN_WAS_ON, false)) {
@@ -79,6 +85,25 @@ class ProtectionController(private val context: Context) {
         BudgetEnforcer(context).reapplyAll()
         RewardLedgerManager(context).reapply()
         AppSuspensionManager(context).reapplyAll()
+    }
+
+    /**
+     * One-shot cleanup for the old Accountable2You companion shield (uninstall block, user-control
+     * lock, protected-app DB row). Safe to call every startup.
+     */
+    private suspend fun clearLegacyCompanionProtections() {
+        val dpm = context.getSystemService(DevicePolicyManager::class.java) ?: return
+        val admin = ComponentName(context, DeviceAdminReceiverImpl::class.java)
+        if (!dpm.isDeviceOwnerApp(context.packageName)) return
+        val dao = AppDatabase.getInstance(context).protectedAppDao()
+        for (pkg in LEGACY_COMPANION_PACKAGES) {
+            runCatching { dpm.setUninstallBlocked(admin, pkg, false) }
+            runCatching { dao.delete(pkg) }
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            runCatching { dpm.setUserControlDisabledPackages(admin, listOf(context.packageName)) }
+        }
+        AccessibilityGuard.reapplyAllowlist(context)
     }
 
     /**
@@ -135,5 +160,9 @@ class ProtectionController(private val context: Context) {
         const val PREFS_NAME = "protection_controller"
         const val KEY_ENABLED = "enabled"
         const val KEY_VPN_WAS_ON = "vpn_was_on_before_shutdown"
+        val LEGACY_COMPANION_PACKAGES = listOf(
+            "com.accountable2you.ap1.googleplay",
+            "com.accountable2you.reportsapp",
+        )
     }
 }

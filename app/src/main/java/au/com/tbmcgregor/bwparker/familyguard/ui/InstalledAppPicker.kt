@@ -32,8 +32,8 @@ data class InstalledAppInfo(
 
 /**
  * Returns installed apps (excluding this app), sorted by display name. Call this off the main
- * thread. Deliberately does NOT require a launcher icon/intent -- apps like Accountable2You
- * commonly hide their icon so kids can't easily find and remove them, so filtering by
+ * thread. Deliberately does NOT require a launcher icon/intent -- some apps hide their
+ * launcher icon, so filtering by
  * [PackageManager.getLaunchIntentForPackage] would hide exactly the apps a parent most wants to
  * find here. As device owner this app can see all installed packages regardless of Android's
  * normal package-visibility filtering. Pure factory system apps (no user-visible purpose, never

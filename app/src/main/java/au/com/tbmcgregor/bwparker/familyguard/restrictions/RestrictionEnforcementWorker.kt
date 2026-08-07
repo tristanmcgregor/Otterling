@@ -31,8 +31,6 @@ class RestrictionEnforcementWorker(context: Context, params: WorkerParameters) :
         val tamperLogger = TamperEventLogger(applicationContext)
         runCatching { restrictionsManager.detectDriftAndReapply(tamperLogger) }
             .onFailure { Log.w(TAG, "Restriction drift check failed", it) }
-        runCatching { CompanionAppGuard.reapplyAll(applicationContext) }
-            .onFailure { Log.w(TAG, "Companion protection reapply failed", it) }
         runCatching { AppSuspensionManager(applicationContext).reapplyAll() }
             .onFailure { Log.w(TAG, "Blocked-app reapply failed", it) }
         runCatching { AppUninstallGuard(applicationContext).reapplyAll() }
