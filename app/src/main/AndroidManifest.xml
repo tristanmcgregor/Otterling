@@ -66,11 +66,11 @@
             android:name=".monitoring.DebugUnsuspendReceiver"
             android:exported="true">
             <intent-filter>
-                <action android:name="au.com.tbmcgregor.bwparker.familyguard.DEBUG_UNSUSPEND" />
-                <action android:name="au.com.tbmcgregor.bwparker.familyguard.DEBUG_STRIP_ADMIN" />
-                <action android:name="au.com.tbmcgregor.bwparker.familyguard.DEBUG_DISABLE" />
-                <action android:name="au.com.tbmcgregor.bwparker.familyguard.DEBUG_PERMIT_A11Y" />
-                <action android:name="au.com.tbmcgregor.bwparker.familyguard.DEBUG_ALLOW_UNINSTALL" />
+                <action android:name="${applicationId}.DEBUG_UNSUSPEND" />
+                <action android:name="${applicationId}.DEBUG_STRIP_ADMIN" />
+                <action android:name="${applicationId}.DEBUG_DISABLE" />
+                <action android:name="${applicationId}.DEBUG_PERMIT_A11Y" />
+                <action android:name="${applicationId}.DEBUG_ALLOW_UNINSTALL" />
             </intent-filter>
         </receiver>
 

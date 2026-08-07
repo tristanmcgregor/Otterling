@@ -5,8 +5,7 @@ Samsung Knox parental-control app for Android 9+ (`minSdk 28`).
 ## Phase 1 setup
 
 1. Install Android Studio with Android SDK 37.
-2. Generate a Knox development key for
-   `au.com.tbmcgregor.bwparker.familyguard`.
+2. Generate a Knox development key for `app.otterling`.
 3. Download the current `knoxsdk.jar` from the Knox Developer Portal and place
    it at `app/libs/knoxsdk.jar`.
 4. Copy `local.properties.example` to `local.properties`, set `sdk.dir`, and
@@ -32,14 +31,14 @@ added yet).
    command shown in the "Device Admin / Device Owner" section (also shown in
    Logcat-free form here):
    ```
-   adb shell dpm set-device-owner au.com.tbmcgregor.bwparker.familyguard/.admin.DeviceAdminReceiverImpl
+   adb shell dpm set-device-owner app.otterling/.admin.DeviceAdminReceiverImpl
    ```
 3. Reopen the app and tap **Refresh status** — it should report
    `Device owner: true`.
 4. If you need to uninstall/rebuild, first remove the admin or the app can't
    be uninstalled normally:
    ```
-   adb shell dpm remove-active-admin au.com.tbmcgregor.bwparker.familyguard/.admin.DeviceAdminReceiverImpl
+   adb shell dpm remove-active-admin app.otterling/.admin.DeviceAdminReceiverImpl
    ```
 
 ## Phase 3 — Tamper resistance

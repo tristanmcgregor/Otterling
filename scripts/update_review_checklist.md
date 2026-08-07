@@ -167,7 +167,9 @@ allow list below.
   the admin-group check.
 - Any change to `applicationId`/package name, or to the Device Admin/VPN/accessibility service
   class names referenced by `AndroidManifest.xml`, without an equally thorough migration plan --
-  these are load-bearing for existing enrolled devices. On macOS, FAIL renaming the LaunchDaemon /
+  these are load-bearing for existing enrolled devices. (Intentional product renames for a
+  **new** install line, e.g. to `app.otterling`, are allowed when Device Owner will be
+  re-provisioned from scratch.) On macOS, FAIL renaming the LaunchDaemon /
   Mach service identifiers in a way that orphans existing installs without a migration plan.
 - Obfuscated, minified-looking, or otherwise hard-to-read code introduced specifically in one of
   the files above, where the rest of the diff is unrelated -- treat unexplained complexity in a

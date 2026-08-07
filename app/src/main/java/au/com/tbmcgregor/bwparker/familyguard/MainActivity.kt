@@ -99,7 +99,7 @@ class MainActivity : ComponentActivity() {
      * Does NOT alter the normal Home -> PinEntry -> Settings flow; it's purely an extra entry point.
      *
      * Trigger it with:
-     *   adb shell am start -n au.com.tbmcgregor.bwparker.familyguard/.MainActivity --ez open_settings true
+     *   adb shell am start -n app.otterling/.MainActivity --ez open_settings true
      */
     private val isDebuggable
         get() = (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0

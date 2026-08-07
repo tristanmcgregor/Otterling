@@ -10,7 +10,7 @@ au.com.hotdoc.android.hotdoc
 au.com.newtracs.Newtracs
 au.com.suncorp.marketplace
 au.com.suncorp.rsa.suncorpsecured
-au.com.tbmcgregor.bwparker.familyguard
+app.otterling
 au.com.up.money
 au.gov.ato.mygovid.droid
 au.gov.qld.tmr.mdl.app

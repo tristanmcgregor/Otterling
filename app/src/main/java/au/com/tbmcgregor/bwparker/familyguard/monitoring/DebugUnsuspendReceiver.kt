@@ -18,26 +18,26 @@ import au.com.tbmcgregor.bwparker.familyguard.restrictions.PackageDisableStore
  * disable it when suspend fails.
  *
  * Clear all suspensions:
- *   adb shell am broadcast -a au.com.tbmcgregor.bwparker.familyguard.DEBUG_UNSUSPEND \
- *     -n au.com.tbmcgregor.bwparker.familyguard/.monitoring.DebugUnsuspendReceiver
+ *   adb shell am broadcast -a app.otterling.DEBUG_UNSUSPEND \
+ *     -n app.otterling/.monitoring.DebugUnsuspendReceiver
  *
  * Strip admin + suspend / hide:
- *   adb shell am broadcast -a au.com.tbmcgregor.bwparker.familyguard.DEBUG_STRIP_ADMIN \
- *     -n au.com.tbmcgregor.bwparker.familyguard/.monitoring.DebugUnsuspendReceiver \
+ *   adb shell am broadcast -a app.otterling.DEBUG_STRIP_ADMIN \
+ *     -n app.otterling/.monitoring.DebugUnsuspendReceiver \
  *     --esa packages com.example.target
  *
  * Force hide/disable (skip suspend):
- *   adb shell am broadcast -a au.com.tbmcgregor.bwparker.familyguard.DEBUG_DISABLE \
- *     -n au.com.tbmcgregor.bwparker.familyguard/.monitoring.DebugUnsuspendReceiver \
+ *   adb shell am broadcast -a app.otterling.DEBUG_DISABLE \
+ *     -n app.otterling/.monitoring.DebugUnsuspendReceiver \
  *     --esa packages com.example.target
  *
  * Re-apply accessibility allowlist:
- *   adb shell am broadcast -a au.com.tbmcgregor.bwparker.familyguard.DEBUG_PERMIT_A11Y \
- *     -n au.com.tbmcgregor.bwparker.familyguard/.monitoring.DebugUnsuspendReceiver
+ *   adb shell am broadcast -a app.otterling.DEBUG_PERMIT_A11Y \
+ *     -n app.otterling/.monitoring.DebugUnsuspendReceiver
  *
  * Clear Otterling uninstall-block / unhide for packages (so they can be uninstalled):
- *   adb shell am broadcast -a au.com.tbmcgregor.bwparker.familyguard.DEBUG_ALLOW_UNINSTALL \
- *     -n au.com.tbmcgregor.bwparker.familyguard/.monitoring.DebugUnsuspendReceiver \
+ *   adb shell am broadcast -a app.otterling.DEBUG_ALLOW_UNINSTALL \
+ *     -n app.otterling/.monitoring.DebugUnsuspendReceiver \
  *     --esa packages com.accountable2you.ap1.googleplay
  */
 class DebugUnsuspendReceiver : BroadcastReceiver() {

@@ -43,11 +43,12 @@ android {
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "au.com.tbmcgregor.bwparker.familyguard"
+        // Product package for new installs (Kotlin source namespace stays historical).
+        applicationId = "app.otterling"
         minSdk = 28
         targetSdk = 36
-        versionCode = 3
-        versionName = "0.1.2"
+        versionCode = 4
+        versionName = "0.1.3"
 
         buildConfigField("String", "KNOX_LICENSE_KEY", "\"$escapedKnoxLicenseKey\"")
         // Empty in any build that isn't the Guardian-approved CI release build -- ApprovedUpdateManager
