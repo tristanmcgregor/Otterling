@@ -204,12 +204,13 @@ restriction (Phase 3) on a production device so sideloading itself requires the 
 disable a restriction first, not just a phone plugged into a laptop. The signed, gated pipeline
 above is what a deployed device should actually update through.
 
-**Required GitHub repo setup** (see the workflow file's comments for the exact secret names): a
-`release` Environment with a required reviewer, the release keystore + passwords as environment
-secrets, `RELEASE_CERT_SHA256` (the release cert's own SHA-256 fingerprint, computed once after
-generating the keystore), an `ANTHROPIC_API_KEY` for the AI review step, and SSH details for the
-update host. None of these belong in `local.properties` on a daily dev machine -- see that file's
-example for which fields are CI-only.
+**Required GitHub repo setup** (see the workflow file's comments for the exact secret names): the
+release keystore + passwords as Actions secrets, `RELEASE_CERT_SHA256` (the release cert's own
+SHA-256 fingerprint, computed once after generating the keystore), an `ANTHROPIC_API_KEY` for the
+AI review step, and SSH details for the update host (`UPDATE_HOST`,
+`UPDATE_HOST_SSH_USER=otterling-deploy`, `UPDATE_HOST_SSH_KEY`). None of these belong in
+`local.properties` on a daily dev machine. For keeping publishes off daily accounts, see
+[`filter-server/SELF_LOCKOUT.md`](filter-server/SELF_LOCKOUT.md).
 
 ## Secret handling
 

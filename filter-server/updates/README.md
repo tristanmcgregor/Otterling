@@ -1,21 +1,20 @@
-# Updates directory
+# Updates directory (git tree)
 
-Served as-is over HTTPS at `https://<UPDATE_HOST>/updates/` by the `updates` (Caddy) service in
-`docker-compose.yml`. Everything in this directory except this README is gitignored -- it's
-publish output, not source.
+This folder in git only keeps documentation. **Published APKs and `manifest.json` are not here.**
 
-`.github/workflows/update-review.yml`'s `sign-and-publish` job (which runs after AI review
-returns `VERDICT: PASS`) `scp`s two files
-here on every release:
+On the production host they live at:
 
-- `manifest.json` -- `{"versionCode": N, "versionName": "...", "apkUrl": "...", "sha256": "..."}`,
-  overwritten each release. This is what the Otterling app's `ApprovedUpdateManager.checkForUpdate()`
-  fetches.
-- `otterling-<versionName>.apk` -- the signed release build itself, referenced by `manifest.json`'s
-  `apkUrl`. Old versions can be deleted manually once no device needs to fall back to them;
-  nothing here does that automatically.
+```text
+/var/lib/otterling/updates/
+```
 
-Nothing should ever be written into this directory by hand except for initial testing --
-`manifest.json`/the APK should only ever come from an AI-approved CI run, or the phone would
-be trusting whatever's placed here instead of the actual reviewed-and-signed chain (see
-`scripts/update_review_checklist.md`).
+owned by `otterling-deploy`, written only over SFTP from GitHub Actions after AI
+`VERDICT: PASS`. Caddy mounts that path read-only. See
+[`SELF_LOCKOUT.md`](../SELF_LOCKOUT.md).
+
+`.github/workflows/update-review.yml`'s `sign-and-publish` job uploads:
+
+- `manifest.json` -- fetched by `ApprovedUpdateManager.checkForUpdate()`
+- `otterling-<versionName>.apk` -- referenced by `manifest.json`'s `apkUrl`
+
+Do not hand-copy APKs into that directory on the server from a daily account.

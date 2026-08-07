@@ -2,8 +2,13 @@
 # top-level README's "Gated updates" section. Caddy handles Let's Encrypt automatically as long as
 # ports 80/443 are reachable from the internet for the ACME challenge (same grey-cloud DNS setup
 # already used for the DNS/proxy services -- see the main README's "Production host" section).
+#
+# Files live on the host at /var/lib/otterling/updates (writable only by otterling-deploy via
+# SFTP from CI). Served at https://<UPDATE_HOST>/updates/...
 {$UPDATE_HOST:vpn.bartholomew.help} {
-	root * /srv/updates
-	file_server
+	handle_path /updates/* {
+		root * /srv/updates
+		file_server
+	}
 	encode gzip
 }

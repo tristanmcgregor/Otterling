@@ -58,7 +58,8 @@ services:
     environment:
       - UPDATE_HOST=${UPDATE_HOST:-vpn.bartholomew.help}
     volumes:
-      - ./updates:/srv/updates:ro
+      # Host path is owned by otterling-deploy (CI SFTP only). Not the git checkout.
+      - /var/lib/otterling/updates:/srv/updates:ro
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - ./caddy-data:/data
       - ./caddy-config:/config

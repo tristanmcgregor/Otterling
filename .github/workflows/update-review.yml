@@ -125,7 +125,8 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
           version_name="${{ steps.manifest.outputs.version_name }}"
-          scp -i ~/.ssh/deploy_key "${{ steps.manifest.outputs.apk_path }}" \
-            "$SSH_USER@$SSH_HOST:filter-server/updates/otterling-$version_name.apk"
-          scp -i ~/.ssh/deploy_key manifest.json \
-            "$SSH_USER@$SSH_HOST:filter-server/updates/manifest.json"
+          # otterling-deploy is chrooted to /var/lib/otterling with home /updates (SFTP-only).
+          sftp -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -b - "$SSH_USER@$SSH_HOST" <<EOF
+put ${{ steps.manifest.outputs.apk_path }} otterling-$version_name.apk
+put manifest.json manifest.json
+EOF
