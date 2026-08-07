@@ -50,14 +50,10 @@ services:
     image: caddy:alpine
     container_name: otterling-updates
     restart: unless-stopped
-    ports:
-      # 80 for the ACME HTTP-01 challenge only (Caddy auto-redirects to 443); 443 is what
-      # ApprovedUpdateManager actually talks to (https://<host>/updates/manifest.json).
-      - "80:80/tcp"
-      - "443:443/tcp"
-    extra_hosts:
-      # Reach host webhook listener (otterling-github-webhook.service on 127.0.0.1:9070).
-      - "host.docker.internal:host-gateway"
+    # Host networking: docker-proxy DNAT on this host breaks TLS to the container (phones and
+    # host curls see SSL_ERROR_SYSCALL / connection reset). Binding Caddy directly on :80/:443
+    # matches how ACME and phone updates actually reach the box.
+    network_mode: host
     environment:
       - UPDATE_HOST=${UPDATE_HOST:-vpn.bartholomew.help}
       - REVIEW_DASHBOARD_USER=${REVIEW_DASHBOARD_USER:-guardian}

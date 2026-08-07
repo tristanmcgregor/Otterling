@@ -1,8 +1,21 @@
 # Static host for signed Otterling update manifests/APKs + GitHub webhook reverse-proxy.
 # See SELF_LOCKOUT.md. Files at /var/lib/otterling/updates; webhook on host :9070.
+{
+	# UDP/443 is blocked on this host (CBLOCK). Stick to TCP HTTP/1.1+2 so phones don't
+	# attempt QUIC/HTTP3 and fail in confusing ways.
+	servers {
+		protocols h1 h2
+	}
+}
+
+# Explicit IPv4 bind: without this, recent caddy:alpine often listens on :::443 only, so
+# docker-proxy's IPv4 DNAT to the container gets connection-refused (phones talking A records).
 {$UPDATE_HOST:vpn.bartholomew.help} {
+	bind 0.0.0.0
+
 	handle /hooks/github* {
-		reverse_proxy host.docker.internal:9070
+		# network_mode: host — webhook listens on the host, not host.docker.internal.
+		reverse_proxy 127.0.0.1:9070
 	}
 	handle_path /updates/* {
 		root * /srv/updates
