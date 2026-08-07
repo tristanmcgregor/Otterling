@@ -2,6 +2,32 @@
 
 Samsung Knox parental-control app for Android 9+ (`minSdk 28`).
 
+## Package rename migration (`au.com…familyguard` → `app.otterling`)
+
+This is a **new install line**, not an in-place upgrade. The old `applicationId`
+cannot receive signed updates from the new id, and Device Owner cannot be
+transferred between packages.
+
+1. On any phone still enrolled as Device Owner under
+   `au.com.tbmcgregor.bwparker.familyguard`, clear uninstall blocks / remove
+   device owner (debug build hook or `dpm remove-active-admin` on that old
+   component), then uninstall:
+   ```
+   adb uninstall au.com.tbmcgregor.bwparker.familyguard
+   ```
+2. Install a **release**-signed APK whose `applicationId` is `app.otterling`
+   (from the update host after a PASS, or a matching local release build).
+3. Re-provision Device Owner from scratch (factory-reset / no accounts if the
+   device requires it):
+   ```
+   adb shell dpm set-device-owner app.otterling/.admin.DeviceAdminReceiverImpl
+   ```
+4. Re-enable Content Filter VPN and confirm updates resolve to
+   `https://vpn.bartholomew.help/updates/` for package `app.otterling`.
+
+Kotlin source packages stay under the historical namespace; only the install id
+changed. Do not ship further renames without repeating this full re-provision.
+
 ## Phase 1 setup
 
 1. Install Android Studio with Android SDK 37.
