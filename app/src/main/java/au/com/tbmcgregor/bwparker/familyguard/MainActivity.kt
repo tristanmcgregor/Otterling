@@ -158,11 +158,42 @@ class MainActivity : ComponentActivity() {
         android.util.Log.e("MainActivity", "Cleared A2Y leftover DPM policies for $targets")
     }
 
+    /**
+     * DEBUG-ONLY: drop Device Owner so the app can be uninstalled.
+     *   adb shell am start -n …/.MainActivity --ez clear_device_owner true -f 0x10008000
+     * then: adb shell pm uninstall au.com.tbmcgregor.bwparker.familyguard
+     */
+    private fun applyDebugClearDeviceOwner(intent: Intent?) {
+        if (!isDebuggable) return
+        if (intent?.getBooleanExtra("clear_device_owner", false) != true) return
+        val dpm = getSystemService(android.app.admin.DevicePolicyManager::class.java) ?: return
+        val admin = android.content.ComponentName(
+            this,
+            au.com.tbmcgregor.bwparker.familyguard.admin.DeviceAdminReceiverImpl::class.java,
+        )
+        runCatching {
+            au.com.tbmcgregor.bwparker.familyguard.monitoring.ProtectionEnforcementService
+                .stop(applicationContext)
+        }
+        runCatching {
+            kotlinx.coroutines.runBlocking {
+                au.com.tbmcgregor.bwparker.familyguard.monitoring.ProtectionController(applicationContext)
+                    .shutdown()
+            }
+        }
+        runCatching { dpm.setAlwaysOnVpnPackage(admin, null, false) }
+        runCatching { dpm.setUninstallBlocked(admin, packageName, false) }
+        runCatching { dpm.clearDeviceOwnerApp(packageName) }
+            .onSuccess { android.util.Log.e("MainActivity", "clearDeviceOwnerApp succeeded") }
+            .onFailure { android.util.Log.e("MainActivity", "clearDeviceOwnerApp failed", it) }
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
         applyDebugUnsuspend(intent)
         applyDebugClearA2yPolicies(intent)
+        applyDebugClearDeviceOwner(intent)
         if (wantsDebugSettings(intent)) recreate()
     }
 
@@ -175,6 +206,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         applyDebugUnsuspend(intent)
         applyDebugClearA2yPolicies(intent)
+        applyDebugClearDeviceOwner(intent)
         requestNotificationPermissionIfNeeded()
         requestBatteryOptimizationExemptionIfNeeded()
         if (ProtectionController(applicationContext).isEnabled()) {
