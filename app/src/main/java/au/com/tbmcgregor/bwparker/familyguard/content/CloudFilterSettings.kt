@@ -6,6 +6,7 @@ import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import java.net.DatagramPacket
 import java.net.DatagramSocket
+import java.net.Inet4Address
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
@@ -96,7 +97,7 @@ class CloudFilterSettings(context: Context) {
             DatagramSocket().use { socket ->
                 socket.soTimeout = timeoutMs
                 val query = DnsMessage.buildQuery("example.com")
-                val target = InetSocketAddress(InetAddress.getByName(targetHost), port())
+                val target = InetSocketAddress(resolvePreferIpv4(targetHost), port())
                 socket.send(DatagramPacket(query, query.size, target))
                 val responseBuffer = ByteArray(512)
                 socket.receive(DatagramPacket(responseBuffer, responseBuffer.size))
@@ -122,7 +123,9 @@ class CloudFilterSettings(context: Context) {
         if (targetHost.isEmpty()) return false
         return try {
             Socket().use { socket ->
-                socket.connect(InetSocketAddress(targetHost, proxyPort()), timeoutMs)
+                // Prefer IPv4: vpn.bartholomew.help currently has a stale AAAA that is not this
+                // host, and Android will often try IPv6 first and fail the whole probe.
+                socket.connect(InetSocketAddress(resolvePreferIpv4(targetHost), proxyPort()), timeoutMs)
                 socket.soTimeout = timeoutMs
                 val credentials = Base64.getEncoder().encodeToString("${proxyUser()}:${proxyPassword()}".toByteArray())
                 val request = "CONNECT example.com:443 HTTP/1.1\r\n" +
@@ -141,6 +144,12 @@ class CloudFilterSettings(context: Context) {
             Log.w(TAG, "Proxy reachability probe failed", error)
             false
         }
+    }
+
+    /** Prefer an A/IPv4 result when dual-stack DNS returns a bad or unused AAAA. */
+    private fun resolvePreferIpv4(host: String): InetAddress {
+        val all = InetAddress.getAllByName(host)
+        return all.firstOrNull { it is Inet4Address } ?: all.first()
     }
 
     private companion object {
