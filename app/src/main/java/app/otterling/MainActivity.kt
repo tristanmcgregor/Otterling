@@ -235,7 +235,20 @@ class MainActivity : ComponentActivity() {
                                     ) {
                                         onboardingState.markComplete()
                                     }
-                                    if (onboardingState.isComplete()) Screen.Home else Screen.Onboarding
+                                    // Device Owner is re-checked live every launch, even once the
+                                    // wizard has completed once: unlike restrictions/VPN/etc (which
+                                    // ProtectionEnforcementService/RestrictionEnforcementWorker
+                                    // reapply on their own if they drift), nothing can silently
+                                    // restore Device Owner if it's lost -- only ADB/QR provisioning
+                                    // from outside the app can. Without this check, a device that
+                                    // lost Device Owner (debug "clear device owner" hook, `dpm
+                                    // remove-active-admin`, factory reset, etc.) would fall straight
+                                    // through to the normal Dashboard's passive banner forever,
+                                    // exactly the "looks fine but isn't protected" state the wizard
+                                    // exists to prevent.
+                                    val deviceOwnerActive = DeviceOwnerManager(applicationContext)
+                                        .currentStatus().isDeviceOwner
+                                    if (onboardingState.isComplete() && deviceOwnerActive) Screen.Home else Screen.Onboarding
                                 }
                             },
                         )
