@@ -217,7 +217,12 @@ class VpnFilterService : VpnService() {
     }
 
     private fun applyBypassApps(builder: Builder) {
-        val bypass = VpnBypassManager(applicationContext).bypassPackages()
+        // Always keep Otterling itself off the tun so update checks / settings probes don't
+        // hairpin through the filter proxy (and so protect() isn't required for UI HTTPS).
+        val bypass = buildSet {
+            add(packageName)
+            addAll(VpnBypassManager(applicationContext).bypassPackages())
+        }
         bypass.forEach { pkg ->
             try {
                 builder.addDisallowedApplication(pkg)

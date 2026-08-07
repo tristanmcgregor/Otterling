@@ -12,8 +12,14 @@ import au.com.tbmcgregor.bwparker.familyguard.BuildConfig
 import au.com.tbmcgregor.bwparker.familyguard.content.CloudFilterSettings
 import java.io.File
 import java.net.HttpURLConnection
+import java.net.Inet4Address
+import java.net.InetAddress
 import java.net.URL
 import java.security.MessageDigest
+import javax.net.ssl.HttpsURLConnection
+import javax.net.ssl.SNIHostName
+import javax.net.ssl.SSLSocket
+import javax.net.ssl.SSLSocketFactory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -164,19 +170,78 @@ class ApprovedUpdateManager(private val context: Context) {
     }
 
     private fun httpGet(url: String): String {
-        val connection = URL(url).openConnection() as HttpURLConnection
+        val connection = openConnectionPreferIpv4(url)
         connection.connectTimeout = 15_000
         connection.readTimeout = 15_000
         return connection.inputStream.bufferedReader().use { it.readText() }
     }
 
     private fun downloadTo(url: String, destination: File) {
-        val connection = URL(url).openConnection() as HttpURLConnection
+        val connection = openConnectionPreferIpv4(url)
         connection.connectTimeout = 15_000
         connection.readTimeout = 60_000
         connection.inputStream.use { input ->
             destination.outputStream().use { output -> input.copyTo(output) }
         }
+    }
+
+    /**
+     * Prefer IPv4 when the update host has a stale AAAA (common for vpn.bartholomew.help).
+     * For HTTPS, dial the A record but keep SNI/Host as the real hostname.
+     */
+    private fun openConnectionPreferIpv4(urlString: String): HttpURLConnection {
+        val url = URL(urlString)
+        val host = url.host ?: throw IllegalArgumentException("URL missing host")
+        val ipv4 = runCatching {
+            InetAddress.getAllByName(host).firstOrNull { it is Inet4Address }
+        }.getOrNull()
+
+        if (ipv4 == null || url.protocol != "https") {
+            return url.openConnection() as HttpURLConnection
+        }
+
+        val ipUrl = URL(url.protocol, ipv4.hostAddress, url.port, url.file)
+        val connection = ipUrl.openConnection() as HttpsURLConnection
+        connection.setRequestProperty("Host", host)
+        connection.hostnameVerifier = javax.net.ssl.HostnameVerifier { _, session ->
+            HttpsURLConnection.getDefaultHostnameVerifier().verify(host, session)
+        }
+        val defaultFactory = HttpsURLConnection.getDefaultSSLSocketFactory()
+        connection.sslSocketFactory = object : SSLSocketFactory() {
+            override fun getDefaultCipherSuites(): Array<String> = defaultFactory.defaultCipherSuites
+            override fun getSupportedCipherSuites(): Array<String> = defaultFactory.supportedCipherSuites
+            override fun createSocket(s: java.net.Socket, hostIgnored: String, port: Int, autoClose: Boolean): java.net.Socket {
+                val sock = defaultFactory.createSocket(s, host, port, autoClose) as SSLSocket
+                sock.sslParameters = sock.sslParameters.apply {
+                    serverNames = listOf(SNIHostName(host))
+                }
+                return sock
+            }
+            override fun createSocket(hostIgnored: String, port: Int): java.net.Socket =
+                createSocket(InetAddress.getByName(hostIgnored), port)
+            override fun createSocket(hostIgnored: String, port: Int, localAddress: InetAddress, localPort: Int): java.net.Socket {
+                val sock = defaultFactory.createSocket(hostIgnored, port, localAddress, localPort) as SSLSocket
+                sock.sslParameters = sock.sslParameters.apply {
+                    serverNames = listOf(SNIHostName(host))
+                }
+                return sock
+            }
+            override fun createSocket(address: InetAddress, port: Int): java.net.Socket {
+                val sock = defaultFactory.createSocket(address, port) as SSLSocket
+                sock.sslParameters = sock.sslParameters.apply {
+                    serverNames = listOf(SNIHostName(host))
+                }
+                return sock
+            }
+            override fun createSocket(address: InetAddress, port: Int, localAddress: InetAddress, localPort: Int): java.net.Socket {
+                val sock = defaultFactory.createSocket(address, port, localAddress, localPort) as SSLSocket
+                sock.sslParameters = sock.sslParameters.apply {
+                    serverNames = listOf(SNIHostName(host))
+                }
+                return sock
+            }
+        }
+        return connection
     }
 
     private fun sha256Of(file: File): String {

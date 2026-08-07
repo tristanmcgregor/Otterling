@@ -156,7 +156,10 @@ class TcpRelayManager(
         }
         // Only 80/443 go through the filter proxy -- everything else (chat/game/VoIP ports, etc.)
         // keeps relaying directly, unchanged, exactly as if the proxy didn't exist.
-        val useProxy = proxyConfig.enabled && (connection.key.dstPort == HTTP_PORT || connection.key.dstPort == HTTPS_PORT)
+        val useProxy = proxyConfig.enabled &&
+            (connection.key.dstPort == HTTP_PORT || connection.key.dstPort == HTTPS_PORT) &&
+            !isFilterHostDestination(connection.key.dstIp)
+
         val socket = Socket()
         val connected = try {
             // A freshly-constructed Socket has no underlying file descriptor until it's bound (or
@@ -453,6 +456,22 @@ class TcpRelayManager(
     private fun rstFor(packet: IpPacket): ByteArray {
         val ackValue = (packet.tcpSeq + maxOf(packet.payload.size, if (packet.isSyn) 1 else 0)) and SEQ_MASK
         return packet.buildTcpSegment(seq = 0, ack = ackValue, flags = IpPacket.TCP_RST or IpPacket.TCP_ACK, window = 0)
+    }
+
+    /**
+     * Don't MITM the family's own filter/update host: CONNECT-through-mitmproxy to
+     * vpn.bartholomew.help (same box) hairpins TLS and breaks App updates / Caddy fetches with
+     * TLSV1_ALERT_INTERNAL_ERROR. Relay those destinations directly (still protect()'d).
+     */
+    private fun isFilterHostDestination(dstIp: String): Boolean {
+        val host = proxyConfig.host.trim()
+        if (host.isEmpty()) return false
+        if (dstIp.equals(host, ignoreCase = true)) return true
+        return try {
+            InetAddress.getAllByName(host).any { it.hostAddress == dstIp }
+        } catch (_: Exception) {
+            false
+        }
     }
 
     private companion object {
