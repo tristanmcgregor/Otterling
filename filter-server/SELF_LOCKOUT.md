@@ -32,7 +32,8 @@ only `B^..B` would miss A's changes still in the tree. The gate always diffs eve
 since the last *published* SHA (`/var/lib/otterling/updates/last_published_sha`).
 
 First successful publish (2026-08-07): `otterling-0.1.0.apk` at
-`https://vpn.bartholomew.help/updates/` with GitHub status `otterling/release` = success.
+`https://vpn.bartholomew.help/updates/` with GitHub status `otterling/release` = success
+(Details → `/review`).
 
 The live gate always uses the pinned host checklist. A release compares any candidate
 `scripts/update_review_checklist.md` to the pinned copy and **rejects weakenings**; only
@@ -124,6 +125,8 @@ Each release posts a **commit status** with context **`otterling/release`**:
 - yellow/pending while reviewing
 - green/success when AI approved and APK published
 - red/failure when AI rejected or build failed
+
+**Details** opens `https://vpn.bartholomew.help/review` (the AI review dashboard).
 
 Example success on commit `d8e50cc`: “AI approved — published v0.1.0”.
 
