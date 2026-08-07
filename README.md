@@ -177,10 +177,10 @@ undoing everything above. Phase 8 closes that: **the app can only update itself 
 was AI-reviewed against a deny checklist on the update host (not via git), then signed with a
 release key that never touches the daily account.**
 
-- **Server release gate** (`sudo otterling-release`) -- root-owned
-  `/var/lib/otterling/ci/release.sh` reviews against the pinned
-  `/var/lib/otterling/ci/checklist.md`, requires AI `VERDICT: PASS`, signs the APK, and writes
-  `manifest.json` + APK under `/var/lib/otterling/updates/`. GitHub cannot change that pipeline.
+- **Server release gate** (GitHub webhook → root `release.sh`) -- push to `main` hits
+  `https://vpn.bartholomew.help/hooks/github`, which pulls that commit, reviews against the pinned
+  `/var/lib/otterling/ci/checklist.md`, requires AI `VERDICT: PASS`, signs the APK, publishes under
+  `/var/lib/otterling/updates/`, and posts a GitHub commit status (`otterling/release`).
   See [`filter-server/SELF_LOCKOUT.md`](filter-server/SELF_LOCKOUT.md).
 - [`.github/workflows/update-review.yml`](.github/workflows/update-review.yml) is advisory only —
   it must not sign or publish.

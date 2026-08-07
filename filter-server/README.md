@@ -71,15 +71,11 @@ errors, check `docker compose logs mitmproxy` before troubleshooting the phone s
 ## Gated app updates
 
 `updates/` publish output is **not** the git `filter-server/updates/` folder. On this host it is
-`/var/lib/otterling/updates/`, written only by root via `sudo otterling-release` after AI
-`VERDICT: PASS` (see [`SELF_LOCKOUT.md`](SELF_LOCKOUT.md)). Caddy serves that path at
-`https://<UPDATE_HOST>/updates/`. The Otterling app's
-`ApprovedUpdateManager` (Settings → App updates → "Check for update") is the only thing on the
-phone that ever installs anything, and it verifies the downloaded APK's SHA-256 *and* its signing
-certificate against a fingerprint baked into the app at build time before installing -- see
-`scripts/update_review_checklist.md`'s section 1 and the top-level README's "Gated updates"
-section for the full trust chain. Secrets and the live checklist live under
-`/var/lib/otterling/ci/` (root-owned), not in GitHub Actions.
+`/var/lib/otterling/updates/`, written only by root via the GitHub-webhook → `release.sh` path after
+AI `VERDICT: PASS` (see [`SELF_LOCKOUT.md`](SELF_LOCKOUT.md)). Caddy serves updates at
+`https://<UPDATE_HOST>/updates/` and proxies `https://<UPDATE_HOST>/hooks/github` to the host
+webhook. Phones use `ApprovedUpdateManager` (Settings → App updates). Secrets and the live
+checklist live under `/var/lib/otterling/ci/` (root-owned), not in GitHub Actions.
 
 ## Production host (vpn.bartholomew.help)
 

@@ -55,6 +55,9 @@ services:
       # ApprovedUpdateManager actually talks to (https://<host>/updates/manifest.json).
       - "80:80/tcp"
       - "443:443/tcp"
+    extra_hosts:
+      # Reach host webhook listener (otterling-github-webhook.service on 127.0.0.1:9070).
+      - "host.docker.internal:host-gateway"
     environment:
       - UPDATE_HOST=${UPDATE_HOST:-vpn.bartholomew.help}
     volumes:
@@ -63,3 +66,4 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - ./caddy-data:/data
       - ./caddy-config:/config
+
