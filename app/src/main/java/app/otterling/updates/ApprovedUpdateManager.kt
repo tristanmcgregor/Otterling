@@ -14,10 +14,11 @@ import java.io.File
 import java.net.HttpURLConnection
 import java.net.Inet4Address
 import java.net.InetAddress
+import java.net.InetSocketAddress
+import java.net.Socket
 import java.net.URL
 import java.security.MessageDigest
 import javax.net.ssl.HttpsURLConnection
-import javax.net.ssl.SNIHostName
 import javax.net.ssl.SSLSocket
 import javax.net.ssl.SSLSocketFactory
 import kotlinx.coroutines.Dispatchers
@@ -187,7 +188,7 @@ class ApprovedUpdateManager(private val context: Context) {
 
     /**
      * Prefer IPv4 when the update host has a stale AAAA (common for vpn.bartholomew.help).
-     * For HTTPS, dial the A record but keep SNI/Host as the real hostname.
+     * Keep the hostname in the URL so SNI/certs stay correct; only the TCP dial is forced to A.
      */
     private fun openConnectionPreferIpv4(urlString: String): HttpURLConnection {
         val url = URL(urlString)
@@ -200,46 +201,26 @@ class ApprovedUpdateManager(private val context: Context) {
             return url.openConnection() as HttpURLConnection
         }
 
-        val ipUrl = URL(url.protocol, ipv4.hostAddress, url.port, url.file)
-        val connection = ipUrl.openConnection() as HttpsURLConnection
-        connection.setRequestProperty("Host", host)
-        connection.hostnameVerifier = javax.net.ssl.HostnameVerifier { _, session ->
-            HttpsURLConnection.getDefaultHostnameVerifier().verify(host, session)
-        }
+        val connection = url.openConnection() as HttpsURLConnection
         val defaultFactory = HttpsURLConnection.getDefaultSSLSocketFactory()
         connection.sslSocketFactory = object : SSLSocketFactory() {
+            private fun layered(hostname: String, port: Int): SSLSocket {
+                val plain = Socket()
+                plain.connect(InetSocketAddress(ipv4, port), 15_000)
+                // Hostname (not the IP) so the factory sets SNI correctly.
+                return defaultFactory.createSocket(plain, hostname, port, true) as SSLSocket
+            }
+
             override fun getDefaultCipherSuites(): Array<String> = defaultFactory.defaultCipherSuites
             override fun getSupportedCipherSuites(): Array<String> = defaultFactory.supportedCipherSuites
-            override fun createSocket(s: java.net.Socket, hostIgnored: String, port: Int, autoClose: Boolean): java.net.Socket {
-                val sock = defaultFactory.createSocket(s, host, port, autoClose) as SSLSocket
-                sock.sslParameters = sock.sslParameters.apply {
-                    serverNames = listOf(SNIHostName(host))
-                }
-                return sock
-            }
-            override fun createSocket(hostIgnored: String, port: Int): java.net.Socket =
-                createSocket(InetAddress.getByName(hostIgnored), port)
-            override fun createSocket(hostIgnored: String, port: Int, localAddress: InetAddress, localPort: Int): java.net.Socket {
-                val sock = defaultFactory.createSocket(hostIgnored, port, localAddress, localPort) as SSLSocket
-                sock.sslParameters = sock.sslParameters.apply {
-                    serverNames = listOf(SNIHostName(host))
-                }
-                return sock
-            }
-            override fun createSocket(address: InetAddress, port: Int): java.net.Socket {
-                val sock = defaultFactory.createSocket(address, port) as SSLSocket
-                sock.sslParameters = sock.sslParameters.apply {
-                    serverNames = listOf(SNIHostName(host))
-                }
-                return sock
-            }
-            override fun createSocket(address: InetAddress, port: Int, localAddress: InetAddress, localPort: Int): java.net.Socket {
-                val sock = defaultFactory.createSocket(address, port, localAddress, localPort) as SSLSocket
-                sock.sslParameters = sock.sslParameters.apply {
-                    serverNames = listOf(SNIHostName(host))
-                }
-                return sock
-            }
+            override fun createSocket(s: Socket, peerHost: String, port: Int, autoClose: Boolean): Socket =
+                defaultFactory.createSocket(s, peerHost, port, autoClose)
+            override fun createSocket(peerHost: String, port: Int): Socket = layered(peerHost, port)
+            override fun createSocket(peerHost: String, port: Int, localAddress: InetAddress, localPort: Int): Socket =
+                layered(peerHost, port)
+            override fun createSocket(address: InetAddress, port: Int): Socket = layered(host, port)
+            override fun createSocket(address: InetAddress, port: Int, localAddress: InetAddress, localPort: Int): Socket =
+                layered(host, port)
         }
         return connection
     }
