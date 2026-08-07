@@ -488,7 +488,7 @@ class MainActivity : ComponentActivity() {
         val uninstallBlocked = remember(refreshTrigger) { restrictionsManager.isUninstallBlocked() }
         val batteryExempt = remember(refreshTrigger) { batteryManager.isExempt() }
         LaunchedEffect(refreshTrigger) {
-            recentEvents = tamperLogger.recent()
+            recentEvents = tamperLogger.recent(5)
         }
 
         SectionCard(
@@ -556,13 +556,14 @@ class MainActivity : ComponentActivity() {
 
             Text("Recent tamper events", style = MaterialTheme.typography.bodyMedium)
             if (recentEvents.isEmpty()) {
-                Text("No tamper events recorded.", style = MaterialTheme.typography.bodySmall)
+                Text("None.", style = MaterialTheme.typography.bodySmall)
             } else {
-                recentEvents.forEach { event ->
-                    val timestamp = DateFormat.getDateTimeInstance().format(Date(event.timestampMillis))
+                recentEvents.take(5).forEach { event ->
+                    val time = DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(event.timestampMillis))
                     Text(
-                        "$timestamp — ${event.details}",
+                        "$time · ${event.type}",
                         style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
