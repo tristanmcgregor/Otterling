@@ -8,18 +8,21 @@ not this checklist's concern -- only changes that could let the person being fil
 
 ### Scope (what is production today)
 
-Only the **Android Otterling app** (`app/`) is a finished, shipping client right now. Future
-clients in this monorepo (e.g. `macos/FocusLock/` and any later sibling apps) are still being
-developed and are **not** in production use.
+Finished / shipping products in this monorepo:
 
-- Enforce sections 1–7 against **production** surfaces: Android `app/` and the live
-  `filter-server/` host stack phones depend on.
-- **Do not FAIL** a release solely for changes that stay entirely inside unfinished client trees
-  (paths outside `app/` and `filter-server/`, such as `macos/`). Accept those changes; when such
-  an app is finished and put into production, extend this checklist via the ratchet /
-  `strengthen_checklist.sh` before treating it as a production gate.
-- If a diff also changes `app/` or `filter-server/`, review those parts fully — unfinished-app
-  work must not become a vehicle to weaken production code.
+- **Android Otterling** (`app/`)
+- **macOS Otterling / FocusLock** (`macos/FocusLock/`)
+- **Live filter host** (`filter-server/`) that both clients depend on
+
+Other future sibling apps (if any are added later) stay unfinished until this checklist is
+extended for them via the ratchet / `strengthen_checklist.sh`.
+
+- Enforce every relevant section below against those production surfaces (and any shared code
+  they call).
+- **Do not FAIL** a release solely for changes confined to *other* unfinished client trees that
+  are not listed above — accept those until they ship and the checklist covers them.
+- A change that touches both an unfinished tree **and** production code is still fully reviewed
+  for the production parts.
 
 A **FAIL** on any single item below means the whole diff fails review, even if everything else
 about it is fine and even if the change looks accidental/refactor-shaped. When in doubt, FAIL and
@@ -126,18 +129,46 @@ weakened, nothing else here matters, because a bypassed build could ship anyway.
   number must not be gutted (e.g. `report()` becoming a no-op, or the debounce/cap logic being
   replaced with something that silently drops all alerts).
 
+## 6b. macOS Otterling / FocusLock (finished client)
+
+Treat `macos/FocusLock/` as a production parental-control client. FAIL diffs that weaken its
+enforcement or Guardian asymmetry:
+
+- [`XPCService.swift`](../macos/FocusLock/Sources/FocusLockHelperd/XPCService.swift) /
+  [`XPCProtocol.swift`](../macos/FocusLock/Sources/FocusLockShared/XPCProtocol.swift): removing a
+  block, disabling DNS enforcement, or clearing protection must still require the caller to be in
+  the `admin` group (Guardian). Adding blocks / enabling filtering may stay open to the standard
+  user. FAIL any diff that lets a non-admin disable or remove protections.
+- [`DNSEnforcer.swift`](../macos/FocusLock/Sources/FocusLockHelperd/DNSEnforcer.swift) +
+  [`PFBlocker.swift`](../macos/FocusLock/Sources/FocusLockHelperd/PFBlocker.swift): DNS enforcement
+  and the pf DoH/DoT bypass block must remain reachable and not become no-ops when enforcement is
+  on. FAIL emptying the DoH IP list or skipping pf activation whenever site blocking or DNS
+  enforcement is enabled.
+- [`AdultBlocklistManager.swift`](../macos/FocusLock/Sources/FocusLockHelperd/AdultBlocklistManager.swift)
+  + hosts application: the always-on adult-domain hosts layer must not be short-circuited to never
+  apply.
+- [`AppBlockEnforcer.swift`](../macos/FocusLock/Sources/FocusLockHelperd/AppBlockEnforcer.swift) /
+  [`EnforcementLoop.swift`](../macos/FocusLock/Sources/FocusLockHelperd/EnforcementLoop.swift):
+  blocked apps must still be killed on sight; protected apps must still be relaunched / `schg`
+  locked unless the Guardian clears them.
+- [`AdminGroupCheck.swift`](../macos/FocusLock/Sources/FocusLockShared/AdminGroupCheck.swift): FAIL
+  any bypass that treats every caller as Guardian/admin.
+
 ## 7. General red flags (production surfaces)
 
-Applies to Android `app/` and live `filter-server/` (and any shared code those production
-surfaces call). Unfinished client trees alone are covered by the allow list below.
+Applies to Android `app/`, macOS `macos/FocusLock/`, and live `filter-server/` (and any shared
+code those production surfaces call). Other unfinished client trees alone are covered by the
+allow list below.
 
 - Any new `adb`/shell-invoked debug backdoor, hidden broadcast action, or exported component that
   lets a non-Guardian account disable protections, matching the existing "always allowed to add,
   Guardian-only to remove/disable" asymmetry -- FAIL anything that adds a way to remove/disable
-  without that gate.
+  without that gate. On macOS, also FAIL new XPC/CLI entry points that disable protections without
+  the admin-group check.
 - Any change to `applicationId`/package name, or to the Device Admin/VPN/accessibility service
   class names referenced by `AndroidManifest.xml`, without an equally thorough migration plan --
-  these are load-bearing for existing enrolled devices.
+  these are load-bearing for existing enrolled devices. On macOS, FAIL renaming the LaunchDaemon /
+  Mach service identifiers in a way that orphans existing installs without a migration plan.
 - Obfuscated, minified-looking, or otherwise hard-to-read code introduced specifically in one of
   the files above, where the rest of the diff is unrelated -- treat unexplained complexity in a
   security-relevant file as a reason to slow down and FAIL pending human review, even if you can't
@@ -145,12 +176,12 @@ surfaces call). Unfinished client trees alone are covered by the allow list belo
 
 ## Allow list (do not FAIL on these alone)
 
-- Changes that stay entirely inside unfinished / not-yet-shipping clients (e.g. `macos/` and
-  other future app directories outside `app/` and `filter-server/`). The Android app is the only
-  finished client today; accept WIP client work until those apps are done and this checklist is
-  extended to cover them.
+- Changes that stay entirely inside *other* unfinished / not-yet-listed future client directories
+  (not `app/`, not `macos/FocusLock/`, not `filter-server/`). Accept those until they ship and
+  this checklist is extended.
 - Refactors, renames, or comment/doc changes in files *not* listed above.
-- New features that don't touch anything in sections 1-6 (for production Android / filter-server).
+- New features that don't touch anything in sections 1–6b (for production Android / macOS /
+  filter-server).
 - Version bumps (`versionCode`/`versionName` in `app/build.gradle.kts`) -- expected on every
   release.
 - UI copy changes that don't alter the underlying enforcement logic.
