@@ -4,8 +4,8 @@ Served as-is over HTTPS at `https://<UPDATE_HOST>/updates/` by the `updates` (Ca
 `docker-compose.yml`. Everything in this directory except this README is gitignored -- it's
 publish output, not source.
 
-`.github/workflows/update-review.yml`'s `sign-and-publish` job (which only runs after AI review
-passed *and* the Guardian approved the protected `release` GitHub Environment) `scp`s two files
+`.github/workflows/update-review.yml`'s `sign-and-publish` job (which runs after AI review
+returns `VERDICT: PASS`) `scp`s two files
 here on every release:
 
 - `manifest.json` -- `{"versionCode": N, "versionName": "...", "apkUrl": "...", "sha256": "..."}`,
@@ -16,6 +16,6 @@ here on every release:
   nothing here does that automatically.
 
 Nothing should ever be written into this directory by hand except for initial testing --
-`manifest.json`/the APK should only ever come from a Guardian-approved CI run, or the phone would
+`manifest.json`/the APK should only ever come from an AI-approved CI run, or the phone would
 be trusting whatever's placed here instead of the actual reviewed-and-signed chain (see
 `scripts/update_review_checklist.md`).

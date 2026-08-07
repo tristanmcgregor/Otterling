@@ -174,19 +174,18 @@ Once the VPN lockdown + filter proxy (Phase 7) are in place, the app itself beco
 link: `adb install -r` (or any sideload) of a self-built APK with the lockdown/proxy-fail-closed/CA
 -install/blocklist code quietly stripped out would install and run exactly like the real thing,
 undoing everything above. Phase 8 closes that: **the app can only update itself via a build that
-was AI-reviewed against a deny checklist and Guardian-approved in CI, then signed with a release
-key that never touches the daily dev machine.**
+was AI-reviewed against a deny checklist in CI, then signed with a release key that never touches
+the daily dev machine.**
 
 - [`.github/workflows/update-review.yml`](.github/workflows/update-review.yml) -- runs on every PR
   into `main`. First job: an AI diff review against
   [`scripts/update_review_checklist.md`](scripts/update_review_checklist.md) (VPN lockdown, proxy
   fail-closed, CA install wiring, blocklists, Device Owner/tamper checks, Guardian SMS alerting,
   and -- most importantly -- the update-verification chain itself). A FAIL stops the pipeline.
-  Second job (`sign-and-publish`) only runs if the first passed, and only proceeds once a human
-  Guardian approves it via a required-reviewer rule on a protected `release` GitHub Environment
-  (Settings → Environments in this repo) -- AI PASS alone is never enough. That job builds a signed
-  release APK, computes its SHA-256, and publishes both the APK and a `manifest.json` to the
-  family's own update host (see `filter-server/`'s "Gated app updates" section).
+  Second job (`sign-and-publish`) runs automatically after AI `VERDICT: PASS` -- there is no
+  required human GitHub Environment reviewer. That job builds a signed release APK, computes its
+  SHA-256, and publishes both the APK and a `manifest.json` to the family's own update host (see
+  `filter-server/`'s "Gated app updates" section).
 - [`ApprovedUpdateManager`](app/src/main/java/au/com/tbmcgregor/bwparker/familyguard/updates/ApprovedUpdateManager.kt)
   is the *only* code path on the phone that installs anything. Settings → **App updates** → "Check
   for update" fetches `manifest.json`, downloads the referenced APK, and verifies (a) its SHA-256
@@ -195,8 +194,8 @@ key that never touches the daily dev machine.**
   installing via a self-delegated `PackageInstaller` session -- no "install unknown apps" prompt,
   and no fallback path that installs an unverified file. A build with no pinned certificate (i.e.
   anything that isn't CI's release build) refuses to install any update at all. "Request update"
-  just opens a browser to file a GitHub issue and SMS-alerts the Guardian -- it cannot install
-  anything by itself.
+  just opens a browser to file a GitHub issue and can SMS-alert a configured contact -- it cannot
+  install anything by itself.
 
 **Setup vs. production install paths**: `./gradlew :app:installDebug` (or any direct `adb install`)
 is fine for initial device setup/provisioning and local development, but is **not** the production

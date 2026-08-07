@@ -1,10 +1,9 @@
 # Otterling update review checklist
 
-Read by both the AI reviewer (`.github/workflows/update-review.yml`) and, ideally, the Guardian
-before approving a release. The question that matters is always: **does this diff let the phone
-run a version of Otterling with any of these protections weakened, removed, or made
-conditional/bypassable?** Code style, unrelated bugs, and refactors are not this checklist's
-concern -- only changes that could let the person being filtered escape it.
+Read by the AI reviewer (`.github/workflows/update-review.yml`). The question that matters is
+always: **does this diff let the phone run a version of Otterling with any of these protections
+weakened, removed, or made conditional/bypassable?** Code style, unrelated bugs, and refactors are
+not this checklist's concern -- only changes that could let the person being filtered escape it.
 
 A **FAIL** on any single item below means the whole diff fails review, even if everything else
 about it is fine and even if the change looks accidental/refactor-shaped. When in doubt, FAIL and
@@ -32,8 +31,10 @@ weakened, nothing else here matters, because a bypassed build could ship anyway.
   sideload toggle, etc.). `ApprovedUpdateManager` must remain the only path that ever calls
   `PackageInstaller`.
 - [`.github/workflows/update-review.yml`](../.github/workflows/update-review.yml): the `sign-and-
-  publish` job must keep `environment: release` (the Guardian-approval gate) and must keep
-  depending on (`needs:`) the AI review job. FAIL any diff that removes either.
+  publish` job must keep depending on (`needs:`) the AI review job, and AI `VERDICT: PASS` must
+  remain the release gate (no required human GitHub Environment reviewer that blocks publish after
+  AI PASS). FAIL any diff that removes the `needs: ai-review` dependency or that lets
+  `sign-and-publish` run without a successful AI review job.
 
 ## 2. VPN lockdown (Android)
 

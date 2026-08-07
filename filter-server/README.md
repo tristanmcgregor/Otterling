@@ -71,14 +71,14 @@ errors, check `docker compose logs mitmproxy` before troubleshooting the phone s
 ## Gated app updates
 
 `updates/` (served by Caddy) is where `.github/workflows/update-review.yml` publishes a signed
-release build after it passes AI review against `scripts/update_review_checklist.md` **and** a
-human Guardian approves the protected `release` GitHub Environment. The Otterling app's
+release build after it passes AI review against `scripts/update_review_checklist.md` (AI
+`VERDICT: PASS` is the release gate -- no human GitHub Environment approval). The Otterling app's
 `ApprovedUpdateManager` (Settings → App updates → "Check for update") is the only thing on the
 phone that ever installs anything, and it verifies the downloaded APK's SHA-256 *and* its signing
 certificate against a fingerprint baked into the app at build time before installing -- see
 `scripts/update_review_checklist.md`'s section 1 and the top-level README's "Gated updates"
 section for the full trust chain. Nothing about this repo's own CI setup is committed here; see
-that workflow file for the GitHub secrets/environment it expects (`UPDATE_HOST`,
+that workflow file for the GitHub secrets it expects (`UPDATE_HOST`,
 `UPDATE_HOST_SSH_USER`, `UPDATE_HOST_SSH_KEY`, plus the release signing secrets).
 
 On the server, this just needs an SSH user CI can `scp` to that has write access to
