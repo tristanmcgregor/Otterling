@@ -35,9 +35,17 @@ class VpnFilterManager(private val context: Context) {
     private val adminComponent = ComponentName(context, DeviceAdminReceiverImpl::class.java)
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     private val privateDnsFilterManager = PrivateDnsFilterManager(context)
+    private val caCertInstaller = CaCertInstaller(context)
 
     /** Persisted separately from the DPM query so [reapplyIfEnabled] survives a DPM/system reset. */
     fun wasEnabledByUser(): Boolean = prefs.getBoolean(KEY_ENABLED, false)
+
+    /** Whether the filter proxy's CA is currently trusted device-wide -- see [CaCertInstaller]. */
+    fun isCaCertInstalled(): Boolean = caCertInstaller.isInstalled()
+
+    /** Installs the proxy CA now rather than waiting for the next [enable]/[ensureActive] --
+     *  e.g. right after the UI's "Save filter server" if the VPN is already on. */
+    fun installCaCertNow(): Boolean = caCertInstaller.installIfNeeded()
 
     fun isLockdownEnabled(): Boolean {
         val dpm = devicePolicyManager ?: return false
@@ -75,6 +83,13 @@ class VpnFilterManager(private val context: Context) {
             Log.e(TAG, "Device doesn't support always-on VPN lockdown", error)
             false
         }
+        // Required for the filter proxy's CONNECT-based HTTPS interception to work at all -- an
+        // uninstalled CA means every HTTPS site fails TLS validation instead of loading the moment
+        // "Use filter proxy" is on. Installing here (rather than only when the proxy toggle itself
+        // is flipped) means it's already present the first time someone turns the proxy on, not
+        // racing against it.
+        runCatching { caCertInstaller.installIfNeeded() }
+            .onFailure { Log.w(TAG, "Proxy CA install failed", it) }
         runCatching { VpnFilterService.start(context) }
             .onFailure { Log.w(TAG, "Direct VPN start failed (always-on will bring it up)", it) }
         return registered
@@ -146,6 +161,11 @@ class VpnFilterManager(private val context: Context) {
                 suppressConflictingPrivateDns()
             }
         }.onFailure { Log.w(TAG, "Watchdog always-on re-registration failed", it) }
+        // Cheap (isInstalled() short-circuits installCaCertNow() before any DPM mutation) and
+        // covers the case where the CA file in res/raw changed (a rebuild after swapping in the
+        // real deployment CA) since this device last had it installed.
+        runCatching { installCaCertNow() }
+            .onFailure { Log.w(TAG, "Watchdog CA re-install failed", it) }
         // Best-effort: starting an already-running foreground service is a harmless no-op and does
         // NOT rebuild the tunnel (the service's own running flag is already set), so this only
         // matters when the service somehow isn't up.

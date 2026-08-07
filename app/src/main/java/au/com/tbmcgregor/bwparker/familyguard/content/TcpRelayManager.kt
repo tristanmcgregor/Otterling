@@ -5,6 +5,7 @@ import java.io.IOException
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.util.Base64
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.random.Random
@@ -14,9 +15,29 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
+ * Filter proxy connection details for [TcpRelayManager] -- when [enabled], every TCP flow to port
+ * 80 or 443 is CONNECT-tunneled through [host]:[port] (HTTP Basic proxy auth via [user]/[password])
+ * instead of being relayed directly to its real destination. See [CloudFilterSettings] for where
+ * this comes from.
+ */
+data class ProxyConfig(
+    val enabled: Boolean,
+    val host: String,
+    val port: Int,
+    val user: String,
+    val password: String,
+)
+
+/**
  * NAT-relays TCP connections captured by [VpnFilterService]'s tun: for each new SYN, opens a real
- * (protected, i.e. bypassing the tun) [Socket] to the actual destination, and bridges bytes
- * between that socket and a minimal hand-rolled TCP peer speaking to the client over the tun.
+ * (protected, i.e. bypassing the tun) [Socket] and bridges bytes between that socket and a minimal
+ * hand-rolled TCP peer speaking to the client over the tun. When [proxyConfig] is enabled and the
+ * destination port is 80 or 443, that socket connects to the filter proxy instead of the real
+ * destination, performs an HTTP CONNECT handshake first, and only then starts bridging bytes --
+ * from that point on the proxy sees exactly what a direct connection's peer would have, since the
+ * bytes past the CONNECT handshake are the same TLS/HTTP the client itself sent. A failed CONNECT
+ * (auth rejected, proxy unreachable, etc.) fails that flow closed (RST) rather than silently
+ * connecting directly, so a proxy outage can't be used to bypass filtering.
  *
  * This exists because a [android.net.VpnService] that captures all app traffic (needed so every
  * app's DNS goes through our filter) but only has routes for a handful of specific IPs makes every
@@ -43,6 +64,8 @@ class TcpRelayManager(
     private val protect: (Socket) -> Boolean,
     private val writeToTun: suspend (ByteArray) -> Unit,
     private val isBlockedDestination: (String) -> Boolean,
+    private val proxyConfig: ProxyConfig,
+    private val resolveHostname: (String) -> String?,
 ) {
     private data class FlowKey(val srcIp: String, val srcPort: Int, val dstIp: String, val dstPort: Int)
 
@@ -130,6 +153,9 @@ class TcpRelayManager(
             writeToTun(rstFor(synPacket))
             return
         }
+        // Only 80/443 go through the filter proxy -- everything else (chat/game/VoIP ports, etc.)
+        // keeps relaying directly, unchanged, exactly as if the proxy didn't exist.
+        val useProxy = proxyConfig.enabled && (connection.key.dstPort == HTTP_PORT || connection.key.dstPort == HTTPS_PORT)
         val socket = Socket()
         val connected = try {
             // A freshly-constructed Socket has no underlying file descriptor until it's bound (or
@@ -140,14 +166,34 @@ class TcpRelayManager(
             // dedicated unbounded pool sized for one thread per concurrent connection (see
             // VpnFilterService), not the global Dispatchers.IO, so it's safe to block here
             // directly without an extra withContext hop.
-            socket.connect(InetSocketAddress(InetAddress.getByName(connection.key.dstIp), connection.key.dstPort), CONNECT_TIMEOUT_MS)
-            socket.tcpNoDelay = true
+            if (useProxy) {
+                socket.connect(InetSocketAddress(InetAddress.getByName(proxyConfig.host), proxyConfig.port), CONNECT_TIMEOUT_MS)
+                socket.tcpNoDelay = true
+                // Prefer a real hostname (from a DNS answer this device itself already saw) over
+                // the bare destination IP on the CONNECT line -- purely cosmetic/best-effort: the
+                // proxy determines the actual destination independently from the tunneled TLS
+                // ClientHello SNI / plaintext HTTP Host header either way, so a cache miss here
+                // (falling back to the IP) doesn't weaken filtering at all.
+                val targetHost = resolveHostname(connection.key.dstIp) ?: connection.key.dstIp
+                performHttpConnect(socket, targetHost, connection.key.dstPort)
+            } else {
+                socket.connect(InetSocketAddress(InetAddress.getByName(connection.key.dstIp), connection.key.dstPort), CONNECT_TIMEOUT_MS)
+                socket.tcpNoDelay = true
+            }
             true
         } catch (error: Exception) {
-            Log.w(TAG, "TCP connect to ${connection.key.dstIp}:${connection.key.dstPort} failed", error)
+            Log.w(
+                TAG,
+                "${if (useProxy) "Proxy CONNECT via ${proxyConfig.host}:${proxyConfig.port} to" else "TCP connect to"} " +
+                    "${connection.key.dstIp}:${connection.key.dstPort} failed",
+                error,
+            )
             false
         }
         if (!connected) {
+            // Fail closed for 80/443 when the proxy is enabled: no fallback to a direct connection
+            // on proxy failure, by construction -- there simply is no direct-connect code path
+            // taken here once useProxy is true, only the RST below.
             connections.remove(connection.key)
             runCatching { socket.close() }
             writeToTun(rstFor(synPacket))
@@ -348,6 +394,53 @@ class TcpRelayManager(
         runCatching { connection.socket?.close() }
     }
 
+    /**
+     * Performs the HTTP CONNECT handshake against an already-connected proxy socket. Throws
+     * (causing the caller to fail the flow closed) unless the proxy replies with a 2xx status --
+     * after that, the socket is a raw, opaque tunnel to the real destination and the existing
+     * relay loops below take over untouched, exactly as if this had connected directly.
+     */
+    private fun performHttpConnect(socket: Socket, targetHost: String, targetPort: Int) {
+        val credentials = Base64.getEncoder().encodeToString("${proxyConfig.user}:${proxyConfig.password}".toByteArray())
+        val request = "CONNECT $targetHost:$targetPort HTTP/1.1\r\n" +
+            "Host: $targetHost:$targetPort\r\n" +
+            "Proxy-Authorization: Basic $credentials\r\n" +
+            "Proxy-Connection: Keep-Alive\r\n" +
+            "\r\n"
+        socket.getOutputStream().write(request.toByteArray(Charsets.US_ASCII))
+        socket.getOutputStream().flush()
+
+        // Read one byte at a time until each line's terminating CRLF, rather than buffering a
+        // fixed-size chunk -- any byte read past the response's blank line would belong to the
+        // destination's own data (e.g. the client's TLS ClientHello, already relayed through the
+        // now-established tunnel), so this must stop reading at exactly the right place.
+        val statusLine = readOneHttpLine(socket) ?: throw IOException("Proxy CONNECT: no response")
+        if (!Regex("""HTTP/1\.[01] 2\d\d""").containsMatchIn(statusLine)) {
+            throw IOException("Proxy CONNECT to $targetHost:$targetPort failed: $statusLine")
+        }
+        while (true) {
+            val line = readOneHttpLine(socket) ?: throw IOException("Proxy CONNECT: truncated response headers")
+            if (line.isEmpty()) break
+        }
+    }
+
+    private fun readOneHttpLine(socket: Socket): String? {
+        val input = socket.getInputStream()
+        val line = StringBuilder()
+        var previousWasCr = false
+        while (true) {
+            val byte = input.read()
+            if (byte == -1) return if (line.isEmpty()) null else line.toString()
+            val char = byte.toChar()
+            if (previousWasCr && char == '\n') {
+                line.setLength(line.length - 1) // drop the CR already appended below
+                return line.toString()
+            }
+            line.append(char)
+            previousWasCr = char == '\r'
+        }
+    }
+
     /** RST reply for a SYN we're refusing (blocked destination or failed connect) or a stray
      * non-SYN packet with no known connection -- built straight from the wire packet, not any
      * tracked connection state, since none exists yet. */
@@ -358,6 +451,8 @@ class TcpRelayManager(
 
     private companion object {
         const val TAG = "TcpRelayManager"
+        const val HTTP_PORT = 80
+        const val HTTPS_PORT = 443
         const val WINDOW_SIZE = 65535
         // 7 => a raw window field of up to 65535 represents up to ~8.4MB real bytes, comfortably
         // covering the bandwidth-delay product of a fast (100s of Mbps) link even at 100+ms RTT.

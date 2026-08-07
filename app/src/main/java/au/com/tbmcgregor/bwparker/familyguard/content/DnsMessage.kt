@@ -50,6 +50,61 @@ object DnsMessage {
         return header + question.toByteArray()
     }
 
+    /**
+     * Pulls just the A-record (IPv4) answer addresses out of a DNS response -- used only to
+     * populate [VpnFilterService]'s best-effort IP->hostname cache for CONNECT proxying (so the
+     * proxy sees a real hostname instead of a bare IP when one's available); not
+     * security-critical, since a parse failure here just means that cache misses, not that
+     * filtering itself is skipped (the destination IP is still checked/relayed independently).
+     */
+    fun parseAnswerIPv4s(bytes: ByteArray): List<String> {
+        if (bytes.size < 12) return emptyList()
+        val questionCount = readUInt16(bytes, 4)
+        val answerCount = readUInt16(bytes, 6)
+        var offset = 12
+        repeat(questionCount) {
+            offset = skipName(bytes, offset) ?: return emptyList()
+            offset += 4 // QTYPE + QCLASS
+        }
+        val addresses = mutableListOf<String>()
+        repeat(answerCount) {
+            offset = skipName(bytes, offset) ?: return addresses
+            if (offset + 10 > bytes.size) return addresses
+            val type = readUInt16(bytes, offset)
+            val rdLength = readUInt16(bytes, offset + 8)
+            offset += 10
+            if (offset + rdLength > bytes.size) return addresses
+            if (type == TYPE_A && rdLength == 4) {
+                addresses.add(
+                    "${bytes[offset].toInt() and 0xFF}.${bytes[offset + 1].toInt() and 0xFF}." +
+                        "${bytes[offset + 2].toInt() and 0xFF}.${bytes[offset + 3].toInt() and 0xFF}",
+                )
+            }
+            offset += rdLength
+        }
+        return addresses
+    }
+
+    /**
+     * Advances past a (possibly compressed) DNS name starting at [offset], returning the offset of
+     * the byte right after it, or null if malformed. Answer-section names are almost always a
+     * 2-byte compression pointer back at the question -- handled here by treating the pointer
+     * itself as the name's full on-wire length, since the caller only needs to skip past it, not
+     * follow it to read the name it points to.
+     */
+    private fun skipName(bytes: ByteArray, start: Int): Int? {
+        var offset = start
+        while (offset < bytes.size) {
+            val length = bytes[offset].toInt() and 0xFF
+            if (length == 0) return offset + 1
+            if (length and 0xC0 == 0xC0) return offset + 2
+            offset += 1 + length
+        }
+        return null
+    }
+
+    private const val TYPE_A = 1
+
     /** Builds an NXDOMAIN response reusing the original query's header/question section. */
     fun buildBlockedResponse(queryBytes: ByteArray): ByteArray {
         if (queryBytes.size < 12) return queryBytes

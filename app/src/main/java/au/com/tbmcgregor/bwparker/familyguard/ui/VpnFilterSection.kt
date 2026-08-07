@@ -58,6 +58,13 @@ fun VpnFilterSection(context: Context) {
     var cloudEnabled by remember { mutableStateOf(false) }
     var cloudStatusMessage by remember { mutableStateOf("") }
     var cloudTestBusy by remember { mutableStateOf(false) }
+    var proxyEnabled by remember { mutableStateOf(false) }
+    var proxyPort by remember { mutableStateOf("") }
+    var proxyUser by remember { mutableStateOf("") }
+    var proxyPassword by remember { mutableStateOf("") }
+    var proxyStatusMessage by remember { mutableStateOf("") }
+    var proxyTestBusy by remember { mutableStateOf(false) }
+    var caInstalled by remember { mutableStateOf(false) }
 
     LaunchedEffect(refreshTrigger) {
         enabled = vpnManager.wasEnabledByUser()
@@ -68,6 +75,11 @@ fun VpnFilterSection(context: Context) {
         cloudHost = cloudFilterSettings.host()
         cloudPort = cloudFilterSettings.port().toString()
         cloudEnabled = cloudFilterSettings.isEnabled()
+        proxyEnabled = cloudFilterSettings.isProxyEnabled()
+        proxyPort = cloudFilterSettings.proxyPort().toString()
+        proxyUser = cloudFilterSettings.proxyUser()
+        proxyPassword = cloudFilterSettings.proxyPassword()
+        caInstalled = withContext(Dispatchers.IO) { vpnManager.isCaCertInstalled() }
         if (installedApps.isEmpty() && bypassPackages.isNotEmpty()) {
             installedApps = withContext(Dispatchers.IO) { loadInstalledApps(context) }
         }
@@ -90,16 +102,18 @@ fun VpnFilterSection(context: Context) {
     }
 
     SectionCard(
-        title = "NSFW / Content Filter VPN",
+        title = "Filter proxy (traffic via your server)",
         icon = Icons.Default.VpnLock,
-        subtitle = "Canopy-style content filtering: DNS (and known DNS-over-HTTPS resolvers) is " +
-            "checked against a local adult-content domain list, then forwarded to your own cloud " +
-            "filter server as the primary category filter. Doesn't decrypt or read any web page " +
-            "content. Once enabled, Android won't let this be turned off from Settings, and locks " +
-            "down all other network access (including other VPN apps) to routes through this " +
-            "tunnel -- so nothing on this device can bypass it. Enabling this temporarily falls " +
-            "the separate Private DNS filter back to opportunistic (and restores it when " +
-            "disabled) so the two don't conflict.",
+        subtitle = "Web traffic is routed through your own server for filtering: DNS is checked " +
+            "against a local adult-content domain list first, then TCP 80/443 (and QUIC/HTTP3 is " +
+            "dropped so it can't sidestep this over HTTP/3) is CONNECT-proxied through your " +
+            "mitmproxy filter server, which decides whether to block whole requests/pages " +
+            "server-side -- not scrubbed in-page, and not DNS-only. Once enabled, Android won't " +
+            "let this be turned off from Settings, and locks down all other network access " +
+            "(including other VPN apps) to routes through this tunnel -- so nothing on this " +
+            "device can bypass it. Enabling this temporarily falls the separate Private DNS " +
+            "filter back to opportunistic (and restores it when disabled) so the two don't " +
+            "conflict.",
     ) {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text("Status", style = MaterialTheme.typography.bodyLarge)
@@ -108,6 +122,10 @@ fun VpnFilterSection(context: Context) {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text("Lockdown", style = MaterialTheme.typography.bodyLarge)
             StatusText(if (lockdownEnabled) "Active" else "Inactive", isGood = lockdownEnabled)
+        }
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("Proxy CA installed", style = MaterialTheme.typography.bodyLarge)
+            StatusText(if (caInstalled) "Installed" else "Not installed", isGood = caInstalled)
         }
 
         val lastUpdatedText = lastUpdated?.let { DateFormat.getDateTimeInstance().format(Date(it)) } ?: "Never"
@@ -243,6 +261,87 @@ fun VpnFilterSection(context: Context) {
         }
         if (cloudStatusMessage.isNotEmpty()) {
             Text(cloudStatusMessage, style = MaterialTheme.typography.bodySmall)
+        }
+
+        HorizontalDivider()
+
+        Text("Filter proxy (HTTPS interception)", style = MaterialTheme.typography.bodyLarge)
+        Text(
+            "Routes TCP 80/443 through the mitmproxy filter server above (same host, its own " +
+                "port) so whole pages can be blocked server-side, not just DNS-blocked. Requires " +
+                "the proxy's CA cert to be trusted device-wide (see \"Proxy CA installed\" above) " +
+                "-- installed automatically once Device Owner is active. If the proxy is " +
+                "unreachable, HTTPS sites fail to load rather than silently bypassing it.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("Use filter proxy", style = MaterialTheme.typography.bodyMedium)
+            Switch(
+                checked = proxyEnabled,
+                onCheckedChange = {
+                    cloudFilterSettings.setProxyEnabled(it)
+                    proxyEnabled = it
+                    if (enabled) VpnFilterService.reestablish(context)
+                },
+            )
+        }
+        OutlinedTextField(
+            value = proxyPort,
+            onValueChange = { input -> if (input.all { it.isDigit() }) proxyPort = input },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("Proxy port") },
+            singleLine = true,
+            placeholder = { Text("8080") },
+        )
+        OutlinedTextField(
+            value = proxyUser,
+            onValueChange = { proxyUser = it },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("Proxy username") },
+            singleLine = true,
+        )
+        OutlinedTextField(
+            value = proxyPassword,
+            onValueChange = { proxyPassword = it },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("Proxy password") },
+            singleLine = true,
+        )
+        Button(
+            onClick = {
+                proxyPort.toIntOrNull()?.let { cloudFilterSettings.setProxyPort(it) }
+                cloudFilterSettings.setProxyUser(proxyUser)
+                cloudFilterSettings.setProxyPassword(proxyPassword)
+                proxyStatusMessage = "Saved."
+                if (enabled) VpnFilterService.reestablish(context)
+            },
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text("Save filter proxy")
+        }
+        OutlinedButton(
+            enabled = !proxyTestBusy && cloudHost.isNotBlank(),
+            onClick = {
+                proxyTestBusy = true
+                coroutineScope.launch {
+                    proxyPort.toIntOrNull()?.let { cloudFilterSettings.setProxyPort(it) }
+                    cloudFilterSettings.setProxyUser(proxyUser)
+                    cloudFilterSettings.setProxyPassword(proxyPassword)
+                    val reachable = withContext(Dispatchers.IO) { cloudFilterSettings.testProxyReachable() }
+                    proxyStatusMessage = if (reachable) "Proxy reachable." else "Proxy unreachable (check host/port/credentials)."
+                    proxyTestBusy = false
+                }
+            },
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text("Test proxy")
+        }
+        if (proxyStatusMessage.isNotEmpty()) {
+            Text(proxyStatusMessage, style = MaterialTheme.typography.bodySmall)
         }
 
         HorizontalDivider()

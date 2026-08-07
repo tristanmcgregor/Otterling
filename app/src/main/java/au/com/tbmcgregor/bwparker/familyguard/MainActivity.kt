@@ -75,6 +75,7 @@ import au.com.tbmcgregor.bwparker.familyguard.ui.PinLockScreen
 import au.com.tbmcgregor.bwparker.familyguard.ui.SectionCard
 import au.com.tbmcgregor.bwparker.familyguard.ui.SettingsScreen
 import au.com.tbmcgregor.bwparker.familyguard.ui.TimeBudgetsSection
+import au.com.tbmcgregor.bwparker.familyguard.ui.UpdateSection
 import au.com.tbmcgregor.bwparker.familyguard.ui.VpnFilterSection
 import au.com.tbmcgregor.bwparker.familyguard.ui.theme.FamilyGuardTheme
 import au.com.tbmcgregor.bwparker.familyguard.ui.loadInstalledApps
@@ -185,6 +186,7 @@ class MainActivity : ComponentActivity() {
                             TimeBudgetsSection(applicationContext)
                             HabitShareNavSection(onOpen = { screen = Screen.HabitShareSettings })
                             KnoxSetupSection()
+                            UpdateSection(applicationContext)
                         }
                         Screen.HabitShareSettings -> HabitShareSettingsScreen(
                             context = applicationContext,

@@ -18,6 +18,7 @@ import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.InetSocketAddress
+import java.util.Collections
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineExceptionHandler
@@ -34,12 +35,14 @@ import kotlinx.coroutines.sync.withLock
 
 /**
  * Local, always-on VpnService that filters DNS lookups (plus a short list of known public
- * DNS-over-HTTPS/DoT resolver IPs, refused outright) without decrypting or inspecting any actual
- * web traffic. Every query is checked against a downloaded local domain blocklist
+ * DNS-over-HTTPS/DoT resolver IPs, refused outright) and, when the filter proxy is enabled,
+ * routes every captured TCP 80/443 flow through a real HTTPS MITM proxy on the family's own
+ * server ([CloudFilterSettings]) instead of relaying it directly -- that server decides whether
+ * to block a whole request/page, giving page-content-aware filtering, not just DNS-level
+ * category blocking. Every DNS query is still checked against a downloaded local domain blocklist
  * ([DomainBlocklistManager]) first -- always-on defense in depth -- then, if not already blocked,
- * forwarded to a configurable cloud filter server ([CloudFilterSettings]) as the primary category
- * filter (Canopy-style), falling back to a hardcoded public resolver only if the cloud filter is
- * unconfigured or unreachable.
+ * forwarded to the same cloud filter server for DNS-level filtering, falling back to a hardcoded
+ * public resolver only if that's unconfigured or unreachable.
  *
  * Captures a full default route (every IPv4 destination) because a [VpnService] that captures all
  * app traffic but only has routes for a handful of specific IPs makes every *other* destination
@@ -49,8 +52,10 @@ import kotlinx.coroutines.sync.withLock
  * traffic funneled through here anyway (so nothing can bypass it), the only way to do that without
  * breaking everything else is to also relay everything else back out ourselves --
  * [TcpRelayManager]/[UdpRelayManager] do that: real destinations get a real (protected) socket
- * opened on this device and bytes are bridged transparently in both directions; only DNS (port 53)
- * and the hardcoded DoH/DoT IPs get special treatment.
+ * opened on this device and bytes are bridged transparently in both directions; only DNS (port 53),
+ * the hardcoded DoH/DoT IPs, TCP 80/443 (proxied, not relayed directly, when the filter proxy is
+ * on), and UDP 443/QUIC (dropped outright when the filter proxy is on, forcing HTTPS onto TCP so
+ * it can't bypass the proxy over HTTP/3) get special treatment.
  *
  * Registered as the device's mandatory VPN via [VpnFilterManager], which uses Device Owner's
  * `DevicePolicyManager.setAlwaysOnVpnPackage(..., lockdownEnabled = true)` -- once set, Android
@@ -94,6 +99,21 @@ class VpnFilterService : VpnService() {
     // firing at the same time as an establish() retry): set when a restart is scheduled, cleared
     // right before it actually rebuilds, so at most one rebuild is ever pending at a time.
     private val restartScheduled = AtomicBoolean(false)
+    // Best-effort IP->hostname cache populated from real (non-blocked) DNS answers, so
+    // TcpRelayManager can put a real hostname on the CONNECT line to the filter proxy instead of a
+    // bare IP for a flow whose app already resolved the name through us. Not required for
+    // filtering to work (the proxy reads the true destination from the TLS ClientHello/Host header
+    // regardless of what the CONNECT line said), just a nicety -- so this deliberately survives
+    // reestablish() (a fresh generation shouldn't have to relearn every hostname it already knew)
+    // but is capped and access-ordered (LRU) rather than kept forever, since plenty of real-world
+    // IPs (CDN edges, shared hosting) serve many different hostnames over time and an unbounded
+    // or stale mapping would misattribute a later, unrelated connection to an old hostname.
+    private val dnsAnswerHostnameCache = Collections.synchronizedMap(
+        object : LinkedHashMap<String, String>(16, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>?) =
+                size > MAX_DNS_HOSTNAME_CACHE_ENTRIES
+        },
+    )
 
     override fun onCreate() {
         super.onCreate()
@@ -230,12 +250,22 @@ class VpnFilterService : VpnService() {
             }
         }
         val isBlockedDestination: (String) -> Boolean = { ip -> ip in KNOWN_DOH_IPS }
+        val proxyEnabled = cloudFilterSettings.isProxyEnabled()
+        val proxyConfig = ProxyConfig(
+            enabled = proxyEnabled,
+            host = cloudFilterSettings.host(),
+            port = cloudFilterSettings.proxyPort(),
+            user = cloudFilterSettings.proxyUser(),
+            password = cloudFilterSettings.proxyPassword(),
+        )
 
         val tcpRelay = TcpRelayManager(
             scope = relayScope,
             protect = { socket -> protect(socket) },
             writeToTun = writeToTun,
             isBlockedDestination = isBlockedDestination,
+            proxyConfig = proxyConfig,
+            resolveHostname = { ip -> dnsAnswerHostnameCache[ip] },
         )
         val udpRelay = UdpRelayManager(
             scope = relayScope,
@@ -293,6 +323,13 @@ class VpnFilterService : VpnService() {
                         // lookups in quick succession, e.g. Spotify resolving several
                         // edge/access-point hostnames at once, see lookups time out).
                         relayScope.launch { handleDnsPacket(packet, writeToTun, blocklist, cloudFilterSettings) }
+                    } else if (proxyEnabled && packet.destinationPort == QUIC_PORT) {
+                        // Silent drop: forces browsers/apps to fall back to TCP HTTPS instead of
+                        // HTTP/3-over-QUIC, which would otherwise sail straight past the proxy
+                        // (QUIC carries its own encrypted transport, not just TLS-over-TCP, so
+                        // there's no equivalent "CONNECT and bridge" option for it here). Only
+                        // dropped while the proxy is actually in use -- plain DNS-only filtering
+                        // has no reason to break QUIC.
                     } else {
                         udpRelay.handle(packet)
                     }
@@ -340,6 +377,12 @@ class VpnFilterService : VpnService() {
         if (response == null) {
             Log.d(TAG, "DNS: '${query.questionName}' upstream lookup failed/timed out -- no reply sent")
             return
+        }
+        if (!blocked) {
+            // Best-effort: lets TcpRelayManager's proxy CONNECT use a real hostname for a flow to
+            // one of these IPs instead of a bare IP. See dnsAnswerHostnameCache's own comment for
+            // why this is a nicety, not a correctness requirement.
+            DnsMessage.parseAnswerIPv4s(response).forEach { ip -> dnsAnswerHostnameCache[ip] = query.questionName }
         }
         Log.d(TAG, "DNS: '${query.questionName}' blocked=$blocked -> replying with ${response.size} bytes")
 
@@ -420,6 +463,9 @@ class VpnFilterService : VpnService() {
         private const val VIRTUAL_IP = "10.111.222.1"
         private const val DNS_SERVER_IP = "10.111.222.2"
         private const val DNS_PORT = 53
+        // HTTPS's UDP port when carried over QUIC/HTTP3 -- dropped while the filter proxy is on;
+        // see the drop site in runPacketLoop for why.
+        private const val QUIC_PORT = 443
         private const val UPSTREAM_DNS = "1.1.1.1"
         private const val UPSTREAM_TIMEOUT_MS = 5_000
         // Real Ethernet/Wi-Fi framing never sees this value: these "packets" only ever travel
@@ -432,6 +478,9 @@ class VpnFilterService : VpnService() {
         // by many more packets, was capping real download throughput to a small fraction of the
         // underlying link's actual speed even once flow control/window scaling were fixed.
         private const val MTU = 16384
+        // Cap on dnsAnswerHostnameCache -- generous for a single phone's worth of concurrently
+        // "recently resolved" hostnames while still bounding memory.
+        private const val MAX_DNS_HOSTNAME_CACHE_ENTRIES = 2_000
         // See runPacketLoop's zero-length-read handling: how long to back off when the tun fd
         // returns 0 bytes without blocking, instead of busy-spinning on it.
         private const val EMPTY_READ_BACKOFF_MS = 20L

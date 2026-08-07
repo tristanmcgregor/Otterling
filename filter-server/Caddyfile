@@ -1,0 +1,9 @@
+# Static host for signed Otterling update manifests/APKs -- see updates/README.md and the
+# top-level README's "Gated updates" section. Caddy handles Let's Encrypt automatically as long as
+# ports 80/443 are reachable from the internet for the ACME challenge (same grey-cloud DNS setup
+# already used for the DNS/proxy services -- see the main README's "Production host" section).
+{$UPDATE_HOST:vpn.bartholomew.help} {
+	root * /srv/updates
+	file_server
+	encode gzip
+}

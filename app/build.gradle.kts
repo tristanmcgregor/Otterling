@@ -20,6 +20,24 @@ val escapedKnoxLicenseKey = knoxLicenseKey
     .replace("\\", "\\\\")
     .replace("\"", "\\\"")
 
+// Release signing + the pinned fingerprint ApprovedUpdateManager checks a downloaded update APK
+// against -- see .github/workflows/update-review.yml and scripts/update_review_checklist.md for
+// where a real value comes from (the Guardian-approved CI release environment, not this machine).
+val releaseKeystorePath = System.getenv("RELEASE_KEYSTORE_PATH")
+    ?: localProperties.getProperty("RELEASE_KEYSTORE_PATH")
+val releaseKeystorePassword = System.getenv("RELEASE_KEYSTORE_PASSWORD")
+    ?: localProperties.getProperty("RELEASE_KEYSTORE_PASSWORD")
+    ?: ""
+val releaseKeyAlias = System.getenv("RELEASE_KEY_ALIAS")
+    ?: localProperties.getProperty("RELEASE_KEY_ALIAS")
+    ?: ""
+val releaseKeyPassword = System.getenv("RELEASE_KEY_PASSWORD")
+    ?: localProperties.getProperty("RELEASE_KEY_PASSWORD")
+    ?: ""
+val releaseCertSha256 = System.getenv("RELEASE_CERT_SHA256")
+    ?: localProperties.getProperty("RELEASE_CERT_SHA256")
+    ?: ""
+
 android {
     namespace = "au.com.tbmcgregor.bwparker.familyguard"
     compileSdk = 36
@@ -32,6 +50,10 @@ android {
         versionName = "0.1.0"
 
         buildConfigField("String", "KNOX_LICENSE_KEY", "\"$escapedKnoxLicenseKey\"")
+        // Empty in any build that isn't the Guardian-approved CI release build -- ApprovedUpdateManager
+        // treats an empty pin as "not configured" and refuses to install anything rather than
+        // treating a missing pin as "skip the check".
+        buildConfigField("String", "RELEASE_CERT_SHA256", "\"$releaseCertSha256\"")
     }
 
     buildFeatures {
@@ -44,6 +66,24 @@ android {
         noCompress += "tflite"
     }
 
+    signingConfigs {
+        // Only defined when the release keystore secrets are actually present -- CI's protected
+        // `release` environment (after AI review + Guardian approval), or deliberately set up
+        // locally by the Guardian. A checkout without them can still run `assembleRelease` (it
+        // just produces an unsigned APK) rather than failing outright, since an unsigned local
+        // release build was never a valid install candidate anyway -- the phone only trusts an
+        // APK whose signing cert matches RELEASE_CERT_SHA256, and only CI's protected environment
+        // ever signs with the key that produces that fingerprint.
+        if (releaseKeystorePath != null) {
+            create("release") {
+                storeFile = file(releaseKeystorePath)
+                storePassword = releaseKeystorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true
@@ -51,6 +91,7 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
+            signingConfigs.findByName("release")?.let { signingConfig = it }
         }
     }
 }

@@ -6,9 +6,53 @@ services:
     ports:
       # AdGuard Home's setup wizard / admin UI.
       - "${ADMIN_UI_PORT:-3000}:3000/tcp"
-      # Plain DNS -- this is what the Otterling app's "Filter server host/port" setting points at.
+      # Plain DNS -- fallback/failsafe layer + used by anything not going through the proxy.
       - "${DNS_PORT:-53}:53/tcp"
       - "${DNS_PORT:-53}:53/udp"
     volumes:
       - ./work:/opt/adguardhome/work
       - ./conf:/opt/adguardhome/conf
+
+  mitmproxy:
+    image: mitmproxy/mitmproxy:latest
+    container_name: otterling-mitmproxy
+    restart: unless-stopped
+    ports:
+      # The Otterling app's "Filter proxy" setting CONNECTs here for all port 80/443 TCP traffic.
+      - "${PROXY_PORT:-8080}:8080/tcp"
+    volumes:
+      # Persists the generated CA (mitmproxy creates ~/.mitmproxy/mitmproxy-ca-cert.pem here on
+      # first run if this is empty) plus any other mitmproxy state across container restarts.
+      - ./mitm-ca:/home/mitmproxy/.mitmproxy
+      - ./mitm_nsfw_addon.py:/home/mitmproxy/mitm_nsfw_addon.py:ro
+    environment:
+      - PROXY_USER=${PROXY_USER:-otterling}
+      - PROXY_PASSWORD=${PROXY_PASSWORD:?set PROXY_PASSWORD in .env}
+    # Regular (non-transparent) HTTP CONNECT proxy mode: the Android app tunnels each TCP 80/443
+    # flow here via CONNECT, mitmproxy dials the real destination itself, and auto-detects TLS vs
+    # plain HTTP inside the tunnel so both get inspected by mitm_nsfw_addon.py -- no in-page
+    # scrubbing, only full request/response block per that addon.
+    command: >
+      mitmdump
+      --mode regular
+      --listen-port 8080
+      --proxyauth "${PROXY_USER:-otterling}:${PROXY_PASSWORD}"
+      --set confdir=/home/mitmproxy/.mitmproxy
+      -s /home/mitmproxy/mitm_nsfw_addon.py
+
+  updates:
+    image: caddy:alpine
+    container_name: otterling-updates
+    restart: unless-stopped
+    ports:
+      # 80 for the ACME HTTP-01 challenge only (Caddy auto-redirects to 443); 443 is what
+      # ApprovedUpdateManager actually talks to (https://<host>/updates/manifest.json).
+      - "80:80/tcp"
+      - "443:443/tcp"
+    environment:
+      - UPDATE_HOST=${UPDATE_HOST:-vpn.bartholomew.help}
+    volumes:
+      - ./updates:/srv/updates:ro
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./caddy-data:/data
+      - ./caddy-config:/config

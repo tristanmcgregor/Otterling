@@ -127,6 +127,10 @@
                 android:resource="@xml/file_paths" />
         </provider>
 
+        <receiver
+            android:name=".updates.UpdateInstallResultReceiver"
+            android:exported="false" />
+
         <service
             android:name=".content.VpnFilterService"
             android:exported="true"

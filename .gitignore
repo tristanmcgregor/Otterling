@@ -16,3 +16,17 @@ macos/FocusLock/.swiftpm/
 # Independent nested git repo (Play Store variant) -- never tracked by this repo.
 TrittyBlocker-Playstore/
 
+# filter-server runtime data -- generated per-deployment, never committed (the mitmproxy CA in
+# particular is unique per server and is a private key, not just a public cert).
+filter-server/.env
+filter-server/work/
+filter-server/conf/
+filter-server/mitm-ca/
+filter-server/__pycache__/
+filter-server/ca/*.pem
+!filter-server/ca/README.md
+filter-server/updates/*
+!filter-server/updates/README.md
+filter-server/caddy-data/
+filter-server/caddy-config/
+
