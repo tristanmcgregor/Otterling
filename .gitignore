@@ -30,3 +30,4 @@ filter-server/updates/*
 filter-server/caddy-data/
 filter-server/caddy-config/
 
+filter-server/.ci-otterling-deploy-key

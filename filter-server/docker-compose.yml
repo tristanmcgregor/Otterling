@@ -18,9 +18,14 @@ services:
     image: mitmproxy/mitmproxy:latest
     container_name: otterling-mitmproxy
     restart: unless-stopped
+    # Host unbound/CleanBrowsing NXDOMAINs social domains (e.g. reddit.com). Use public DNS so
+    # mitmproxy can still dial those hosts and apply path/title filtering instead of returning 502.
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
     ports:
-      # The Otterling app's "Filter proxy" setting CONNECTs here for all port 80/443 TCP traffic.
-      - "${PROXY_PORT:-8080}:8080/tcp"
+      # Internal listen is always 8080; host port is usually 8090 with port8080_mux.py on 8080.
+      - "${PROXY_PORT:-8090}:8080/tcp"
     volumes:
       # Persists the generated CA (mitmproxy creates ~/.mitmproxy/mitmproxy-ca-cert.pem here on
       # first run if this is empty) plus any other mitmproxy state across container restarts.
@@ -50,10 +55,15 @@ services:
       # ApprovedUpdateManager actually talks to (https://<host>/updates/manifest.json).
       - "80:80/tcp"
       - "443:443/tcp"
+    extra_hosts:
+      # Reach host webhook listener (otterling-github-webhook.service on 127.0.0.1:9070).
+      - "host.docker.internal:host-gateway"
     environment:
       - UPDATE_HOST=${UPDATE_HOST:-vpn.bartholomew.help}
     volumes:
-      - ./updates:/srv/updates:ro
+      # Host path is owned by otterling-deploy (CI SFTP only). Not the git checkout.
+      - /var/lib/otterling/updates:/srv/updates:ro
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - ./caddy-data:/data
       - ./caddy-config:/config
+

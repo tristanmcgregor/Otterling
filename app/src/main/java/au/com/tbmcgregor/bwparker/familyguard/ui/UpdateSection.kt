@@ -47,17 +47,16 @@ fun UpdateSection(context: Context) {
         title = "App updates",
         icon = Icons.Default.SystemUpdate,
         subtitle = "The only way this app updates itself: a signed build that passed AI review " +
-            "against scripts/update_review_checklist.md and was approved by the Guardian in a " +
-            "protected GitHub environment, published to the family's own update server. There is " +
-            "no way to install a locally-built or otherwise-unsigned APK from this screen -- " +
-            "that would defeat the VPN lockdown, proxy fail-closed behavior, and every other " +
-            "protection in this app.",
+            "against scripts/update_review_checklist.md and was published by CI to the family's " +
+            "own update server. There is no way to install a locally-built or otherwise-unsigned " +
+            "APK from this screen -- that would defeat the VPN lockdown, proxy fail-closed " +
+            "behavior, and every other protection in this app.",
     ) {
         Text("Current version: ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})", style = MaterialTheme.typography.bodySmall)
         if (BuildConfig.RELEASE_CERT_SHA256.isBlank()) {
             Text(
                 "This build has no pinned release certificate -- it will refuse to install any " +
-                    "update at all until built by the Guardian-approved CI release environment.",
+                    "update at all until built by the AI-approved CI release pipeline.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error,
             )
@@ -114,9 +113,9 @@ fun UpdateSection(context: Context) {
 
         Text("Request an update", style = MaterialTheme.typography.bodyLarge)
         Text(
-            "Opens a browser to file a GitHub issue asking for a review/release, and alerts the " +
-                "Guardian. Doesn't install anything by itself -- someone still has to make the " +
-                "change, pass AI review, and get Guardian approval.",
+            "Opens a browser to file a GitHub issue asking for a review/release, and can alert " +
+                "the Guardian SMS contact. Doesn't install anything by itself -- someone still " +
+                "has to make the change and get an AI VERDICT: PASS so CI can sign and publish.",
             style = MaterialTheme.typography.bodySmall,
         )
         OutlinedTextField(
@@ -150,15 +149,15 @@ fun UpdateSection(context: Context) {
                             .appendQueryParameter("title", "Update requested from Otterling app")
                             .appendQueryParameter(
                                 "body",
-                                "Requesting review of a change and a new Guardian-approved release.",
+                                "Requesting review of a change and a new AI-approved release.",
                             )
                             .build()
                         runCatching {
                             context.startActivity(Intent(Intent.ACTION_VIEW, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                         }
-                        requestStatusMessage = "Opened GitHub and alerted the Guardian."
+                        requestStatusMessage = "Opened GitHub and sent an alert if SMS is configured."
                     } else {
-                        requestStatusMessage = "Alerted the Guardian (no GitHub URL configured above)."
+                        requestStatusMessage = "Alert sent if SMS is configured (no GitHub URL above)."
                     }
                 }
             },

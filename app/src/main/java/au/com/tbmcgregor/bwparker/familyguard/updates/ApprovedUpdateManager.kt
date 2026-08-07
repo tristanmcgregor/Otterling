@@ -43,16 +43,15 @@ sealed class InstallResult {
  * this app (a self-built APK with the VPN lockdown / proxy fail-closed / CA install / blocklist
  * code quietly removed installs and runs exactly like the real thing). See
  * scripts/update_review_checklist.md and .github/workflows/update-review.yml for the review/sign
- * side of this: only a build that passed AI review against that checklist *and* was approved by
- * the Guardian in a protected GitHub environment ever gets signed with the release key and
- * published to the update host.
+ * side of this: only a build that passed AI review against that checklist ever gets signed with
+ * the release key and published to the update host.
  *
  * Trust chain enforced entirely on-device, in order:
  * 1. The downloaded manifest names a version/URL/SHA-256.
  * 2. The downloaded APK's own SHA-256 must match the manifest's.
  * 3. The downloaded APK's own signing certificate fingerprint must match
  *    [BuildConfig.RELEASE_CERT_SHA256] (baked in at build time, empty on any build that isn't the
- *    Guardian-approved CI release build).
+ *    AI-approved CI release build).
  *
  * Step 3 is the actual root of trust, not the manifest alone: a compromised or spoofed update
  * host could publish a resigned APK together with a matching self-authored manifest (steps 1-2
