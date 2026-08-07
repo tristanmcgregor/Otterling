@@ -39,6 +39,7 @@ import kotlinx.coroutines.launch
 /**
  * Overflow-menu / quick entry for the same gated update path as [UpdateSection].
  * Auto-checks on open; still requires the pinned release cert + manifest SHA checks.
+ * Also shows other monorepo components from `/updates/index.json` (e.g. filter-server deploy).
  */
 @Composable
 fun CheckForUpdatesDialog(context: Context, onDismiss: () -> Unit) {
@@ -48,12 +49,14 @@ fun CheckForUpdatesDialog(context: Context, onDismiss: () -> Unit) {
     var installing by remember { mutableStateOf(false) }
     var statusMessage by remember { mutableStateOf("Checking…") }
     var availableManifest by remember { mutableStateOf<UpdateManifest?>(null) }
+    var componentLines by remember { mutableStateOf<List<String>>(emptyList()) }
 
     fun runCheck() {
         checking = true
         statusMessage = "Checking…"
         availableManifest = null
         coroutineScope.launch {
+            componentLines = updateManager.fetchComponentSummaries()
             when (val result = updateManager.checkForUpdate()) {
                 is UpdateCheckResult.UpToDate -> statusMessage = "Already up to date."
                 is UpdateCheckResult.UpdateAvailable -> {
@@ -89,6 +92,12 @@ fun CheckForUpdatesDialog(context: Context, onDismiss: () -> Unit) {
                     )
                 }
                 Text(statusMessage, style = MaterialTheme.typography.bodyMedium)
+                if (componentLines.isNotEmpty()) {
+                    Text("Server components", style = MaterialTheme.typography.labelLarge)
+                    componentLines.forEach { line ->
+                        Text(line, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
                 availableManifest?.let { manifest ->
                     Button(
                         enabled = !installing && !checking,

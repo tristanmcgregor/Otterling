@@ -1,19 +1,24 @@
 # Updates directory (git tree)
 
-This folder in git only keeps documentation. **Published APKs and `manifest.json` are not here.**
+This folder in git only keeps documentation. **Published artifacts are not here.**
 
-On the production host they live at:
+On the production host:
 
 ```text
 /var/lib/otterling/updates/
+  manifest.json              # Android (phones read this)
+  otterling-<version>.apk
+  index.json                 # All monorepo components
+  android/                   # Same APK + manifest (namespaced)
+  filter-server/manifest.json
 ```
 
-written by root via `sudo otterling-release` (see [`SELF_LOCKOUT.md`](../SELF_LOCKOUT.md)).
-Caddy mounts that path read-only. GitHub Actions does **not** publish here.
+Written by root via `release.sh` after AI `VERDICT: PASS`:
 
-Published files:
+1. Build + publish Android APK
+2. Deploy `filter-server` onto this host (compose + mux), preserving `.env` / CA / AdGuard state
+3. Write `index.json` listing every component
 
-- `manifest.json` -- fetched by `ApprovedUpdateManager.checkForUpdate()`
-- `otterling-<versionName>.apk` -- referenced by `manifest.json`'s `apkUrl`
+macOS FocusLock is listed in `index.json` as `not_built_on_linux` until a Mac builder exists.
 
-Do not hand-copy APKs into that directory from a daily account.
+See [`SELF_LOCKOUT.md`](../SELF_LOCKOUT.md).

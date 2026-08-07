@@ -35,6 +35,9 @@ weakened, nothing else here matters, because a bypassed build could ship anyway.
   `sign-and-publish` / release-signing / update-host upload job. Signing + publish happen only via
   root-owned `/var/lib/otterling/ci/release.sh` (`sudo otterling-release`) after AI `VERDICT: PASS`
   against the pinned server checklist. The in-repo workflow may be advisory-only.
+- That same `release.sh` must keep deploying **filter-server** onto the update host after PASS
+  (not APK-only). FAIL any attempt to document or reintroduce a path that publishes the Android
+  APK while skipping host `filter-server` deploy when that tree changed.
 
 ## 2. VPN lockdown (Android)
 

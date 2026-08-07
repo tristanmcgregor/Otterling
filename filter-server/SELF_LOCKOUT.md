@@ -26,6 +26,9 @@ Phones: Settings → App updates → Check for update
 First successful publish (2026-08-07): `otterling-0.1.0.apk` at
 `https://vpn.bartholomew.help/updates/` with GitHub status `otterling/release` = success.
 
+A PASS now also **redeploys `filter-server`** on this host (compose + mux) from the same
+reviewed tree, and writes `/updates/index.json` listing android + filter-server (+ macos skip).
+
 ## Server (control plane — not in git)
 
 | Piece | Role |
@@ -34,6 +37,8 @@ First successful publish (2026-08-07): `otterling-0.1.0.apk` at
 | `/var/lib/otterling/ci/webhook_server.py` | HMAC-verify + spawn release |
 | `/var/lib/otterling/ci/release.sh` | Pull → AI → sign → publish |
 | `/var/lib/otterling/ci/github_status.sh` | Posts `otterling/release` commit status |
+| `/var/lib/otterling/ci/deploy_filter_server.sh` | Rsyncs AI-approved `filter-server/` onto live stack |
+| `/var/lib/otterling/ci/apps.conf` | Which monorepo components release may publish/deploy |
 | `/var/lib/otterling/ci/checklist.md` | Pinned deny checklist |
 | `/var/lib/otterling/ci/secrets.env` | Keys (mode 600, root only) |
 | `/var/lib/otterling/ci/secrets/release.jks` | Release signing keystore |

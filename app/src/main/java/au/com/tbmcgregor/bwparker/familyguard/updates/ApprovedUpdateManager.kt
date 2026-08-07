@@ -67,6 +67,39 @@ class ApprovedUpdateManager(private val context: Context) {
      *  place to configure it. */
     fun manifestUrl(): String = "https://${cloudFilterSettings.host()}/updates/manifest.json"
 
+    fun indexUrl(): String = "https://${cloudFilterSettings.host()}/updates/index.json"
+
+    /**
+     * Optional multi-component status from the host (android + filter-server + …).
+     * Failures return an empty list — the APK path still works via [checkForUpdate].
+     */
+    suspend fun fetchComponentSummaries(): List<String> = withContext(Dispatchers.IO) {
+        try {
+            val body = httpGet(indexUrl())
+            val root = JSONObject(body)
+            val components = root.optJSONArray("components") ?: return@withContext emptyList()
+            buildList {
+                for (i in 0 until components.length()) {
+                    val c = components.getJSONObject(i)
+                    val id = c.optString("id", "?")
+                    when (c.optString("kind")) {
+                        "android_apk" -> add(
+                            "Android: ${c.optString("versionName")} (${c.optInt("versionCode")})",
+                        )
+                        "host_deploy" -> add(
+                            "filter-server: ${c.optString("status")} @ ${c.optString("gitSha").take(8)}",
+                        )
+                        "skip" -> add("$id: ${c.optString("status")}")
+                        else -> add("$id: ${c.optString("status", "ok")}")
+                    }
+                }
+            }
+        } catch (error: Exception) {
+            Log.w(TAG, "index.json fetch failed", error)
+            emptyList()
+        }
+    }
+
     suspend fun checkForUpdate(): UpdateCheckResult = withContext(Dispatchers.IO) {
         try {
             val body = httpGet(manifestUrl())
