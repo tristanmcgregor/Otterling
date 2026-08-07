@@ -82,7 +82,7 @@ class CloudFilterSettings(context: Context) {
         const val KEY_ENABLED = "enabled"
         const val KEY_HOST = "host"
         const val KEY_PORT = "port"
-        const val DEFAULT_HOST = "bartholomew.help"
+        const val DEFAULT_HOST = "vpn.bartholomew.help"
         const val DEFAULT_PORT = 53
     }
 }

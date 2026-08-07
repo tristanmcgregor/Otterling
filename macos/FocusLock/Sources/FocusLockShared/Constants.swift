@@ -35,5 +35,5 @@ public enum FocusLockConstants {
 
     /// Default cloud content-filter DNS host (a Canopy-style AdGuard Home deployment -- see
     /// filter-server/README.md at the repo root), mirroring the Android app's `CloudFilterSettings`.
-    public static let defaultCloudFilterHost = "bartholomew.help"
+    public static let defaultCloudFilterHost = "vpn.bartholomew.help"
 }

@@ -192,7 +192,7 @@ struct ContentView: View {
                 Text("Use cloud filter server").font(.subheadline)
             }
             HStack {
-                TextField("bartholomew.help", text: $viewModel.cloudFilterHostText)
+                TextField("vpn.bartholomew.help", text: $viewModel.cloudFilterHostText)
                     .onSubmit { viewModel.saveCloudFilterHost() }
                 Button("Save") { viewModel.saveCloudFilterHost() }
             }

@@ -13,14 +13,14 @@ This is deliberately just AdGuard Home's own category blocklists doing the filte
 5. `docker compose up -d`.
 6. Open `http://<vps-ip>:3000` and complete the AdGuard Home setup wizard (pick an admin username/password -- this UI controls DNS for every device pointed at it, so don't leave it on defaults).
 7. In AdGuard Home's web UI, under **Filters → DNS blocklists**, enable an adult-content list (e.g. search "adult" in the list of preset blocklists, or add a custom one) and any other category lists you want enforced (gambling, etc.).
-8. In the Otterling app: Settings → Content Filter VPN → **Cloud filter server** → enter `bartholomew.help` and port `53`, tap **Save filter server**, then **Test filter server** to confirm it's reachable, then toggle **Use cloud filter** on.
+8. In the Otterling app: Settings → Content Filter VPN → **Cloud filter server** → enter `vpn.bartholomew.help` and port `53`, tap **Save filter server**, then **Test filter server** to confirm it's reachable, then toggle **Use cloud filter** on.
 
-## Production host (bartholomew.help)
+## Production host (vpn.bartholomew.help)
 
-Intended public hostname: **`bartholomew.help`** (points at the home/server PC).
+Intended public hostname: **`vpn.bartholomew.help`** (points at the home/server PC).
 
 DNS (Cloudflare):
-- Add an **A** (or AAAA) record for `bartholomew.help` → your server's **public** IP.
+- Add an **A** (or AAAA) record for `vpn` (`vpn.bartholomew.help`) → your server's **public** IP.
 - Set the record to **DNS only** (grey cloud), **not** proxied. Cloudflare's proxy does not forward plain DNS on port 53 to origin; orange-cloud will break the phone's filter upstream.
 - MX already exists; that's fine and unrelated.
 

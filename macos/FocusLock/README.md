@@ -44,7 +44,7 @@ focuslockctl (CLI, runs as you)  --XPC-->        |
      unconditionally, regardless of the DNS enforcement toggle below.
   2. **Cloud, primary, opt-in**: DNS enforcement points every network service's DNS at a
      configurable cloud filter server -- a Canopy-style AdGuard Home deployment, default
-     `bartholomew.help`, see [`filter-server/README.md`](../../filter-server/README.md) at the repo
+     `vpn.bartholomew.help`, see [`filter-server/README.md`](../../filter-server/README.md) at the repo
      root -- falling back to Cloudflare Family (`1.1.1.3`/`1.0.0.3`) if the cloud filter is off or
      its host can't currently be resolved.
   A narrow `pf` anchor blocks DNS-over-TLS and known public DoH resolver IPs (and explicitly
@@ -110,7 +110,7 @@ ps aux | grep FocusLockHelperd
   category filtering:
 
 ```bash
-focuslockctl set-filter-host bartholomew.help
+focuslockctl set-filter-host vpn.bartholomew.help
 focuslockctl enable-dns
 focuslockctl add-domain reddit.com
 focuslockctl add-app "Steam" steam_osx

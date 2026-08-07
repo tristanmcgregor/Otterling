@@ -33,7 +33,7 @@ func printUsage() {
 
     Content filter (NSFW): a downloaded local adult-domain hosts list is applied unconditionally,
     always. DNS enforcement additionally points every network service at a configurable cloud
-    filter server (`set-filter-host`, default bartholomew.help) and blocks alternate/DoH/DoT
+    filter server (`set-filter-host`, default vpn.bartholomew.help) and blocks alternate/DoH/DoT
     resolvers so it can't be sidestepped by just picking a different one -- falling back to
     Cloudflare Family (1.1.1.3 / 1.0.0.3) if the cloud filter is off or its host can't be resolved.
 

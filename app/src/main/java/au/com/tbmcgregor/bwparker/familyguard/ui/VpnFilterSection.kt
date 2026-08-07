@@ -204,7 +204,7 @@ fun VpnFilterSection(context: Context) {
             modifier = Modifier.fillMaxWidth(),
             label = { Text("Filter server host") },
             singleLine = true,
-            placeholder = { Text("bartholomew.help") },
+            placeholder = { Text("vpn.bartholomew.help") },
         )
         OutlinedTextField(
             value = cloudPort,
