@@ -55,6 +55,7 @@ The live gate always uses the pinned host checklist. A release compares any cand
 | `/var/lib/otterling/ci/release.lock` | Serializes overlapping releases (`flock`) |
 | `/var/lib/otterling/updates/` | Live APK + `manifest.json` + `index.json` |
 | `/var/lib/otterling/updates/last_published_sha` | Review base for the next release (updated only on PASS) |
+| `/var/lib/otterling/review/` | `status.json`/`history.json` for the `/review` dashboard (see `review-dashboard/README.md`) |
 
 ## Host networking notes
 
@@ -124,6 +125,16 @@ Each release posts a **commit status** with context **`otterling/release`**:
 - red/failure when AI rejected or build failed
 
 Example success on commit `d8e50cc`: “AI approved — published v0.1.0”.
+
+## Watching a review happen
+
+`https://vpn.bartholomew.help/review` (HTTP Basic Auth -- see `.env.example`) shows the current/
+last release's status, the AI's full raw review output, and recent history. It's a static page in
+git (`filter-server/review-dashboard/`); the actual data comes from `/var/lib/otterling/review/`,
+which `release.sh` must be taught to write -- see
+[`review-dashboard/README.md`](review-dashboard/README.md) for the exact JSON shape and a
+drop-in reference snippet. Until `release.sh` writes those files, the page just says "no review
+data yet" -- that's expected.
 
 ## Manual release (debug)
 

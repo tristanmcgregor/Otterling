@@ -8,5 +8,25 @@
 		root * /srv/updates
 		file_server
 	}
+
+	# AI review dashboard (filter-server/review-dashboard/) -- read-only view of the server-side
+	# release.sh pipeline's status/history, written to /var/lib/otterling/review/ (see
+	# review-dashboard/README.md for the JSON schema release.sh must write). Basic-auth protected:
+	# this exposes commit messages and the AI's raw review reasoning, not something to leave open
+	# to the internet like /updates is. Generate the password hash with:
+	#   docker run --rm caddy:alpine caddy hash-password --plaintext 'your-password-here'
+	@review path /review /review/* /review-data/*
+	basic_auth @review {
+		{$REVIEW_DASHBOARD_USER} {$REVIEW_DASHBOARD_PASSWORD_HASH}
+	}
+	handle_path /review-data/* {
+		root * /srv/review-data
+		file_server
+	}
+	handle_path /review* {
+		root * /srv/review-dashboard
+		file_server
+	}
+
 	encode gzip
 }

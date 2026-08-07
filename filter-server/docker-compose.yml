@@ -60,9 +60,16 @@ services:
       - "host.docker.internal:host-gateway"
     environment:
       - UPDATE_HOST=${UPDATE_HOST:-vpn.bartholomew.help}
+      - REVIEW_DASHBOARD_USER=${REVIEW_DASHBOARD_USER:-guardian}
+      - REVIEW_DASHBOARD_PASSWORD_HASH=${REVIEW_DASHBOARD_PASSWORD_HASH:?set REVIEW_DASHBOARD_PASSWORD_HASH in .env, see review-dashboard/README.md}
     volumes:
       # Host path is owned by otterling-deploy (CI SFTP only). Not the git checkout.
       - /var/lib/otterling/updates:/srv/updates:ro
+      # Written by release.sh (root-owned host script, not in git) after each review -- see
+      # review-dashboard/README.md for the JSON schema it must write.
+      - /var/lib/otterling/review:/srv/review-data:ro
+      # The dashboard page itself ships in git, unlike the two mounts above.
+      - ./review-dashboard:/srv/review-dashboard:ro
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - ./caddy-data:/data
       - ./caddy-config:/config
