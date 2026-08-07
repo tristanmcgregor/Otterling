@@ -58,6 +58,10 @@ services:
       - UPDATE_HOST=${UPDATE_HOST:-vpn.bartholomew.help}
       - REVIEW_DASHBOARD_USER=${REVIEW_DASHBOARD_USER:-guardian}
       - REVIEW_DASHBOARD_PASSWORD_HASH=${REVIEW_DASHBOARD_PASSWORD_HASH:?set REVIEW_DASHBOARD_PASSWORD_HASH in .env, see review-dashboard/README.md}
+      # Host CBLOCK blocks direct outbound 443; ACME renewals need the local forward proxy.
+      - HTTP_PROXY=http://127.0.0.1:3128
+      - HTTPS_PROXY=http://127.0.0.1:3128
+      - NO_PROXY=127.0.0.1,localhost,192.168.0.0/16
     volumes:
       # Host path is owned by otterling-deploy (CI SFTP only). Not the git checkout.
       - /var/lib/otterling/updates:/srv/updates:ro
