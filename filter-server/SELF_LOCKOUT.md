@@ -23,16 +23,35 @@ Commit status on GitHub: context otterling/release
 Phones: Settings → App updates → Check for update
 ```
 
+First successful publish (2026-08-07): `otterling-0.1.0.apk` at
+`https://vpn.bartholomew.help/updates/` with GitHub status `otterling/release` = success.
+
 ## Server (control plane — not in git)
 
 | Piece | Role |
 |--------|------|
-| `otterling-github-webhook.service` | Listens `127.0.0.1:9070`; Caddy proxies `/hooks/github` |
+| `otterling-github-webhook.service` | Listens `0.0.0.0:9070`; Caddy proxies `/hooks/github` |
 | `/var/lib/otterling/ci/webhook_server.py` | HMAC-verify + spawn release |
 | `/var/lib/otterling/ci/release.sh` | Pull → AI → sign → publish |
+| `/var/lib/otterling/ci/github_status.sh` | Posts `otterling/release` commit status |
 | `/var/lib/otterling/ci/checklist.md` | Pinned deny checklist |
 | `/var/lib/otterling/ci/secrets.env` | Keys (mode 600, root only) |
+| `/var/lib/otterling/ci/secrets/release.jks` | Release signing keystore |
+| `/var/lib/otterling/ci/android-sdk` | Android SDK for `assembleRelease` |
 | `/var/lib/otterling/updates/` | Live APK + `manifest.json` |
+
+## Host networking notes
+
+This host’s outbound firewall often blocks direct HTTPS. `secrets.env` must include:
+
+```bash
+HTTP_PROXY=http://127.0.0.1:3128
+HTTPS_PROXY=http://127.0.0.1:3128
+NO_PROXY=127.0.0.1,localhost
+```
+
+`release.sh` also sets `JAVA_TOOL_OPTIONS` proxy props so Gradle/Java can download.
+Anthropic model currently used: `claude-sonnet-4-5-20250929`.
 
 ## One-time setup
 
@@ -47,9 +66,11 @@ sudo chmod 600 /var/lib/otterling/ci/secrets.env
 Required:
 
 - Release keystore fields + `ANTHROPIC_API_KEY`
+- `ANDROID_HOME=/var/lib/otterling/ci/android-sdk`
 - `GITHUB_REPO=tristanmcgregor/Otterling`
 - `GITHUB_WEBHOOK_SECRET` — long random string (same as in GitHub webhook)
 - `GITHUB_TOKEN` — fine-grained PAT: **Contents: Read**, **Commit statuses: Read and write**
+- HTTP(S)_PROXY as above
 
 Generate a webhook secret:
 
@@ -61,7 +82,7 @@ openssl rand -hex 32
 
 ```bash
 sudo systemctl enable --now otterling-github-webhook
-cd /home/admin/Otterling/filter-server && docker compose up -d updates
+cd /home/admin/Otterling/filter-server && sudo docker compose up -d updates
 ```
 
 ### 3. GitHub webhook
@@ -86,7 +107,7 @@ Each release posts a **commit status** with context **`otterling/release`**:
 - green/success when AI approved and APK published
 - red/failure when AI rejected or build failed
 
-On the commit page (and on PRs that contain that commit) you see the check. Optional: branch protection can *require* `otterling/release` — usually only useful if you release from PRs; for push-to-`main` the status is informational after the fact.
+Example success on commit `d8e50cc`: “AI approved — published v0.1.0”.
 
 ## Manual release (debug)
 
@@ -97,6 +118,13 @@ sudo otterling-release /home/admin/Otterling
 ```
 
 Logs: `/var/lib/otterling/ci/logs/`
+
+## Phone updates
+
+`ApprovedUpdateManager` only installs APKs whose signing cert matches
+`BuildConfig.RELEASE_CERT_SHA256` (from the release keystore). A debug/`adb install`
+build will refuse these updates until the phone’s installed app was signed with the
+same release key (or you provision with a release build first).
 
 ## What git must not do
 
