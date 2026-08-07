@@ -174,43 +174,36 @@ Once the VPN lockdown + filter proxy (Phase 7) are in place, the app itself beco
 link: `adb install -r` (or any sideload) of a self-built APK with the lockdown/proxy-fail-closed/CA
 -install/blocklist code quietly stripped out would install and run exactly like the real thing,
 undoing everything above. Phase 8 closes that: **the app can only update itself via a build that
-was AI-reviewed against a deny checklist in CI, then signed with a release key that never touches
-the daily dev machine.**
+was AI-reviewed against a deny checklist on the update host (not via git), then signed with a
+release key that never touches the daily account.**
 
-- [`.github/workflows/update-review.yml`](.github/workflows/update-review.yml) -- runs on every PR
-  into `main`. First job: an AI diff review against
-  [`scripts/update_review_checklist.md`](scripts/update_review_checklist.md) (VPN lockdown, proxy
-  fail-closed, CA install wiring, blocklists, Device Owner/tamper checks, Guardian SMS alerting,
-  and -- most importantly -- the update-verification chain itself). A FAIL stops the pipeline.
-  Second job (`sign-and-publish`) runs automatically after AI `VERDICT: PASS` -- there is no
-  required human GitHub Environment reviewer. That job builds a signed release APK, computes its
-  SHA-256, and publishes both the APK and a `manifest.json` to the family's own update host (see
-  `filter-server/`'s "Gated app updates" section).
+- **Server release gate** (`sudo otterling-release`) -- root-owned
+  `/var/lib/otterling/ci/release.sh` reviews against the pinned
+  `/var/lib/otterling/ci/checklist.md`, requires AI `VERDICT: PASS`, signs the APK, and writes
+  `manifest.json` + APK under `/var/lib/otterling/updates/`. GitHub cannot change that pipeline.
+  See [`filter-server/SELF_LOCKOUT.md`](filter-server/SELF_LOCKOUT.md).
+- [`.github/workflows/update-review.yml`](.github/workflows/update-review.yml) is advisory only —
+  it must not sign or publish.
 - [`ApprovedUpdateManager`](app/src/main/java/au/com/tbmcgregor/bwparker/familyguard/updates/ApprovedUpdateManager.kt)
   is the *only* code path on the phone that installs anything. Settings → **App updates** → "Check
   for update" fetches `manifest.json`, downloads the referenced APK, and verifies (a) its SHA-256
   matches the manifest and (b) its signing certificate fingerprint matches
-  `BuildConfig.RELEASE_CERT_SHA256` (baked in at build time from CI's protected secrets) before
+  `BuildConfig.RELEASE_CERT_SHA256` (baked in at build time from release secrets) before
   installing via a self-delegated `PackageInstaller` session -- no "install unknown apps" prompt,
-  and no fallback path that installs an unverified file. A build with no pinned certificate (i.e.
-  anything that isn't CI's release build) refuses to install any update at all. "Request update"
-  just opens a browser to file a GitHub issue and can SMS-alert a configured contact -- it cannot
-  install anything by itself.
+  and no fallback path that installs an unverified file. A build with no pinned certificate
+  refuses to install any update at all. "Request update" just opens a browser to file a GitHub
+  issue and can SMS-alert a configured contact -- it cannot install anything by itself.
 
 **Setup vs. production install paths**: `./gradlew :app:installDebug` (or any direct `adb install`)
 is fine for initial device setup/provisioning and local development, but is **not** the production
 update path once a device is actually deployed -- enable the existing "Block USB debugging"
-restriction (Phase 3) on a production device so sideloading itself requires the Guardian to
-disable a restriction first, not just a phone plugged into a laptop. The signed, gated pipeline
-above is what a deployed device should actually update through.
+restriction (Phase 3) on a production device so sideloading itself requires disabling a
+restriction first, not just a phone plugged into a laptop. The signed, gated pipeline above is
+what a deployed device should actually update through.
 
-**Required GitHub repo setup** (see the workflow file's comments for the exact secret names): the
-release keystore + passwords as Actions secrets, `RELEASE_CERT_SHA256` (the release cert's own
-SHA-256 fingerprint, computed once after generating the keystore), an `ANTHROPIC_API_KEY` for the
-AI review step, and SSH details for the update host (`UPDATE_HOST`,
-`UPDATE_HOST_SSH_USER=otterling-deploy`, `UPDATE_HOST_SSH_KEY`). None of these belong in
-`local.properties` on a daily dev machine. For keeping publishes off daily accounts, see
-[`filter-server/SELF_LOCKOUT.md`](filter-server/SELF_LOCKOUT.md).
+**Required secrets** live on the host under `/var/lib/otterling/ci/secrets.env` (and the
+keystore under `/var/lib/otterling/ci/secrets/`), not in GitHub Actions and not in
+`local.properties` on a daily account. See [`filter-server/SELF_LOCKOUT.md`](filter-server/SELF_LOCKOUT.md).
 
 ## Secret handling
 

@@ -1,7 +1,8 @@
 # Otterling update review checklist
 
-Read by the AI reviewer (`.github/workflows/update-review.yml`). The question that matters is
-always: **does this diff let the phone run a version of Otterling with any of these protections
+Live copy used by the release gate: `/var/lib/otterling/ci/checklist.md` (root-owned on the
+update host). The tree copy in git is documentation only. The question that matters is always:
+**does this diff let the phone run a version of Otterling with any of these protections
 weakened, removed, or made conditional/bypassable?** Code style, unrelated bugs, and refactors are
 not this checklist's concern -- only changes that could let the person being filtered escape it.
 
@@ -30,11 +31,10 @@ weakened, nothing else here matters, because a bypassed build could ship anyway.
   unverified APK file (`Intent.ACTION_INSTALL_PACKAGE` on a user-picked file, a "developer mode"
   sideload toggle, etc.). `ApprovedUpdateManager` must remain the only path that ever calls
   `PackageInstaller`.
-- [`.github/workflows/update-review.yml`](../.github/workflows/update-review.yml): the `sign-and-
-  publish` job must keep depending on (`needs:`) the AI review job, and AI `VERDICT: PASS` must
-  remain the release gate (no required human GitHub Environment reviewer that blocks publish after
-  AI PASS). FAIL any diff that removes the `needs: ai-review` dependency or that lets
-  `sign-and-publish` run without a successful AI review job.
+- Release must stay **off git**: FAIL any diff that re-adds a GitHub Actions (or similar)
+  `sign-and-publish` / release-signing / update-host upload job. Signing + publish happen only via
+  root-owned `/var/lib/otterling/ci/release.sh` (`sudo otterling-release`) after AI `VERDICT: PASS`
+  against the pinned server checklist. The in-repo workflow may be advisory-only.
 
 ## 2. VPN lockdown (Android)
 

@@ -1,48 +1,53 @@
 # Out-of-band updates (self-lockout)
 
-Goal: the person using Otterling day-to-day (no sudo on this server) cannot publish a
-poisoned APK or rewrite `manifest.json`. Only GitHub Actions after an AI `VERDICT: PASS`
-can write the update host.
+Goal: the person using Otterling day-to-day cannot publish a poisoned APK, rewrite
+`manifest.json`, or **change the release pipeline**. GitHub/git must not be able to
+gate or alter signing/publishing.
 
-## Server (already set up on this host)
+## Why not GitHub Actions?
+
+If the workflow lives in the repo, anyone who can push (or who owns the GitHub
+account) can edit it — skip AI review, drop checks, or publish anything. That is
+not self-lockout. Production release therefore lives **only on this server**,
+owned by **root**, outside git.
+
+## Server (control plane)
 
 | Piece | Role |
 |--------|------|
-| `otterling-deploy` | system user, **SFTP only**, chrooted to `/var/lib/otterling` |
-| `/var/lib/otterling/updates/` | only that user can write; Caddy serves it read-only |
-| Daily accounts (`tritty`, etc.) | **cannot** write updates (permission denied) |
-| `admin` | has sudo — treat as the lockbox account, not a daily login |
+| `/var/lib/otterling/ci/release.sh` | **Only** path that AI-reviews, signs, and publishes (`sudo otterling-release`) |
+| `/var/lib/otterling/ci/checklist.md` | Pinned deny checklist (root-owned; overrides anything in a source tree) |
+| `/var/lib/otterling/ci/secrets.env` | API key + keystore paths (mode 600, root only) — copy from `secrets.env.example` |
+| `/var/lib/otterling/updates/` | Published APK + `manifest.json`; writable by `otterling-deploy` / root |
+| `otterling-deploy` | SFTP-only chroot (legacy/optional); preferred publish is local copy from `release.sh` |
+| Daily accounts (`tritty`, etc.) | Cannot write updates or edit `/var/lib/otterling/ci/` |
+| `admin` | Has sudo — lockbox account, not a daily login |
 
-CI connects as `otterling-deploy` and uploads into `/updates/` (chroot home).
+### Release command
 
-## GitHub secrets (Actions)
+```bash
+sudo otterling-release /path/to/Otterling   # or a .tar.gz under /var/lib/otterling/incoming/
+```
 
-Set these repository secrets (Settings → Secrets and variables → Actions):
+Flow: load root checklist → ask Anthropic → require `VERDICT: PASS` → `assembleRelease` → write APK + manifest under `/var/lib/otterling/updates/`.
 
-- `ANTHROPIC_API_KEY`
-- `RELEASE_KEYSTORE_BASE64`, `RELEASE_KEYSTORE_PASSWORD`, `RELEASE_KEY_ALIAS`, `RELEASE_KEY_PASSWORD`
-- `RELEASE_CERT_SHA256`
-- `UPDATE_HOST` (e.g. `vpn.bartholomew.help`)
-- `UPDATE_HOST_SSH_USER` = `otterling-deploy`
-- `UPDATE_HOST_SSH_KEY` = contents of the CI private key generated on the server  
-  (on this host: `filter-server/.ci-otterling-deploy-key` — **never commit it**)
+Non-root cannot run or edit the script (mode `700`, root-owned).
 
-## GitHub rules so *you* cannot skip AI
+## What git still does
 
-If you still own the repo, you can always weaken the workflow. To make “AI only” stick:
+- Source history, PRs, advisory CI noise — fine.
+- `.github/workflows/update-review.yml` must **not** sign or publish (intentionally gutted).
+- Checklist copy in `scripts/update_review_checklist.md` is documentation; the live gate uses `/var/lib/otterling/ci/checklist.md`.
 
-1. **Ruleset** (or classic branch protection) on `main`:
-   - Require the `AI diff review (deny checklist)` check to pass before merge
-   - **Do not allow administrators to bypass** the ruleset
-2. Prefer merging only via PRs (no direct push to `main`) under that ruleset
-3. Keep release keystore + `ANTHROPIC_API_KEY` **only** in GitHub Actions secrets — not on a laptop you use daily
+## Remaining honest limits
 
-True “I can never undo this” requires giving away GitHub admin (org/owner you don’t control).
-Without that, the hard floor is: **unsigned APKs never install on the phone**, and **your non-sudo
-account cannot rewrite `/var/lib/otterling/updates`**.
+- Whoever has **root/sudo** on this host can still change the pipeline (that is intentional for recovery).
+- Keep the release keystore and `ANTHROPIC_API_KEY` only under `/var/lib/otterling/ci/secrets*`, not on a daily laptop.
+- Phone trust is unchanged: `ApprovedUpdateManager` still requires the pinned release cert SHA-256 + manifest hash.
 
-## Phone trust (unchanged)
+## Setup checklist (once)
 
-`ApprovedUpdateManager` still refuses anything that doesn’t match the pinned release cert
-SHA-256 + manifest hash. Compromising the update directory alone is not enough without the
-release signing key.
+1. `cp /var/lib/otterling/ci/secrets.env.example /var/lib/otterling/ci/secrets.env` (as root)
+2. Fill secrets; place `release.jks` under `/var/lib/otterling/ci/secrets/`
+3. `chmod 600` secrets; keep ownership `root:root`
+4. Run a dry release with a known-good tree when ready

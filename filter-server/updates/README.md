@@ -8,13 +8,12 @@ On the production host they live at:
 /var/lib/otterling/updates/
 ```
 
-owned by `otterling-deploy`, written only over SFTP from GitHub Actions after AI
-`VERDICT: PASS`. Caddy mounts that path read-only. See
-[`SELF_LOCKOUT.md`](../SELF_LOCKOUT.md).
+written by root via `sudo otterling-release` (see [`SELF_LOCKOUT.md`](../SELF_LOCKOUT.md)).
+Caddy mounts that path read-only. GitHub Actions does **not** publish here.
 
-`.github/workflows/update-review.yml`'s `sign-and-publish` job uploads:
+Published files:
 
 - `manifest.json` -- fetched by `ApprovedUpdateManager.checkForUpdate()`
 - `otterling-<versionName>.apk` -- referenced by `manifest.json`'s `apkUrl`
 
-Do not hand-copy APKs into that directory on the server from a daily account.
+Do not hand-copy APKs into that directory from a daily account.
