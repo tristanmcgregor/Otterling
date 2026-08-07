@@ -42,6 +42,9 @@ mkdir -p "$INSTALL_PATH/Contents/Resources"
 
 cp "$BUILD_DIR/${EXECUTABLE_NAME}" "$INSTALL_PATH/Contents/MacOS/${EXECUTABLE_NAME}"
 cp "$BUILD_DIR/FocusLockHelperd" "$INSTALL_PATH/Contents/MacOS/FocusLockHelperd"
+if [ -f "$PROJECT_DIR/Resources/AppIcon.icns" ]; then
+  cp "$PROJECT_DIR/Resources/AppIcon.icns" "$INSTALL_PATH/Contents/Resources/AppIcon.icns"
+fi
 
 tee "$INSTALL_PATH/Contents/Info.plist" > /dev/null <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -56,6 +59,8 @@ tee "$INSTALL_PATH/Contents/Info.plist" > /dev/null <<PLIST
     <string>${APP_NAME}</string>
     <key>CFBundleDisplayName</key>
     <string>${DISPLAY_NAME}</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
