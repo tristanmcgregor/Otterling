@@ -16,14 +16,15 @@ import java.util.concurrent.TimeUnit
 /**
  * Background scheduling wrapper around [ApprovedUpdateManager] -- reuses its full trust chain
  * (checkForUpdate -> downloadVerifyAndInstall) exactly as-is; this class only decides *when* that
- * runs, never an alternate way to get an update onto the device. Used for both the hourly periodic
- * check and the manual "Check for update" tap, so a user-initiated check behaves identically to
- * the automatic one (same verification, same silent-unless-installed notification behavior).
+ * runs, never an alternate way to get an update onto the device. Used for both the 15-minute
+ * periodic check (WorkManager's hard floor -- see [enqueuePeriodic]) and the manual "Check for
+ * update" tap, so a user-initiated check behaves identically to the automatic one (same
+ * verification, same silent-unless-installed notification behavior).
  *
  * Deliberately quiet on the common outcomes (up to date / rejected / transient error) -- only
  * [UpdateInstallResultReceiver] announces anything, and only on an actual completed install.
- * Without this, an hourly background job would otherwise nag with a notification every hour
- * it finds nothing to do.
+ * Without this, a background job running every 15 minutes would otherwise nag with a
+ * notification each time it finds nothing to do.
  */
 class UpdateCheckWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
@@ -62,11 +63,14 @@ class UpdateCheckWorker(context: Context, params: WorkerParameters) : CoroutineW
             .build()
 
         fun enqueuePeriodic(context: Context) {
-            val request = PeriodicWorkRequestBuilder<UpdateCheckWorker>(1, TimeUnit.HOURS)
+            // 15 minutes is WorkManager's hard floor (PeriodicWorkRequest.MIN_PERIODIC_INTERVAL_MILLIS)
+            // -- anything shorter is silently clamped up to it anyway, so this is the closest the
+            // platform allows to a "check as often as possible" cadence.
+            val request = PeriodicWorkRequestBuilder<UpdateCheckWorker>(15, TimeUnit.MINUTES)
                 .setConstraints(NETWORK_CONSTRAINTS)
                 .build()
-            // UPDATE (not KEEP) so an interval change like daily→hourly replaces any already-
-            // scheduled unique work instead of leaving the old period stuck forever.
+            // UPDATE (not KEEP) so an interval change replaces any already-scheduled unique work
+            // instead of leaving the old period stuck forever.
             WorkManager.getInstance(context).enqueueUniquePeriodicWork(
                 PERIODIC_WORK_NAME,
                 ExistingPeriodicWorkPolicy.UPDATE,
