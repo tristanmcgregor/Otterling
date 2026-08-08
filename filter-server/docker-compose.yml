@@ -34,6 +34,10 @@ services:
     environment:
       - PROXY_USER=${PROXY_USER:-otterling}
       - PROXY_PASSWORD=${PROXY_PASSWORD:?set PROXY_PASSWORD in .env}
+      # Used by mitm_nsfw_addon.py's third-tier AI classifier -- same key already deployed for
+      # the release-review pipeline (/var/lib/otterling/ci/secrets.env), reused here rather than
+      # provisioning a second one. Addon fails open (no block) if this is unset.
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
     # Regular (non-transparent) HTTP CONNECT proxy mode: the Android app tunnels each TCP 80/443
     # flow here via CONNECT, mitmproxy dials the real destination itself, and auto-detects TLS vs
     # plain HTTP inside the tunnel so both get inspected by mitm_nsfw_addon.py -- no in-page
