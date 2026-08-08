@@ -162,6 +162,13 @@ Logs: `/var/lib/otterling/ci/logs/`
 
 ## Phone updates
 
+Each PASS rebuild auto-bumps `versionCode` / `versionName` from the **live**
+`/updates/manifest.json` (live+1) before Gradle runs. Phones only install when the
+manifest `versionCode` is greater than the installed app, so filter-server-only
+commits still produce an installable update. The values in git `app/build.gradle.kts`
+may lag; the published manifest is authoritative.
+
+
 `ApprovedUpdateManager` only installs APKs whose signing cert matches
 `BuildConfig.RELEASE_CERT_SHA256` (from the release keystore). A debug/`adb install`
 build will refuse these updates until the phone’s installed app was signed with the
