@@ -70,6 +70,10 @@ class TcpRelayManager(
     private val resolveOwnerUid: (String, Int, String, Int) -> Int? = { _, _, _, _ -> null },
     private val mitmExemptUids: Set<Int> = emptySet(),
     private val mitmExemptHostSuffixes: Set<String> = emptySet(),
+    /** Called when a just-closed *proxied* connection's shape looks like a certificate-pinning
+     *  rejection (see [PinningFailureHeuristic]) -- see [PinningFailureTracker], which decides
+     *  whether repeated occurrences for the same app warrant auto-exempting it. */
+    private val onSuspectedPinningFailure: (Int) -> Unit = {},
 ) {
     private data class FlowKey(val srcIp: String, val srcPort: Int, val dstIp: String, val dstPort: Int)
 
@@ -109,6 +113,12 @@ class TcpRelayManager(
         @Volatile var readCount: Int = 0
         val startedAtMillis: Long = System.currentTimeMillis()
 
+        // Set once in establish(), read in closeConnection() to decide whether this connection is
+        // even eligible for the pinning-failure heuristic -- only meaningful for flows that were
+        // actually sent through mitmproxy, attributed to the app whose UID owns the flow.
+        @Volatile var wasProxied: Boolean = false
+        @Volatile var ownerUidForBlame: Int? = null
+
         // Guards [closeConnection] against running twice for the same connection -- the socket
         // read loop and the tun-side inbox consumer run on independent coroutines and can both
         // hit an error (e.g. one closes the socket, which makes the other's next read/write throw)
@@ -129,9 +139,12 @@ class TcpRelayManager(
         val existing = connections[key]
         if (existing != null) {
             if (packet.isRst) {
-                connections.remove(key)
                 existing.inbox.close()
-                existing.socket?.let { socket -> scope.launch { runCatching { socket.close() } } }
+                // Routed through closeConnection (not just removed here) so the pinning-failure
+                // heuristic sees client-initiated resets too -- a genuine pinning rejection often
+                // surfaces as exactly this, the client aborting the moment it dislikes our
+                // substitute certificate, not a clean EOF on the socket side.
+                scope.launch { closeConnection(existing, sendRst = false) }
             } else {
                 existing.inbox.trySend(packet)
             }
@@ -157,14 +170,22 @@ class TcpRelayManager(
             writeToTun(rstFor(synPacket))
             return
         }
-        // Only queried at all once some app is actually exempted -- avoids a binder call
-        // (getConnectionOwnerUid) per SYN for guardians who never touch the exempt list.
-        val ownerUid = if (mitmExemptUids.isEmpty()) {
-            null
-        } else {
+        // Whether this flow is even eligible for the proxy at all, ignoring exemption -- only
+        // 80/443 go through the filter proxy; everything else (chat/game/VoIP ports, etc.) keeps
+        // relaying directly, unchanged, exactly as if the proxy didn't exist.
+        val proxyEligible = proxyConfig.enabled &&
+            (connection.key.dstPort == HTTP_PORT || connection.key.dstPort == HTTPS_PORT) &&
+            !isFilterHostDestination(connection.key.dstIp)
+        // Resolved whenever the flow is proxy-eligible, not just once some app is already
+        // exempted -- needed both for the exemption check itself and so a *newly* misbehaving app
+        // (not yet on anyone's list) can still be attributed correctly if PinningFailureTracker
+        // ends up flagging it once this connection closes.
+        val ownerUid = if (proxyEligible) {
             resolveOwnerUid(connection.key.srcIp, connection.key.srcPort, connection.key.dstIp, connection.key.dstPort)
+        } else {
+            null
         }
-        val mitmExempt = MitmExemptionPolicy.isExempt(
+        val mitmExempt = proxyEligible && MitmExemptionPolicy.isExempt(
             ownerUid,
             mitmExemptUids,
             resolveHostname(connection.key.dstIp),
@@ -173,15 +194,12 @@ class TcpRelayManager(
         if (mitmExempt) {
             Log.d(TAG, "${connection.key.dstIp}:${connection.key.dstPort} MITM-exempt (uid=$ownerUid) -- connecting directly")
         }
-        // Only 80/443 go through the filter proxy -- everything else (chat/game/VoIP ports, etc.)
-        // keeps relaying directly, unchanged, exactly as if the proxy didn't exist. A MITM-exempt
-        // flow (certificate-pinned app) also skips the proxy, but -- unlike a full VpnService-level
-        // bypass -- stays inside the tunnel: its DNS is still filtered and QUIC/443-UDP is still
-        // dropped for it below, same as every other captured flow.
-        val useProxy = proxyConfig.enabled &&
-            (connection.key.dstPort == HTTP_PORT || connection.key.dstPort == HTTPS_PORT) &&
-            !isFilterHostDestination(connection.key.dstIp) &&
-            !mitmExempt
+        // A MITM-exempt flow (certificate-pinned app) skips the proxy, but -- unlike a full
+        // VpnService-level bypass -- stays inside the tunnel: its DNS is still filtered and
+        // QUIC/443-UDP is still dropped for it below, same as every other captured flow.
+        val useProxy = proxyEligible && !mitmExempt
+        connection.wasProxied = useProxy
+        connection.ownerUidForBlame = ownerUid
 
         val socket = Socket()
         val connected = try {
@@ -412,6 +430,13 @@ class TcpRelayManager(
                     "(%.1fMbps), reads=${connection.readCount}, socket-read=${connection.socketReadMillis}ms, ".format(mbps) +
                     "tun-write=${connection.tunWriteMillis}ms, window-wait=${connection.windowWaitMillis}ms, shift=${connection.ourShift}",
             )
+        }
+        val uid = connection.ownerUidForBlame
+        if (connection.wasProxied && uid != null &&
+            PinningFailureHeuristic.looksLikeRejection(elapsedMs, connection.bytesFromSocket, connection.readCount)
+        ) {
+            Log.d(TAG, "${connection.key.dstIp}:${connection.key.dstPort} looks like a pinning rejection (uid=$uid)")
+            onSuspectedPinningFailure(uid)
         }
         if (sendRst) {
             writeToTun(

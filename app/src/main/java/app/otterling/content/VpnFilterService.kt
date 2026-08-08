@@ -268,6 +268,11 @@ class VpnFilterService : VpnService() {
             runCatching { packageManager.getPackageUid(pkg, 0) }.getOrNull()
         }
         val ownerUidResolver = AppUidResolver(applicationContext)
+        // Auto-exempts an app after repeated suspected pinning rejections, closing the gap a
+        // static seeded list can't: an app nobody thought to add in advance (see the Morphe
+        // YouTube fork gap) still ends up working without a Guardian having to notice and add it
+        // manually. See PinningFailureTracker/PinningFailureHeuristic for the actual signal.
+        val pinningFailureTracker = PinningFailureTracker(applicationContext)
 
         val tcpRelay = TcpRelayManager(
             scope = relayScope,
@@ -281,6 +286,13 @@ class VpnFilterService : VpnService() {
             },
             mitmExemptUids = mitmExemptUids,
             mitmExemptHostSuffixes = MitmExemptionPolicy.DEFAULT_HOST_SUFFIXES,
+            onSuspectedPinningFailure = { uid ->
+                if (pinningFailureTracker.recordSuspectedFailure(uid)) {
+                    // Newly exempted -- rebuild the tunnel so the change applies to this app's
+                    // next connection attempt instead of waiting for some unrelated settings change.
+                    VpnFilterService.reestablish(applicationContext)
+                }
+            },
         )
         val udpRelay = UdpRelayManager(
             scope = relayScope,
