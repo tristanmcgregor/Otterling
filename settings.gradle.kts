@@ -21,3 +21,4 @@ rootProject.name = "Otterling"
 include(":app")
 include(":emulator-victim")
 project(":emulator-victim").projectDir = file("scripts/emulator/victim-app")
+include(":proxytest")
