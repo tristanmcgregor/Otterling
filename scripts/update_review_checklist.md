@@ -179,6 +179,23 @@ allow list below.
   security-relevant file as a reason to slow down and FAIL pending human review, even if you can't
   pin down exactly what it does.
 
+### Config UI vs enforcement (do not confuse these)
+
+The checklist cares about **runtime enforcement**, not every settings screen that once configured
+it.
+
+- FAIL if the DIFF deletes or no-ops the **manager / service / worker** that actually enforces a
+  protection (e.g. emptying `VpnFilterService`, making `AppSuspensionManager.reapplyAll()` a
+  no-op, removing `PrivateDnsFilterManager` while VPN still relies on it to suppress conflicting
+  Private DNS).
+- Do **not** FAIL solely because a Guardian **settings composable / button** for an unused or
+  superseded feature is removed, when the underlying enforcement classes remain and a supported
+  path still provides the protection (example: removing the old Device-Owner **Private DNS
+  "Content Filtering"** settings UI while the cloud content-filter **VPN** remains the live
+  adult-content path, and `PrivateDnsFilterManager` is kept for VPN conflict handling).
+- If commit messages include `AI-REVIEW:` lines (see below), treat them as author intent about
+  unused/superseded UI — still verify the DIFF matches that claim (enforcement not deleted).
+
 ## Allow list (do not FAIL on these alone)
 
 - Changes that stay entirely inside *other* unfinished / not-yet-listed future client directories
@@ -188,5 +205,21 @@ allow list below.
 - New features that don't touch anything in sections 1–6b (for production Android / macOS /
   filter-server).
 - Version bumps (`versionCode`/`versionName` in `app/build.gradle.kts`) -- expected on every
-  release.
+  release when an APK is rebuilt.
 - UI copy changes that don't alter the underlying enforcement logic.
+- Removing unused / superseded **configuration UI** when enforcement code remains reachable and
+  a supported replacement path still provides the same class of protection (see "Config UI vs
+  enforcement" above).
+
+## Commit messages for the AI gate (`AI-REVIEW:`)
+
+Authors should put intent the reviewer must read in the commit body as one or more lines:
+
+```text
+AI-REVIEW: Removing unused Private DNS settings UI; VPN cloud filter is the live path.
+AI-REVIEW: Enforcement managers unchanged; AppSuspensionManager still used by ProtectionController.
+```
+
+The release prompt includes `git log` for the cumulative range. The AI must read those
+`AI-REVIEW:` lines and not invent a FAIL that contradicts both the DIFF and the stated intent,
+while still FAILing if the DIFF actually guts enforcement.

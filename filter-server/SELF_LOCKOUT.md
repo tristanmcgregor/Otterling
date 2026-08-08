@@ -162,6 +162,17 @@ If `last_published_sha` is missing, releases **fail closed** (no publish) until 
 
 Logs: `/var/lib/otterling/ci/logs/`
 
+## Commit messages for the AI gate
+
+Put intent the reviewer should read as `AI-REVIEW:` lines in the commit body, e.g.:
+
+```text
+AI-REVIEW: Removing unused Private DNS settings UI; VPN cloud filter is the live path.
+```
+
+`release.sh` feeds `git log` for `last_published..candidate` into the model. See
+`scripts/update_review_checklist.md` (§7 + `AI-REVIEW:`).
+
 ## Phone updates
 
 When the cumulative review range touches Android app inputs (`app/`, root Gradle
