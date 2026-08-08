@@ -352,7 +352,11 @@ fun VpnFilterSection(context: Context) {
         Text("Apps that bypass the VPN", style = MaterialTheme.typography.bodyLarge)
         Text(
             "These apps are routed over the normal network instead of through the filter, for apps " +
-                "that break under any VPN (e.g. Android Auto). Their traffic is NOT content-filtered.",
+                "that break under any VPN or MITM proxy -- not just ours -- because they " +
+                "certificate-pin (e.g. Android Auto, YouTube, banking apps). Their traffic is NOT " +
+                "content-filtered. YouTube and common AU banking apps are excluded by default; " +
+                "YouTube Shorts and other path-based rules still apply separately via " +
+                "accessibility, since those don't need MITM at all.",
             style = MaterialTheme.typography.bodySmall,
         )
         Button(

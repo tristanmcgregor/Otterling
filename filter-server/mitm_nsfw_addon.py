@@ -5,9 +5,11 @@ Blocks entire requests/responses rather than scrubbing in-page content (no Canop
 blanking): a domain-list hit or a strong path/query token match short-circuits the request before
 it ever reaches the origin server; an HTML response whose <title>/og:description match
 high-confidence porn keywords gets its whole body replaced with a block page instead of being
-edited field-by-field. Once a host is blocked for any reason, it goes into an in-memory 24h deny
-cache so repeat hits on that host fail closed for the rest of the day without re-fetching or
-re-classifying anything.
+edited field-by-field. Once blocked, the deny cache fails closed on repeat hits for the rest of
+the day without re-fetching or re-classifying anything -- scoped to the *whole host* for a
+domain-list hit (the entire domain is known-bad), but only to the *exact host+path* for a path-
+pattern/title-keyword hit, so one flagged URL on an otherwise-fine site doesn't take down the
+rest of that site for the whole day.
 
 Domain list sources are the same two hosts-format lists the Android app's DomainBlocklistManager
 uses, so a host blocked on-device is also blocked here (defense in depth, not two independent
@@ -28,17 +30,24 @@ DOMAIN_REFRESH_SECONDS = 24 * 60 * 60
 DENY_CACHE_TTL_SECONDS = 24 * 60 * 60
 
 # Strong-signal path/query tokens only -- deliberately narrow (a handful of unambiguous
-# adult-content path fragments) rather than a broad keyword list, to keep false positives low on
-# otherwise-legitimate sites. A fuzzy word-based path filter would misfire constantly.
+# adult-content path fragments/site-brand names) rather than a broad keyword list, to keep false
+# positives low on otherwise-legitimate sites. A fuzzy word-based path filter would misfire
+# constantly.
 NSFW_PATH_PATTERNS = [
     re.compile(r"/r/nsfw/?", re.IGNORECASE),
     re.compile(r"/r/porn\w*/?", re.IGNORECASE),
+    re.compile(r"/r/gonewild\w*/?", re.IGNORECASE),
     re.compile(r"\bxxx\b", re.IGNORECASE),
-    re.compile(r"/(?:porn|hentai|xvideos|xnxx|redtube|pornhub)\b", re.IGNORECASE),
+    re.compile(
+        r"/(?:porn|hentai|xvideos|xnxx|redtube|pornhub|youporn|xhamster|spankbang|"
+        r"motherless|chaturbate|brazzers|bangbros)\b",
+        re.IGNORECASE,
+    ),
 ]
 
 # High-confidence title/description keywords for the HTML-response check -- same
-# low-false-positive reasoning as NSFW_PATH_PATTERNS.
+# low-false-positive reasoning as NSFW_PATH_PATTERNS (multi-word phrases preferred over bare
+# generic words like "sex" alone, which would misfire on plenty of legitimate health/news content).
 TITLE_KEYWORDS = [
     "porn",
     "pornstar",
@@ -46,6 +55,11 @@ TITLE_KEYWORDS = [
     "hardcore sex",
     "nude cams",
     "hentai",
+    "nude photos",
+    "adult video",
+    "cam girls",
+    "live sex cams",
+    "amateur porn",
 ]
 
 BLOCK_PAGE = """<!doctype html>
@@ -112,18 +126,21 @@ class _DomainList:
 
 
 class _DenyCache:
+    """Generic string-keyed deny cache -- callers decide the key's scope (whole host vs.
+    host+path); this class doesn't care which."""
+
     def __init__(self):
         self._lock = threading.Lock()
         self._denied: dict[str, float] = {}
 
-    def is_denied(self, host: str) -> bool:
+    def is_denied(self, key: str) -> bool:
         with self._lock:
-            expiry = self._denied.get(host)
+            expiry = self._denied.get(key)
         return expiry is not None and expiry > time.time()
 
-    def deny(self, host: str):
+    def deny(self, key: str):
         with self._lock:
-            self._denied[host] = time.time() + DENY_CACHE_TTL_SECONDS
+            self._denied[key] = time.time() + DENY_CACHE_TTL_SECONDS
 
 
 class NsfwFilter:
@@ -131,9 +148,15 @@ class NsfwFilter:
         self.domains = _DomainList()
         self.deny_cache = _DenyCache()
 
-    def _block(self, flow: http.HTTPFlow, reason: str):
-        host = flow.request.pretty_host
-        self.deny_cache.deny(host)
+    @staticmethod
+    def _path_key(flow: http.HTTPFlow) -> str:
+        host = flow.request.pretty_host.lower().rstrip(".")
+        return f"{host}{flow.request.path or ''}"
+
+    def _respond_blocked(self, flow: http.HTTPFlow, reason: str):
+        """Builds the block response only -- does NOT touch the deny cache; callers cache with
+        whatever key/scope is appropriate for the reason (see `request`/`response`) before or
+        instead of calling this, so a single helper can't accidentally cache at the wrong scope."""
         flow.response = http.Response.make(
             403,
             BLOCK_PAGE.encode("utf-8"),
@@ -143,20 +166,29 @@ class NsfwFilter:
 
     def request(self, flow: http.HTTPFlow):
         self.domains.refresh_if_stale()
-        host = flow.request.pretty_host
+        host = flow.request.pretty_host.lower().rstrip(".")
+        path_key = self._path_key(flow)
 
-        if self.deny_cache.is_denied(host):
-            self._block(flow, "deny-cache")
+        # A prior block may have been scoped to the whole host (domain-list) or just this exact
+        # path (path-pattern/title-keyword) -- check both rather than picking one, since checking
+        # only the path key would miss a whole-host ban and checking only the host would ignore
+        # path-scoped ones entirely.
+        if self.deny_cache.is_denied(host) or self.deny_cache.is_denied(path_key):
+            self._respond_blocked(flow, "deny-cache")
             return
 
         if self.domains.matches(host):
-            self._block(flow, "domain-list")
+            self.deny_cache.deny(host)
+            self._respond_blocked(flow, "domain-list")
             return
 
         path_and_query = flow.request.path or ""
         for pattern in NSFW_PATH_PATTERNS:
             if pattern.search(path_and_query):
-                self._block(flow, f"path-pattern:{pattern.pattern}")
+                # Path-scoped, not whole-host: a single flagged URL shouldn't take down the rest
+                # of an otherwise-fine site for the rest of the day.
+                self.deny_cache.deny(path_key)
+                self._respond_blocked(flow, f"path-pattern:{pattern.pattern}")
                 return
 
     def response(self, flow: http.HTTPFlow):
@@ -189,7 +221,10 @@ class NsfwFilter:
 
         for keyword in TITLE_KEYWORDS:
             if keyword in haystack:
-                self._block(flow, f"title-keyword:{keyword}")
+                # Path-scoped, same reasoning as the path-pattern case in request() -- one flagged
+                # page's title/description shouldn't ban the rest of the site for the day.
+                self.deny_cache.deny(self._path_key(flow))
+                self._respond_blocked(flow, f"title-keyword:{keyword}")
                 return
 
 

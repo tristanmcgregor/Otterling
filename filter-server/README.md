@@ -5,12 +5,18 @@ services:
 
 1. **[mitmproxy](https://mitmproxy.org/)** (`otterling-mitmproxy`, TCP `8080`) -- a real HTTPS
    MITM proxy. The phone's `VpnFilterService`/`TcpRelayManager` sends every captured TCP 80/443
-   flow here via HTTP `CONNECT`, authenticated with a fixed username/password. `mitm_nsfw_addon.py`
-   decides, server-side, whether to let a request through or return a block page -- **whole
-   requests/pages are blocked, not scrubbed in-page** (no Canopy-style image blanking).
+   flow here via HTTP `CONNECT`, authenticated with a fixed username/password, **except apps that
+   certificate-pin** (YouTube, banking apps -- see "App bypass defaults" below), which are routed
+   around the tunnel entirely rather than broken. `mitm_nsfw_addon.py` decides, server-side,
+   whether to let a request through or return a block page -- **whole requests/pages are blocked,
+   not scrubbed in-page** (no Canopy-style image blanking).
 2. **[AdGuard Home](https://github.com/AdguardTeam/AdGuardHome)** (`otterling-filter-server`, port
    `53`) -- plain DNS, kept as a fallback/failsafe layer and for anything that isn't proxied
-   traffic.
+   traffic. Its **Parental control** and **Safe Search** settings (see "Deploy" below) are a
+   category/search-level backstop for traffic that *does* reach it. Apps that bypass the VPN
+   entirely (see "App bypass defaults" below) skip this too, since bypassing routes their traffic,
+   including their own DNS, around the whole tunnel -- a bypassed app is simply unfiltered, the
+   accepted trade-off for keeping certificate-pinned apps like YouTube and banking working at all.
 3. **[Caddy](https://caddyserver.com/)** (`otterling-updates`, ports `80`/`443`) -- serves
    `updates/manifest.json` + signed release APKs over HTTPS with an auto-provisioned Let's Encrypt
    cert. This is the *only* place the Otterling app will install an update from -- see "Gated app
@@ -20,17 +26,32 @@ The phone still applies its own local adult-domain list first, client-side, rega
 either server is reachable (see the app's `DomainBlocklistManager`) -- a brief outage here doesn't
 remove filtering entirely, it just loses the server-side category/page-content layer.
 
+## App bypass defaults
+
+Certificate-pinned apps break under *any* MITM proxy, not just this one -- pinning validates the
+exact leaf cert/public key, which mitmproxy's own on-the-fly-generated certificate can never
+match. `VpnBypassManager.DEFAULT_BYPASS_PACKAGES` seeds a starting set on first app run so this
+works out of the box: YouTube (`com.google.android.youtube`) and common AU banking apps
+(CommBank, Westpac, Up, Suncorp). These apps are routed around the tunnel entirely
+(`addDisallowedApplication`) and get **no filtering at all** from this stack -- that's the
+deliberate trade-off for keeping them usable. Path-based rules (e.g. YouTube Shorts) still apply
+separately via on-device accessibility (`UrlPathBlockEnforcer`), which doesn't need MITM and so
+isn't affected by the bypass. The Guardian can add or remove bypassed apps any time in Settings.
+
 ## How blocking decisions are made
 
 - `mitm_nsfw_addon.py` blocks a request outright if its Host matches the downloaded adult-domain
   list (same two sources as the Android app), or if the URL path/query matches a short list of
-  unambiguous adult-content path tokens (e.g. `/r/nsfw`, `xxx`).
+  unambiguous adult-content path tokens/site names (e.g. `/r/nsfw`, `xxx`, `pornhub`).
 - For anything that gets through, it also inspects HTML responses' `<title>`/`og:description` for
-  a short list of high-confidence porn keywords and blocks the whole response if matched.
-- Once a host is blocked for any reason, it goes on an in-memory 24h deny list so repeat requests
-  to that host fail closed for the rest of the day without re-fetching or re-classifying it.
+  a short list of high-confidence porn keywords/phrases and blocks the whole response if matched.
+- Once blocked, a repeat hit fails closed for the rest of the day without re-fetching or
+  re-classifying anything -- scoped to the **whole host** for a domain-list hit (the entire domain
+  is known-bad), but only to the **exact host+path** for a path-pattern/title-keyword hit, so one
+  flagged URL on an otherwise-fine site doesn't take the rest of that site down for the whole day.
 - No custom ML, no image inspection -- keyword/domain rules only, deliberately narrow to keep
-  false positives low.
+  false positives low. See [`VISUAL_FILTERING.md`](VISUAL_FILTERING.md) for research on lighter
+  visual/image-level filtering options (not implemented yet).
 
 ## Deploy
 
@@ -50,8 +71,17 @@ remove filtering entirely, it just loses the server-side category/page-content l
 7. Open `http://<server-ip>:3000` and complete the AdGuard Home setup wizard (pick an admin
    username/password -- this UI controls DNS for every device pointed at it, so don't leave it on
    defaults).
-8. In AdGuard Home's web UI, under **Filters → DNS blocklists**, enable an adult-content list and
-   any other category lists you want as a DNS-level backstop.
+8. Turn on AdGuard Home's own accuracy layer -- all under its web UI:
+   - **Filters → DNS blocklists → Add blocklist**: enable an adult-content list (search "adult"/
+     "porn" in the built-in list gallery, e.g. the Anti-Porn list) plus any other category lists
+     you want as a DNS-level backstop.
+   - **Settings → General settings → Parental control**: turn on. This is AdGuard's own
+     category-classification service for adult content, independent of the blocklist above.
+   - **Settings → General settings → Safe Search**: turn on ("Enforce" for Google/YouTube/Bing/
+     DuckDuckGo/etc, or per-service if you want to leave some off). This forces safe-search mode
+     at the DNS level for anything that respects it.
+   - These only apply to traffic that actually reaches this DNS server -- see "App bypass
+     defaults" below for what doesn't.
 9. In the Otterling app: Settings → Content Filter VPN → enter `vpn.bartholomew.help`, port `53`
    for DNS, port `8080` + your `PROXY_USER`/`PROXY_PASSWORD` for the proxy, tap **Save**, then
    **Test filter server** / **Test proxy** to confirm both are reachable, then toggle **Use cloud
@@ -132,7 +162,9 @@ access to the machine.
   on-device can dodge this by hardcoding its own encrypted resolver. QUIC (UDP/443) is dropped
   by the phone's VPN entirely while the proxy is enabled, forcing HTTPS traffic onto TCP so it
   actually goes through mitmproxy instead of bypassing it over HTTP/3.
-- Out of scope for this pass: on-device NSFW ML/image blanking, a macOS Network Extension /
-  system-wide proxy equivalent (macOS enforcement stays DNS + hosts + pf, see
-  `macos/FocusLock/README.md`), and forcing non-web traffic (chat/game/VoIP on other ports) through
-  the home server -- only TCP 80/443 and QUIC are affected.
+- Out of scope for this pass: on-device NSFW ML/image blanking (researched, not built -- see
+  [`VISUAL_FILTERING.md`](VISUAL_FILTERING.md)), a macOS Network Extension / system-wide proxy
+  equivalent (macOS enforcement stays DNS + hosts + pf, see `macos/FocusLock/README.md`), and
+  forcing non-web traffic (chat/game/VoIP on other ports) through the home server -- only TCP
+  80/443 and QUIC are affected. MITM of the apps in `VpnBypassManager.DEFAULT_BYPASS_PACKAGES` is
+  also explicitly out of scope -- see "App bypass defaults" above for why.
