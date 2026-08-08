@@ -38,12 +38,22 @@ services:
     # flow here via CONNECT, mitmproxy dials the real destination itself, and auto-detects TLS vs
     # plain HTTP inside the tunnel so both get inspected by mitm_nsfw_addon.py -- no in-page
     # scrubbing, only full request/response block per that addon.
+    #
+    # block_global=false: mitmproxy's own default (block_global=true) kills any client connection
+    # whose source IP isn't private/local -- a safety net against accidentally exposing an open
+    # relay. But this proxy is deliberately internet-reachable (phones connect from outside the
+    # home network too, not just LAN), and every such connection looks "global-sourced" to
+    # mitmproxy post-NAT regardless of whether it's genuinely external or just hairpinned --
+    # confirmed via `docker compose logs mitmproxy` showing "killed by block_global option" for
+    # every non-LAN-direct connection attempt. --proxyauth above is the actual access control here,
+    # not source-IP filtering.
     command: >
       mitmdump
       --mode regular
       --listen-port 8080
       --proxyauth "${PROXY_USER:-otterling}:${PROXY_PASSWORD}"
       --set confdir=/home/mitmproxy/.mitmproxy
+      --set block_global=false
       -s /home/mitmproxy/mitm_nsfw_addon.py
 
   updates:
