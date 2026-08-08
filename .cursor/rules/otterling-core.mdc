@@ -32,6 +32,5 @@ line alone.
 
 ## Scope reminders
 
-- YouTube / banking: keep MITM (HTTPS interception) **off** so pinned apps work inside the VPN
-  with DNS filtering. Bypass list is for rare VPN-intolerant apps only, not the default fix.
+- YouTube / banking apps: VPN bypass by default; Shorts/path rules via accessibility.
 - Prefer editing `filter-server/` and `app/` with the live stack and phones in mind.

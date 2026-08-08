@@ -162,8 +162,6 @@ class VpnFilterService : VpnService() {
             // Data Saver / "restrict background data" (e.g. Spotify) get silently network-blocked
             // by netd over this VPN even though the underlying Wi-Fi/cellular network is unmetered.
             .setMetered(false)
-        // Apps the user has exempted (e.g. Android Auto) get routed over the normal network instead
-        // of captured here -- some apps simply break under any VPN.
         applyBypassApps(builder)
 
         tunInterface = try {
@@ -216,20 +214,18 @@ class VpnFilterService : VpnService() {
         }
     }
 
+    /**
+     * Only Otterling's own package is excluded from the tunnel entirely -- so its own update
+     * checks/settings probes don't hairpin through the filter proxy (and so `protect()` isn't
+     * required for UI HTTPS). Certificate-pinned apps ([MitmExemptManager]) are handled
+     * differently: they stay *inside* the tunnel (see [runPacketLoop]/[TcpRelayManager]) so their
+     * DNS is still filtered, rather than being fully excluded here.
+     */
     private fun applyBypassApps(builder: Builder) {
-        // Always keep Otterling itself off the tun so update checks / settings probes don't
-        // hairpin through the filter proxy (and so protect() isn't required for UI HTTPS).
-        val bypass = buildSet {
-            add(packageName)
-            addAll(VpnBypassManager(applicationContext).bypassPackages())
-        }
-        bypass.forEach { pkg ->
-            try {
-                builder.addDisallowedApplication(pkg)
-                Log.i(TAG, "VPN bypass: $pkg routed outside the tunnel")
-            } catch (error: PackageManager.NameNotFoundException) {
-                Log.w(TAG, "VPN bypass app not installed, skipping: $pkg", error)
-            }
+        try {
+            builder.addDisallowedApplication(packageName)
+        } catch (error: PackageManager.NameNotFoundException) {
+            Log.w(TAG, "Failed to exclude own package from VPN", error)
         }
     }
 
@@ -264,6 +260,15 @@ class VpnFilterService : VpnService() {
             password = cloudFilterSettings.proxyPassword(),
         )
 
+        // Resolved once per tunnel generation (same lifecycle as proxyConfig) -- a Guardian
+        // adding/removing an exempt app takes effect on the next reestablish(), same pattern as
+        // every other setting this loop reads at startup.
+        val exemptManager = MitmExemptManager(applicationContext)
+        val mitmExemptUids = exemptManager.exemptPackages().mapNotNullTo(mutableSetOf()) { pkg ->
+            runCatching { packageManager.getPackageUid(pkg, 0) }.getOrNull()
+        }
+        val ownerUidResolver = AppUidResolver(applicationContext)
+
         val tcpRelay = TcpRelayManager(
             scope = relayScope,
             protect = { socket -> protect(socket) },
@@ -271,6 +276,11 @@ class VpnFilterService : VpnService() {
             isBlockedDestination = isBlockedDestination,
             proxyConfig = proxyConfig,
             resolveHostname = { ip -> dnsAnswerHostnameCache[ip] },
+            resolveOwnerUid = { localIp, localPort, remoteIp, remotePort ->
+                ownerUidResolver.ownerUid(localIp, localPort, remoteIp, remotePort)
+            },
+            mitmExemptUids = mitmExemptUids,
+            mitmExemptHostSuffixes = MitmExemptionPolicy.DEFAULT_HOST_SUFFIXES,
         )
         val udpRelay = UdpRelayManager(
             scope = relayScope,

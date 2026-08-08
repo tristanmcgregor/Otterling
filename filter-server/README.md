@@ -6,17 +6,16 @@ services:
 1. **[mitmproxy](https://mitmproxy.org/)** (`otterling-mitmproxy`, TCP `8080`) -- a real HTTPS
    MITM proxy. The phone's `VpnFilterService`/`TcpRelayManager` sends every captured TCP 80/443
    flow here via HTTP `CONNECT`, authenticated with a fixed username/password, **except apps that
-   certificate-pin** (YouTube, banking apps -- see "App bypass defaults" below), which are routed
-   around the tunnel entirely rather than broken. `mitm_nsfw_addon.py` decides, server-side,
-   whether to let a request through or return a block page -- **whole requests/pages are blocked,
-   not scrubbed in-page** (no Canopy-style image blanking).
+   certificate-pin** (YouTube, banking apps -- see "App MITM exemptions" below), whose flows stay
+   inside the tunnel but connect directly instead of through mitmproxy. `mitm_nsfw_addon.py`
+   decides, server-side, whether to let a request through or return a block page -- **whole
+   requests/pages are blocked, not scrubbed in-page** (no Canopy-style image blanking).
 2. **[AdGuard Home](https://github.com/AdguardTeam/AdGuardHome)** (`otterling-filter-server`, port
    `53`) -- plain DNS, kept as a fallback/failsafe layer and for anything that isn't proxied
    traffic. Its **Parental control** and **Safe Search** settings (see "Deploy" below) are a
-   category/search-level backstop for traffic that *does* reach it. Apps that bypass the VPN
-   entirely (see "App bypass defaults" below) skip this too, since bypassing routes their traffic,
-   including their own DNS, around the whole tunnel -- a bypassed app is simply unfiltered, the
-   accepted trade-off for keeping certificate-pinned apps like YouTube and banking working at all.
+   category/search-level backstop for traffic that *does* reach it -- including MITM-exempt apps
+   (see "App MITM exemptions" below), since exemption only skips the proxy hop, not the tunnel or
+   its DNS.
 3. **[Caddy](https://caddyserver.com/)** (`otterling-updates`, ports `80`/`443`) -- serves
    `updates/manifest.json` + signed release APKs over HTTPS with an auto-provisioned Let's Encrypt
    cert. This is the *only* place the Otterling app will install an update from -- see "Gated app
@@ -26,17 +25,25 @@ The phone still applies its own local adult-domain list first, client-side, rega
 either server is reachable (see the app's `DomainBlocklistManager`) -- a brief outage here doesn't
 remove filtering entirely, it just loses the server-side category/page-content layer.
 
-## App bypass defaults
+## App MITM exemptions
 
 Certificate-pinned apps break under *any* MITM proxy, not just this one -- pinning validates the
 exact leaf cert/public key, which mitmproxy's own on-the-fly-generated certificate can never
-match. `VpnBypassManager.DEFAULT_BYPASS_PACKAGES` seeds a starting set on first app run so this
+match. `MitmExemptManager.DEFAULT_EXEMPT_PACKAGES` seeds a starting set on first app run so this
 works out of the box: YouTube (`com.google.android.youtube`) and common AU banking apps
-(CommBank, Westpac, Up, Suncorp). These apps are routed around the tunnel entirely
-(`addDisallowedApplication`) and get **no filtering at all** from this stack -- that's the
-deliberate trade-off for keeping them usable. Path-based rules (e.g. YouTube Shorts) still apply
-separately via on-device accessibility (`UrlPathBlockEnforcer`), which doesn't need MITM and so
-isn't affected by the bypass. The Guardian can add or remove bypassed apps any time in Settings.
+(CommBank, Westpac, Up, Suncorp). These apps stay **inside** the VPN tunnel -- their DNS is still
+checked against the local blocklist and this filter server's Parental control/Safe Search (see
+"Deploy" below) -- but `TcpRelayManager` connects their TCP 80/443 flows directly instead of
+CONNECT-proxying through mitmproxy, so pinning never breaks. Flow-to-app attribution uses
+`ConnectivityManager.getConnectionOwnerUid` (`AppUidResolver`), with a narrow apex-domain-suffix
+fallback (`MitmExemptionPolicy`) for when UID lookup can't resolve an owner. Content-level
+filtering (domain-on-path/title-keyword matching in `mitm_nsfw_addon.py`) still never sees these
+apps' HTTPS bytes -- that blind spot is inherent to not decrypting their TLS, unchanged from
+before. Path-based rules (e.g. YouTube Shorts) still apply separately via on-device accessibility
+(`UrlPathBlockEnforcer`), which doesn't need MITM at all. The Guardian can add or remove exempt
+apps any time in Settings. See [`PINNED_APP_FILTERING.md`](PINNED_APP_FILTERING.md) for the design
+research behind this (including why defeating pinning itself, for full content inspection, was
+ruled out).
 
 ## How blocking decisions are made
 
@@ -80,8 +87,8 @@ isn't affected by the bypass. The Guardian can add or remove bypassed apps any t
    - **Settings → General settings → Safe Search**: turn on ("Enforce" for Google/YouTube/Bing/
      DuckDuckGo/etc, or per-service if you want to leave some off). This forces safe-search mode
      at the DNS level for anything that respects it.
-   - These only apply to traffic that actually reaches this DNS server -- see "App bypass
-     defaults" below for what doesn't.
+   - These apply to essentially all traffic, including MITM-exempt apps (see "App MITM
+     exemptions" above) -- exemption only skips the mitmproxy hop, not the tunnel or its DNS.
 9. In the Otterling app: Settings → Content Filter VPN → enter `vpn.bartholomew.help`, port `53`
    for DNS, port `8080` + your `PROXY_USER`/`PROXY_PASSWORD` for the proxy, tap **Save**, then
    **Test filter server** / **Test proxy** to confirm both are reachable, then toggle **Use cloud
@@ -166,5 +173,6 @@ access to the machine.
   [`VISUAL_FILTERING.md`](VISUAL_FILTERING.md)), a macOS Network Extension / system-wide proxy
   equivalent (macOS enforcement stays DNS + hosts + pf, see `macos/FocusLock/README.md`), and
   forcing non-web traffic (chat/game/VoIP on other ports) through the home server -- only TCP
-  80/443 and QUIC are affected. MITM of the apps in `VpnBypassManager.DEFAULT_BYPASS_PACKAGES` is
-  also explicitly out of scope -- see "App bypass defaults" above for why.
+  80/443 and QUIC are affected. Content-level MITM of the apps in
+  `MitmExemptManager.DEFAULT_EXEMPT_PACKAGES` is explicitly out of scope (they still get DNS-level
+  filtering, just not page/title inspection) -- see "App MITM exemptions" above for why.

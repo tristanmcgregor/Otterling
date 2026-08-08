@@ -67,6 +67,9 @@ class TcpRelayManager(
     private val isBlockedDestination: (String) -> Boolean,
     private val proxyConfig: ProxyConfig,
     private val resolveHostname: (String) -> String?,
+    private val resolveOwnerUid: (String, Int, String, Int) -> Int? = { _, _, _, _ -> null },
+    private val mitmExemptUids: Set<Int> = emptySet(),
+    private val mitmExemptHostSuffixes: Set<String> = emptySet(),
 ) {
     private data class FlowKey(val srcIp: String, val srcPort: Int, val dstIp: String, val dstPort: Int)
 
@@ -154,11 +157,31 @@ class TcpRelayManager(
             writeToTun(rstFor(synPacket))
             return
         }
+        // Only queried at all once some app is actually exempted -- avoids a binder call
+        // (getConnectionOwnerUid) per SYN for guardians who never touch the exempt list.
+        val ownerUid = if (mitmExemptUids.isEmpty()) {
+            null
+        } else {
+            resolveOwnerUid(connection.key.srcIp, connection.key.srcPort, connection.key.dstIp, connection.key.dstPort)
+        }
+        val mitmExempt = MitmExemptionPolicy.isExempt(
+            ownerUid,
+            mitmExemptUids,
+            resolveHostname(connection.key.dstIp),
+            mitmExemptHostSuffixes,
+        )
+        if (mitmExempt) {
+            Log.d(TAG, "${connection.key.dstIp}:${connection.key.dstPort} MITM-exempt (uid=$ownerUid) -- connecting directly")
+        }
         // Only 80/443 go through the filter proxy -- everything else (chat/game/VoIP ports, etc.)
-        // keeps relaying directly, unchanged, exactly as if the proxy didn't exist.
+        // keeps relaying directly, unchanged, exactly as if the proxy didn't exist. A MITM-exempt
+        // flow (certificate-pinned app) also skips the proxy, but -- unlike a full VpnService-level
+        // bypass -- stays inside the tunnel: its DNS is still filtered and QUIC/443-UDP is still
+        // dropped for it below, same as every other captured flow.
         val useProxy = proxyConfig.enabled &&
             (connection.key.dstPort == HTTP_PORT || connection.key.dstPort == HTTPS_PORT) &&
-            !isFilterHostDestination(connection.key.dstIp)
+            !isFilterHostDestination(connection.key.dstIp) &&
+            !mitmExempt
 
         val socket = Socket()
         val connected = try {

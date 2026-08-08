@@ -14,10 +14,12 @@ import java.util.Base64
 
 /**
  * Encrypted settings for the cloud-hosted content filter (see filter-server/) deployed to a host
- * the family controls: DNS (local [DomainBlocklistManager] + cloud AdGuard) is the
- * app-compatible default path; optional HTTPS MITM via [TcpRelayManager] CONNECT is available
- * when the Guardian turns [isProxyEnabled] on (breaks certificate-pinned apps). Host and proxy
- * credentials are treated as sensitive; port/enabled flags aren't secrets so stay in plain prefs,
+ * the family controls: DNS (fallback/failsafe layer, [DomainBlocklistManager] is the client-side
+ * always-on one) plus a real HTTPS MITM proxy (the primary filtering path -- [TcpRelayManager]
+ * CONNECTs every captured TCP 80/443 flow through it instead of relaying directly, and the proxy
+ * server decides whether to block the whole request/page, not just scrub in-page content). Host
+ * and proxy credentials are treated as sensitive since they identify and can be used to reach the
+ * family's own filter deployment; port/enabled flags aren't secrets so stay in plain prefs,
  * matching [GuardianAlertSettings]'s split.
  */
 @Suppress("DEPRECATION")
@@ -55,39 +57,13 @@ class CloudFilterSettings(context: Context) {
         prefs.edit().putInt(KEY_PORT, port).apply()
     }
 
-    /**
-     * Sub-toggle under [isEnabled]: whether TCP 80/443 is CONNECT-proxied through mitmproxy
-     * (page/path/title-aware HTTPS interception) as well as DNS.
-     *
-     * Defaults **off**. Full MITM breaks certificate-pinned apps (YouTube, banking, etc.); the
-     * compatible default is VPN + DNS filtering (local adult lists + cloud AdGuard). Guardians can
-     * still turn MITM on for stricter browser-style filtering, knowing pinned apps may need a
-     * VPN bypass if they do.
-     *
-     * One-time migration: installs that only ever had the old implicit default (`true`) are
-     * flipped to off the first time settings are read after this change, so existing phones become
-     * app-compatible without a manual toggle. Explicit Guardian choices (key present) are kept.
-     */
-    fun isProxyEnabled(): Boolean {
-        migrateProxyDefaultOffIfNeeded()
-        return isEnabled() && prefs.getBoolean(KEY_PROXY_ENABLED, false)
-    }
+    /** Sub-toggle under [isEnabled]: whether TCP 80/443 gets CONNECT-proxied through the mitmproxy
+     *  filter (the primary, page-content-aware filtering path) as well as DNS. Defaults on, since
+     *  DNS-only filtering alone lets any HTTPS site load in full regardless of page content. */
+    fun isProxyEnabled(): Boolean = isEnabled() && prefs.getBoolean(KEY_PROXY_ENABLED, true)
 
     fun setProxyEnabled(enabled: Boolean) {
-        prefs.edit()
-            .putBoolean(KEY_PROXY_ENABLED, enabled)
-            .putBoolean(KEY_PROXY_EXPLICIT, true)
-            .apply()
-    }
-
-    private fun migrateProxyDefaultOffIfNeeded() {
-        if (prefs.getBoolean(KEY_PROXY_MIGRATED_DEFAULT_OFF, false)) return
-        val editor = prefs.edit().putBoolean(KEY_PROXY_MIGRATED_DEFAULT_OFF, true)
-        // Only clear the old implicit-on default; leave an explicit Guardian preference alone.
-        if (!prefs.getBoolean(KEY_PROXY_EXPLICIT, false) && prefs.contains(KEY_PROXY_ENABLED)) {
-            editor.putBoolean(KEY_PROXY_ENABLED, false)
-        }
-        editor.apply()
+        prefs.edit().putBoolean(KEY_PROXY_ENABLED, enabled).apply()
     }
 
     fun proxyPort(): Int = prefs.getInt(KEY_PROXY_PORT, DEFAULT_PROXY_PORT)
@@ -184,9 +160,6 @@ class CloudFilterSettings(context: Context) {
         const val KEY_HOST = "host"
         const val KEY_PORT = "port"
         const val KEY_PROXY_ENABLED = "proxy_enabled"
-        /** True once the Guardian saved the MITM toggle (vs the old implicit default-on). */
-        const val KEY_PROXY_EXPLICIT = "proxy_enabled_explicit"
-        const val KEY_PROXY_MIGRATED_DEFAULT_OFF = "proxy_migrated_default_off_v1"
         const val KEY_PROXY_PORT = "proxy_port"
         const val KEY_PROXY_USER = "proxy_user"
         const val KEY_PROXY_PASSWORD = "proxy_password"

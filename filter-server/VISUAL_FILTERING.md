@@ -27,9 +27,10 @@ rules out most of the "obvious" on-device options unless something bigger change
 
 This also directly answers the bypass-compatibility question the plan asked about: **a visual
 filter here inherits exactly the same limitation the existing text/domain filter already has.**
-Apps in `VpnBypassManager.DEFAULT_BYPASS_PACKAGES` (YouTube, banking apps) never send traffic
-through mitmproxy at all -- bypassed for the same certificate-pinning reason described in the main
-README -- so no proxy-side image classifier, however good, will ever see their images. Ordinary
+Apps in `MitmExemptManager.DEFAULT_EXEMPT_PACKAGES` (YouTube, banking apps) never send traffic
+through mitmproxy at all -- exempted for the same certificate-pinning reason described in the main
+README (see `PINNED_APP_FILTERING.md`) -- so no proxy-side image classifier, however good, will
+ever see their images, even though these apps' DNS is still filtered. Ordinary
 browser traffic (Chrome, Firefox, in-app WebViews that don't pin) goes through the proxy and would
 get images classified. This isn't a gap specific to visual filtering; it's the existing, accepted
 trade-off extended to a new content type.

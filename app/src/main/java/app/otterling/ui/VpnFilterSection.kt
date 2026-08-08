@@ -26,7 +26,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import app.otterling.content.CloudFilterSettings
 import app.otterling.content.DomainBlocklistManager
-import app.otterling.content.VpnBypassManager
+import app.otterling.content.MitmExemptManager
 import app.otterling.content.VpnFilterManager
 import app.otterling.content.VpnFilterService
 import java.text.DateFormat
@@ -40,7 +40,7 @@ fun VpnFilterSection(context: Context) {
     val coroutineScope = rememberCoroutineScope()
     val vpnManager = remember { VpnFilterManager(context) }
     val blocklistManager = remember { DomainBlocklistManager(context) }
-    val bypassManager = remember { VpnBypassManager(context) }
+    val exemptManager = remember { MitmExemptManager(context) }
     val cloudFilterSettings = remember { CloudFilterSettings(context) }
 
     var refreshTrigger by remember { mutableIntStateOf(0) }
@@ -50,9 +50,9 @@ fun VpnFilterSection(context: Context) {
     var lastUpdated by remember { mutableStateOf<Long?>(null) }
     var busy by remember { mutableStateOf(false) }
     var statusMessage by remember { mutableStateOf("") }
-    var bypassPackages by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var exemptPackages by remember { mutableStateOf<Set<String>>(emptySet()) }
     var installedApps by remember { mutableStateOf<List<InstalledAppInfo>>(emptyList()) }
-    var showBypassPicker by remember { mutableStateOf(false) }
+    var showExemptPicker by remember { mutableStateOf(false) }
     var cloudHost by remember { mutableStateOf("") }
     var cloudPort by remember { mutableStateOf("") }
     var cloudEnabled by remember { mutableStateOf(false) }
@@ -71,7 +71,7 @@ fun VpnFilterSection(context: Context) {
         lockdownEnabled = vpnManager.isLockdownEnabled()
         domainCount = blocklistManager.domainCount()
         lastUpdated = blocklistManager.lastUpdatedMillis().takeIf { it > 0 }
-        bypassPackages = bypassManager.bypassPackages()
+        exemptPackages = exemptManager.exemptPackages()
         cloudHost = cloudFilterSettings.host()
         cloudPort = cloudFilterSettings.port().toString()
         cloudEnabled = cloudFilterSettings.isEnabled()
@@ -80,7 +80,7 @@ fun VpnFilterSection(context: Context) {
         proxyUser = cloudFilterSettings.proxyUser()
         proxyPassword = cloudFilterSettings.proxyPassword()
         caInstalled = withContext(Dispatchers.IO) { vpnManager.isCaCertInstalled() }
-        if (installedApps.isEmpty() && bypassPackages.isNotEmpty()) {
+        if (installedApps.isEmpty() && exemptPackages.isNotEmpty()) {
             installedApps = withContext(Dispatchers.IO) { loadInstalledApps(context) }
         }
     }
@@ -88,15 +88,15 @@ fun VpnFilterSection(context: Context) {
     fun appLabel(packageName: String): String =
         installedApps.find { it.packageName == packageName }?.label ?: packageName
 
-    if (showBypassPicker) {
+    if (showExemptPicker) {
         AppPickerDialog(
             apps = installedApps,
-            onDismiss = { showBypassPicker = false },
+            onDismiss = { showExemptPicker = false },
             onSelect = { app ->
-                bypassManager.add(app.packageName)
-                bypassPackages = bypassManager.bypassPackages()
+                exemptManager.add(app.packageName)
+                exemptPackages = exemptManager.exemptPackages()
                 if (enabled) VpnFilterService.reestablish(context)
-                showBypassPicker = false
+                showExemptPicker = false
             },
         )
     }
@@ -104,11 +104,16 @@ fun VpnFilterSection(context: Context) {
     SectionCard(
         title = "Filter proxy (traffic via your server)",
         icon = Icons.Default.VpnLock,
-        subtitle = "Adult domains are blocked via local DNS lists plus your filter server. " +
-            "HTTPS interception is optional and off by default so YouTube, banking, and other " +
-            "certificate-pinned apps keep working. Once the VPN is on, Android lockdown keeps " +
-            "other VPNs from routing around it. Private DNS is temporarily relaxed while this " +
-            "VPN runs so the two don't conflict.",
+        subtitle = "Web traffic is routed through your own server for filtering: DNS is checked " +
+            "against a local adult-content domain list first, then TCP 80/443 (and QUIC/HTTP3 is " +
+            "dropped so it can't sidestep this over HTTP/3) is CONNECT-proxied through your " +
+            "mitmproxy filter server, which decides whether to block whole requests/pages " +
+            "server-side -- not scrubbed in-page, and not DNS-only. Once enabled, Android won't " +
+            "let this be turned off from Settings, and locks down all other network access " +
+            "(including other VPN apps) to routes through this tunnel -- so nothing on this " +
+            "device can bypass it. Enabling this temporarily falls the separate Private DNS " +
+            "filter back to opportunistic (and restores it when disabled) so the two don't " +
+            "conflict.",
     ) {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text("Status", style = MaterialTheme.typography.bodyLarge)
@@ -260,14 +265,13 @@ fun VpnFilterSection(context: Context) {
 
         HorizontalDivider()
 
-        Text("Filter proxy (optional HTTPS interception)", style = MaterialTheme.typography.bodyLarge)
+        Text("Filter proxy (HTTPS interception)", style = MaterialTheme.typography.bodyLarge)
         Text(
-            "Off by default so YouTube, banking, and other certificate-pinned apps work through " +
-                "the VPN with DNS filtering. Turn on only if you want mitmproxy to inspect HTTPS " +
-                "pages (path/title rules) -- pinned apps may then fail until you add them under " +
-                "\"Apps that bypass the VPN\". Requires the proxy CA (see above). Fail-closed: " +
-                "if the proxy is unreachable while this is on, HTTPS fails rather than silently " +
-                "bypassing it.",
+            "Routes TCP 80/443 through the mitmproxy filter server above (same host, its own " +
+                "port) so whole pages can be blocked server-side, not just DNS-blocked. Requires " +
+                "the proxy's CA cert to be trusted device-wide (see \"Proxy CA installed\" above) " +
+                "-- installed automatically once Device Owner is active. If the proxy is " +
+                "unreachable, HTTPS sites fail to load rather than silently bypassing it.",
             style = MaterialTheme.typography.bodySmall,
         )
         Row(
@@ -345,11 +349,15 @@ fun VpnFilterSection(context: Context) {
 
         HorizontalDivider()
 
-        Text("Apps that bypass the VPN", style = MaterialTheme.typography.bodyLarge)
+        Text("Apps exempt from HTTPS filtering", style = MaterialTheme.typography.bodyLarge)
         Text(
-            "Only needed for apps that break under any VPN (e.g. Android Auto), or if you turned " +
-                "on HTTPS interception above and a pinned app still fails. Prefer leaving MITM " +
-                "off so apps stay filtered by DNS without exemptions.",
+            "These apps use certificate pinning (e.g. YouTube, banking apps), which breaks under " +
+                "any HTTPS interception, not just ours. They stay inside the VPN -- DNS-level " +
+                "filtering (the local blocklist and your cloud filter server above) still applies " +
+                "to them -- but their HTTPS traffic skips content inspection, so pages/paths within " +
+                "these apps aren't keyword-filtered. YouTube and common AU banking apps are " +
+                "exempted by default; YouTube Shorts and other path-based rules still apply " +
+                "separately via accessibility, since those don't need HTTPS interception at all.",
             style = MaterialTheme.typography.bodySmall,
         )
         Button(
@@ -359,24 +367,24 @@ fun VpnFilterSection(context: Context) {
                     if (installedApps.isEmpty()) {
                         installedApps = withContext(Dispatchers.IO) { loadInstalledApps(context) }
                     }
-                    showBypassPicker = true
+                    showExemptPicker = true
                 }
             },
         ) {
-            Text("Add app to bypass")
+            Text("Add exempt app")
         }
-        if (bypassPackages.isEmpty()) {
-            Text("No apps bypassing the VPN.", style = MaterialTheme.typography.bodySmall)
+        if (exemptPackages.isEmpty()) {
+            Text("No apps exempted.", style = MaterialTheme.typography.bodySmall)
         } else {
-            bypassPackages.forEach { pkg ->
+            exemptPackages.forEach { pkg ->
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
                     Text(appLabel(pkg), modifier = Modifier.weight(1f))
                     OutlinedButton(onClick = {
-                        bypassManager.remove(pkg)
-                        bypassPackages = bypassManager.bypassPackages()
+                        exemptManager.remove(pkg)
+                        exemptPackages = exemptManager.exemptPackages()
                         if (enabled) VpnFilterService.reestablish(context)
                     }) {
                         Text("Remove")
