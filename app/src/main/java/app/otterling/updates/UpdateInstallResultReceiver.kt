@@ -28,8 +28,8 @@ class UpdateInstallResultReceiver : BroadcastReceiver() {
             PackageInstaller.STATUS_SUCCESS -> {
                 Log.i(TAG, "Update installed successfully")
                 // The one notification this whole background pipeline is allowed to be loud
-                // about -- everything else (daily periodic check, up-to-date, rejected/failed)
-                // stays silent so this doesn't turn into a once-a-day nag.
+                // about -- everything else (hourly periodic check, up-to-date, rejected/failed)
+                // stays silent so this doesn't turn into a once-an-hour nag.
                 notifyInstalled(context)
             }
             PackageInstaller.STATUS_PENDING_USER_ACTION -> {

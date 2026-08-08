@@ -168,7 +168,7 @@ fun UpdateSection(context: Context) {
                     when (val result = updateManager.checkForUpdate()) {
                         is UpdateCheckResult.UpToDate -> statusMessage = "Already up to date."
                         is UpdateCheckResult.UpdateAvailable -> {
-                            // Enqueue the same background worker the daily periodic check uses,
+                            // Enqueue the same background worker the hourly periodic check uses,
                             // rather than blocking this screen on the full download/verify/install
                             // -- UpdateInstallResultReceiver posts a notification once it's done.
                             UpdateCheckWorker.enqueueOneShot(context)
