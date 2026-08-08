@@ -295,7 +295,7 @@ fun VpnFilterSection(context: Context) {
             modifier = Modifier.fillMaxWidth(),
             label = { Text("Proxy port") },
             singleLine = true,
-            placeholder = { Text("8080") },
+            placeholder = { Text("8090") },
         )
         OutlinedTextField(
             value = proxyUser,

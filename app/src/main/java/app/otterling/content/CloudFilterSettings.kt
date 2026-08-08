@@ -165,7 +165,11 @@ class CloudFilterSettings(context: Context) {
         const val KEY_PROXY_PASSWORD = "proxy_password"
         const val DEFAULT_HOST = "vpn.bartholomew.help"
         const val DEFAULT_PORT = 53
-        const val DEFAULT_PROXY_PORT = 8080
+        // 8080 used to be the phone-facing proxy port via a small TCP mux in front of mitmproxy,
+        // but that port is contested on the current host by an unrelated process outside this
+        // project's control -- phones now talk to mitmproxy's own host-mapped port (see
+        // docker-compose.yml's "${PROXY_PORT:-8090}:8080/tcp") directly instead.
+        const val DEFAULT_PROXY_PORT = 8090
         const val DEFAULT_PROXY_USER = "otterling"
     }
 }

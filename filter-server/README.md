@@ -3,8 +3,12 @@
 Cloud-side half of Otterling's NSFW content filter, deployed to a home server/VPS you control. Two
 services:
 
-1. **[mitmproxy](https://mitmproxy.org/)** (`otterling-mitmproxy`, TCP `8080`) -- a real HTTPS
-   MITM proxy. The phone's `VpnFilterService`/`TcpRelayManager` sends every captured TCP 80/443
+1. **[mitmproxy](https://mitmproxy.org/)** (`otterling-mitmproxy`, host port `8090`, listening on
+   `8080` inside the container) -- a real HTTPS MITM proxy. `8090` (not `8080`) is what phones
+   connect to; `8080` is reserved on this host for an unrelated process outside this project's
+   control (see `port8080_mux.py`'s docstring for the multiplexer this used to route through, no
+   longer needed for Otterling's own traffic). The phone's `VpnFilterService`/`TcpRelayManager`
+   sends every captured TCP 80/443
    flow here via HTTP `CONNECT`, authenticated with a fixed username/password, **except apps that
    certificate-pin** (YouTube, banking apps -- see "App MITM exemptions" below), whose flows stay
    inside the tunnel but connect directly instead of through mitmproxy. `mitm_nsfw_addon.py`
@@ -90,7 +94,7 @@ ruled out).
    - These apply to essentially all traffic, including MITM-exempt apps (see "App MITM
      exemptions" above) -- exemption only skips the mitmproxy hop, not the tunnel or its DNS.
 9. In the Otterling app: Settings → Content Filter VPN → enter `vpn.bartholomew.help`, port `53`
-   for DNS, port `8080` + your `PROXY_USER`/`PROXY_PASSWORD` for the proxy, tap **Save**, then
+   for DNS, port `8090` + your `PROXY_USER`/`PROXY_PASSWORD` for the proxy, tap **Save**, then
    **Test filter server** / **Test proxy** to confirm both are reachable, then toggle **Use cloud
    filter** (and, under it, **Use filter proxy**) on.
 
@@ -99,7 +103,7 @@ ruled out).
 Before wiring up the phone, confirm the proxy itself works from any machine:
 
 ```bash
-curl -x http://PROXY_USER:PROXY_PASSWORD@vpn.bartholomew.help:8080 https://example.com
+curl -x http://PROXY_USER:PROXY_PASSWORD@vpn.bartholomew.help:8090 https://example.com
 ```
 
 A successful fetch means CONNECT + auth + TLS interception are all working. If it hangs or
@@ -121,23 +125,25 @@ Intended public hostname: **`vpn.bartholomew.help`** (points at the home/server 
 DNS (Cloudflare):
 - Add an **A** (or AAAA) record for `vpn` (`vpn.bartholomew.help`) → your server's **public** IP.
 - Set the record to **DNS only** (grey cloud), **not** proxied. Cloudflare's proxy doesn't forward
-  plain TCP/UDP on ports 53/8080 to origin the way this needs, and Caddy needs to answer the ACME
+  plain TCP/UDP on ports 53/8090 to origin the way this needs, and Caddy needs to answer the ACME
   challenge on 80/443 directly too; orange-cloud will break the phone's DNS/proxy connections and
   Caddy's cert issuance alike.
 - MX already exists; that's fine and unrelated.
 
 On the server PC:
-- Port-forward **TCP 8080** (proxy), **UDP/TCP 53** (DNS), and **TCP 80/443** (update host), and
-  optionally **TCP 3000** (AdGuard UI), from the router to the machine running Docker.
+- Port-forward **TCP 8090** (proxy -- not 8080; that port is reserved on this host for an
+  unrelated process, see the mitmproxy bullet at the top of this file), **UDP/TCP 53** (DNS), and
+  **TCP 80/443** (update host), and optionally **TCP 3000** (AdGuard UI), from the router to the
+  machine running Docker.
 - Or run all of these only on LAN and use Tailscale/WireGuard mesh so the phone reaches them
-  without opening any port to the world -- meaningfully safer, since 8080 is now a real proxy with
+  without opening any port to the world -- meaningfully safer, since 8090 is now a real proxy with
   your family's browsing passing through it, not just a DNS resolver (Caddy's Let's Encrypt cert
   issuance does need real internet-facing 80/443 for the ACME challenge, though, unless you use
   Caddy's DNS-01 challenge support instead -- not set up here).
 
 ## Firewall
 
-Restrict ports 53/8080 (and ideally 3000) to only the phone's IP if it's static, or your ISP's IP
+Restrict ports 53/8090 (and ideally 3000) to only the phone's IP if it's static, or your ISP's IP
 range, rather than leaving them open to the whole internet -- an open recursive resolver is a
 standing abuse target, and an open MITM proxy is worse: proxy auth is the only thing stopping
 anyone who finds it from routing their own traffic through your server (and, if they also somehow
