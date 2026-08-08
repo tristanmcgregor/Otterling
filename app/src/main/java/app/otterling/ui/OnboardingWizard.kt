@@ -244,9 +244,9 @@ private fun ContentFilterStep(context: Context, onContinue: () -> Unit) {
     WizardScaffold(
         title = "Content filter",
         subtitle = "Filters adult content via a local blocklist plus your filter server " +
-            "(${cloudFilterSettings.host()}), and locks the device's network down so nothing " +
-            "else can bypass it. You can fine-tune the server, its port, and proxy details later " +
-            "in Settings.",
+            "(${cloudFilterSettings.host()}) using DNS, and locks the device's network so nothing " +
+            "else can route around it. Certificate-pinned apps (YouTube, banking) keep working. " +
+            "Optional HTTPS interception is off by default -- fine-tune in Settings if needed.",
         onContinue = if (enabled) onContinue else null,
     ) {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -261,10 +261,7 @@ private fun ContentFilterStep(context: Context, onContinue: () -> Unit) {
                     statusMessage = "Downloading blocklist..."
                     coroutineScope.launch {
                         withContext(Dispatchers.IO) { blocklistManager.refresh() }
-                        // The VPN toggle alone only turns on the local blocklist + last-resort
-                        // fallback DNS -- this also opts into the cloud DNS filter and (since its
-                        // own proxy sub-toggle defaults to true once this is on) the filter proxy,
-                        // so "content filter" here means full protection, not just the VPN shell.
+                        // VPN + cloud DNS. MITM proxy stays off by default so pinned apps work.
                         cloudFilterSettings.setEnabled(true)
                         val didEnable = withContext(Dispatchers.IO) { vpnManager.enable() }
                         enabled = didEnable

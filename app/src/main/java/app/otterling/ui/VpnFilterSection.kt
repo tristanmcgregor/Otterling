@@ -104,16 +104,11 @@ fun VpnFilterSection(context: Context) {
     SectionCard(
         title = "Filter proxy (traffic via your server)",
         icon = Icons.Default.VpnLock,
-        subtitle = "Web traffic is routed through your own server for filtering: DNS is checked " +
-            "against a local adult-content domain list first, then TCP 80/443 (and QUIC/HTTP3 is " +
-            "dropped so it can't sidestep this over HTTP/3) is CONNECT-proxied through your " +
-            "mitmproxy filter server, which decides whether to block whole requests/pages " +
-            "server-side -- not scrubbed in-page, and not DNS-only. Once enabled, Android won't " +
-            "let this be turned off from Settings, and locks down all other network access " +
-            "(including other VPN apps) to routes through this tunnel -- so nothing on this " +
-            "device can bypass it. Enabling this temporarily falls the separate Private DNS " +
-            "filter back to opportunistic (and restores it when disabled) so the two don't " +
-            "conflict.",
+        subtitle = "Adult domains are blocked via local DNS lists plus your filter server. " +
+            "HTTPS interception is optional and off by default so YouTube, banking, and other " +
+            "certificate-pinned apps keep working. Once the VPN is on, Android lockdown keeps " +
+            "other VPNs from routing around it. Private DNS is temporarily relaxed while this " +
+            "VPN runs so the two don't conflict.",
     ) {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text("Status", style = MaterialTheme.typography.bodyLarge)
@@ -265,13 +260,14 @@ fun VpnFilterSection(context: Context) {
 
         HorizontalDivider()
 
-        Text("Filter proxy (HTTPS interception)", style = MaterialTheme.typography.bodyLarge)
+        Text("Filter proxy (optional HTTPS interception)", style = MaterialTheme.typography.bodyLarge)
         Text(
-            "Routes TCP 80/443 through the mitmproxy filter server above (same host, its own " +
-                "port) so whole pages can be blocked server-side, not just DNS-blocked. Requires " +
-                "the proxy's CA cert to be trusted device-wide (see \"Proxy CA installed\" above) " +
-                "-- installed automatically once Device Owner is active. If the proxy is " +
-                "unreachable, HTTPS sites fail to load rather than silently bypassing it.",
+            "Off by default so YouTube, banking, and other certificate-pinned apps work through " +
+                "the VPN with DNS filtering. Turn on only if you want mitmproxy to inspect HTTPS " +
+                "pages (path/title rules) -- pinned apps may then fail until you add them under " +
+                "\"Apps that bypass the VPN\". Requires the proxy CA (see above). Fail-closed: " +
+                "if the proxy is unreachable while this is on, HTTPS fails rather than silently " +
+                "bypassing it.",
             style = MaterialTheme.typography.bodySmall,
         )
         Row(
@@ -351,12 +347,9 @@ fun VpnFilterSection(context: Context) {
 
         Text("Apps that bypass the VPN", style = MaterialTheme.typography.bodyLarge)
         Text(
-            "These apps are routed over the normal network instead of through the filter, for apps " +
-                "that break under any VPN or MITM proxy -- not just ours -- because they " +
-                "certificate-pin (e.g. Android Auto, YouTube, banking apps). Their traffic is NOT " +
-                "content-filtered. YouTube and common AU banking apps are excluded by default; " +
-                "YouTube Shorts and other path-based rules still apply separately via " +
-                "accessibility, since those don't need MITM at all.",
+            "Only needed for apps that break under any VPN (e.g. Android Auto), or if you turned " +
+                "on HTTPS interception above and a pinned app still fails. Prefer leaving MITM " +
+                "off so apps stay filtered by DNS without exemptions.",
             style = MaterialTheme.typography.bodySmall,
         )
         Button(
