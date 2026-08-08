@@ -64,6 +64,7 @@ import app.otterling.restrictions.RestrictionEnforcementWorker
 import app.otterling.tamper.TamperEvent
 import app.otterling.tamper.TamperEventLogger
 import app.otterling.ui.AccessibilityServiceSection
+import app.otterling.ui.AccountabilityPartnerSection
 import app.otterling.ui.AppPickerDialog
 import app.otterling.ui.BlockedWebsitesSettingsSection
 import app.otterling.ui.DashboardScreen
@@ -276,6 +277,7 @@ class MainActivity : ComponentActivity() {
                         ) {
                             ProtectionControlSection()
                             GuardianSmsAlertsSection(applicationContext)
+                            AccountabilityPartnerSection(applicationContext)
                             DeviceOwnerSection()
                             RestrictionsSection()
                             UninstallProtectionSection()
