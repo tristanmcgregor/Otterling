@@ -3,7 +3,9 @@
 .idea/
 .kotlin/
 .claude/
-.cursor/
+.cursor/*
+!.cursor/rules/
+!.cursor/rules/**
 build/
 captures/
 local.properties
