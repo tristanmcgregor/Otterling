@@ -12,6 +12,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -26,36 +27,60 @@ import app.otterling.alerts.AccountabilityPartnerSettings
 import app.otterling.alerts.AlertReporter
 import app.otterling.alerts.GuardianAlertSettings
 import app.otterling.alerts.SmsPermissionGranter
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
- * A second, independent SMS recipient for the same real-time alerts the Guardian gets (see
- * [GuardianSmsAlertsSection]) -- this section only configures *who else* is told; what counts as
- * a flagged event (trigger words, watched apps) stays Guardian-owned/shared, so this section
- * deliberately doesn't duplicate that UI.
+ * The single, complete SMS-alert settings section: who gets texted (the accountability partner's
+ * number, its own enabled flag and daily cap -- [AccountabilityPartnerSettings]) and what counts
+ * as a flagged event (trigger words, watched apps, info-level opt-in -- [GuardianAlertSettings],
+ * kept under that name only to avoid resetting already-configured detection settings). Replaces
+ * the old separate Guardian SMS section entirely -- there is only one recipient now.
  */
 @Composable
 fun AccountabilityPartnerSection(context: Context) {
     val settings = remember { AccountabilityPartnerSettings(context) }
+    val detectionSettings = remember { GuardianAlertSettings(context) }
     val reporter = remember { AlertReporter(context) }
     val scope = rememberCoroutineScope()
     var refresh by remember { mutableIntStateOf(0) }
     var enabled by remember { mutableStateOf(false) }
     var number by remember { mutableStateOf("") }
+    var triggers by remember { mutableStateOf("") }
+    var smsInfo by remember { mutableStateOf(false) }
+    var watched by remember { mutableStateOf<Set<String>>(emptySet()) }
     var status by remember { mutableStateOf("") }
+    var showPicker by remember { mutableStateOf(false) }
+    var installedApps by remember { mutableStateOf<List<InstalledAppInfo>>(emptyList()) }
 
     LaunchedEffect(refresh) {
         enabled = settings.isEnabled()
         number = settings.partnerNumber()
+        triggers = detectionSettings.triggerWords().joinToString("\n")
+        smsInfo = detectionSettings.smsInfoEvents()
+        watched = detectionSettings.watchedPackages()
         SmsPermissionGranter.grantSendSms(context)
+    }
+
+    if (showPicker) {
+        AppPickerDialog(
+            apps = installedApps,
+            onDismiss = { showPicker = false },
+            onSelect = { app ->
+                detectionSettings.addWatchedPackage(app.packageName)
+                showPicker = false
+                refresh++
+            },
+        )
     }
 
     SectionCard(
         title = "Accountability partner SMS alerts",
         icon = Icons.Default.Groups,
-        subtitle = "Text a separate accountability partner the same real-time alerts the " +
-            "guardian gets (tamper, watched apps, trigger words, blocked sites) -- its own " +
-            "independent daily cap, so this doesn't affect the guardian's alerts.",
+        subtitle = "Text an accountability partner when something needs attention -- tamper, " +
+            "watched apps, trigger words, blocked sites. Uses this phone's SIM; Device Owner " +
+            "locks SEND_SMS.",
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -92,6 +117,71 @@ fun AccountabilityPartnerSection(context: Context) {
             Text("Save number")
         }
 
+        OutlinedTextField(
+            value = triggers,
+            onValueChange = { triggers = it },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("Trigger words (one per line)") },
+            minLines = 3,
+        )
+        Button(
+            onClick = {
+                detectionSettings.setTriggerWords(triggers)
+                status = "Trigger words saved"
+            },
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text("Save trigger words")
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("SMS for info-level events too", style = MaterialTheme.typography.bodyMedium)
+            Switch(
+                checked = smsInfo,
+                onCheckedChange = {
+                    detectionSettings.setSmsInfoEvents(it)
+                    smsInfo = it
+                },
+            )
+        }
+
+        Text("Watched apps", style = MaterialTheme.typography.bodyLarge)
+        Text(
+            "Opening these apps sends an SMS alert.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Button(
+            onClick = {
+                scope.launch {
+                    installedApps = withContext(Dispatchers.IO) { loadInstalledApps(context) }
+                    showPicker = true
+                }
+            },
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text("Add watched app")
+        }
+        watched.forEach { pkg ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(pkg, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                TextButton(onClick = {
+                    detectionSettings.removeWatchedPackage(pkg)
+                    refresh++
+                }) {
+                    Text("Remove")
+                }
+            }
+        }
+
         OutlinedButton(
             onClick = {
                 scope.launch {
@@ -115,7 +205,7 @@ fun AccountabilityPartnerSection(context: Context) {
             Text(status, style = MaterialTheme.typography.bodySmall)
         }
         Text(
-            "Today: ${settings.dailySentCount()} / ${GuardianAlertSettings.DAILY_SMS_CAP} SMS (independent of the guardian's cap)",
+            "Today: ${settings.dailySentCount()} / ${AccountabilityPartnerSettings.DAILY_SMS_CAP} SMS",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

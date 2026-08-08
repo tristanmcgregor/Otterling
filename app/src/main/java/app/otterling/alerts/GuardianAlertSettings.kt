@@ -1,39 +1,20 @@
 package app.otterling.alerts
 
 import android.content.Context
-import android.util.Log
-import androidx.security.crypto.EncryptedSharedPreferences
-import androidx.security.crypto.MasterKey
 
 /**
- * Guardian SMS + broader alert settings. Phone number lives in encrypted prefs; watchlist and
- * trigger words are plain sets (not secrets).
+ * Shared alert-detection settings: what counts as a flagged event (trigger words, watched apps),
+ * independent of who receives the alert -- see [AccountabilityPartnerSettings] for the actual SMS
+ * recipient/number/cap. Kept under this name (rather than renamed) so the existing on-device
+ * SharedPreferences file -- and whatever trigger words/watched apps a user already configured --
+ * isn't silently reset by a rename.
  */
-@Suppress("DEPRECATION")
 class GuardianAlertSettings(context: Context) {
     private val appContext = context.applicationContext
-    private val masterKey = MasterKey.Builder(appContext)
-        .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-        .build()
-    private val securePrefs = EncryptedSharedPreferences.create(
-        appContext,
-        SECURE_PREFS,
-        masterKey,
-        EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
-    )
     private val prefs = appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
-    fun isEnabled(): Boolean = prefs.getBoolean(KEY_ENABLED, false)
-
-    fun setEnabled(enabled: Boolean) {
-        prefs.edit().putBoolean(KEY_ENABLED, enabled).apply()
-    }
-
-    fun guardianNumber(): String = securePrefs.getString(KEY_NUMBER, "").orEmpty()
-
-    fun setGuardianNumber(number: String) {
-        securePrefs.edit().putString(KEY_NUMBER, number.trim()).apply()
+    init {
+        seedDefaultTriggerWordsIfNeeded()
     }
 
     fun triggerWords(): List<String> =
@@ -68,55 +49,65 @@ class GuardianAlertSettings(context: Context) {
         prefs.edit().putBoolean(KEY_SMS_INFO, enabled).apply()
     }
 
-    fun dailySentCount(): Int {
-        val today = epochDay()
-        if (prefs.getLong(KEY_CAP_DAY, -1) != today) return 0
-        return prefs.getInt(KEY_CAP_COUNT, 0)
-    }
-
-    fun incrementDailySentCount() {
-        val today = epochDay()
-        val editor = prefs.edit()
-        if (prefs.getLong(KEY_CAP_DAY, -1) != today) {
-            editor.putLong(KEY_CAP_DAY, today).putInt(KEY_CAP_COUNT, 1)
-        } else {
-            editor.putInt(KEY_CAP_COUNT, prefs.getInt(KEY_CAP_COUNT, 0) + 1)
-        }
-        editor.apply()
-    }
-
-    fun wasCapNotifiedToday(): Boolean {
-        val today = epochDay()
-        return prefs.getLong(KEY_CAP_NOTIFIED_DAY, -1) == today
-    }
-
-    fun markCapNotifiedToday() {
-        prefs.edit().putLong(KEY_CAP_NOTIFIED_DAY, epochDay()).apply()
-    }
-
     fun lastDebounceMillis(key: String): Long = prefs.getLong(debounceKey(key), 0L)
 
     fun setLastDebounceMillis(key: String, millis: Long) {
         prefs.edit().putLong(debounceKey(key), millis).apply()
     }
 
-    private fun epochDay(): Long = System.currentTimeMillis() / 86_400_000L
-
     private fun debounceKey(key: String): String = "debounce_$key"
 
+    /**
+     * One-time merge of [DEFAULT_TRIGGER_WORDS] into whatever's already stored -- runs at most
+     * once ever per install (tracked by [KEY_SEEDED_DEFAULT_TRIGGERS]), same pattern as
+     * MitmExemptManager's default-package seeding. Merges rather than overwrites so a word a user
+     * already added (e.g. before this list existed) survives, and once seeded a user is free to
+     * remove any of these without them reappearing.
+     */
+    private fun seedDefaultTriggerWordsIfNeeded() {
+        if (prefs.getBoolean(KEY_SEEDED_DEFAULT_TRIGGERS, false)) return
+        val merged = (triggerWords().toSet() + DEFAULT_TRIGGER_WORDS).sorted()
+        prefs.edit()
+            .putString(KEY_TRIGGERS, merged.joinToString("\n"))
+            .putBoolean(KEY_SEEDED_DEFAULT_TRIGGERS, true)
+            .apply()
+    }
+
     companion object {
-        private const val TAG = "GuardianAlertSettings"
-        private const val SECURE_PREFS = "guardian_alert_secure"
         private const val PREFS = "guardian_alert_settings"
-        private const val KEY_ENABLED = "enabled"
-        private const val KEY_NUMBER = "guardian_number"
         private const val KEY_TRIGGERS = "trigger_words"
         private const val KEY_WATCHED = "watched_packages"
         private const val KEY_SMS_INFO = "sms_info_events"
-        private const val KEY_CAP_DAY = "cap_day"
-        private const val KEY_CAP_COUNT = "cap_count"
-        private const val KEY_CAP_NOTIFIED_DAY = "cap_notified_day"
-        const val DAILY_SMS_CAP = 30
+        private const val KEY_SEEDED_DEFAULT_TRIGGERS = "seeded_default_triggers_v1"
         const val DEBOUNCE_MS = 10 * 60_000L
+
+        /** Reuses the same low-false-positive keyword set the server-side filter's title/page
+         *  check already uses (mitm_nsfw_addon.py's TITLE_KEYWORDS), plus well-known explicit
+         *  site/service names worth catching as a search term even before any page loads. */
+        val DEFAULT_TRIGGER_WORDS = setOf(
+            "porn",
+            "pornstar",
+            "xxx video",
+            "hardcore sex",
+            "nude cams",
+            "hentai",
+            "nude photos",
+            "adult video",
+            "cam girls",
+            "live sex cams",
+            "amateur porn",
+            "onlyfans",
+            "pornhub",
+            "xvideos",
+            "xnxx",
+            "redtube",
+            "youporn",
+            "xhamster",
+            "spankbang",
+            "motherless",
+            "chaturbate",
+            "brazzers",
+            "bangbros",
+        )
     }
 }

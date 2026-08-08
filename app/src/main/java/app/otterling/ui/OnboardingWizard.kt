@@ -34,7 +34,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import app.otterling.admin.DeviceOwnerManager
-import app.otterling.alerts.GuardianAlertSettings
+import app.otterling.alerts.AccountabilityPartnerSettings
 import app.otterling.alerts.SmsPermissionGranter
 import app.otterling.content.CloudFilterSettings
 import app.otterling.content.DomainBlocklistManager
@@ -79,8 +79,8 @@ fun OnboardingWizard(context: Context, onComplete: () -> Unit) {
         OnboardingStep.DeviceOwner -> DeviceOwnerStep(context, onContinue = { currentStep = OnboardingStep.Pin })
         OnboardingStep.Pin -> PinStep(context, onContinue = { currentStep = OnboardingStep.Restrictions })
         OnboardingStep.Restrictions -> RestrictionsStep(context, onContinue = { currentStep = OnboardingStep.ContentFilter })
-        OnboardingStep.ContentFilter -> ContentFilterStep(context, onContinue = { currentStep = OnboardingStep.GuardianSms })
-        OnboardingStep.GuardianSms -> GuardianSmsStep(context, onContinue = { currentStep = OnboardingStep.Accessibility })
+        OnboardingStep.ContentFilter -> ContentFilterStep(context, onContinue = { currentStep = OnboardingStep.AccountabilityPartnerSms })
+        OnboardingStep.AccountabilityPartnerSms -> AccountabilityPartnerSmsStep(context, onContinue = { currentStep = OnboardingStep.Accessibility })
         OnboardingStep.Accessibility -> AccessibilityStep(context, onContinue = { currentStep = OnboardingStep.Done })
         OnboardingStep.Done -> DoneStep(
             onFinish = {
@@ -283,30 +283,30 @@ private fun ContentFilterStep(context: Context, onContinue: () -> Unit) {
 }
 
 @Composable
-private fun GuardianSmsStep(context: Context, onContinue: () -> Unit) {
-    val settings = remember { GuardianAlertSettings(context) }
-    var number by remember { mutableStateOf(settings.guardianNumber()) }
+private fun AccountabilityPartnerSmsStep(context: Context, onContinue: () -> Unit) {
+    val settings = remember { AccountabilityPartnerSettings(context) }
+    var number by remember { mutableStateOf(settings.partnerNumber()) }
     var refreshTrigger by remember { mutableIntStateOf(0) }
-    val satisfied = remember(refreshTrigger) { settings.isEnabled() && settings.guardianNumber().isNotBlank() }
+    val satisfied = remember(refreshTrigger) { settings.isEnabled() && settings.partnerNumber().isNotBlank() }
 
     WizardScaffold(
-        title = "Guardian alerts",
-        subtitle = "Otterling can text the Guardian's phone when something needs attention -- a " +
-            "blocked site, a tamper attempt, or similar. Uses this phone's own SIM.",
+        title = "Accountability partner alerts",
+        subtitle = "Otterling can text an accountability partner's phone when something needs " +
+            "attention -- a blocked site, a tamper attempt, or similar. Uses this phone's own SIM.",
         onContinue = if (satisfied) onContinue else null,
     ) {
         OutlinedTextField(
             value = number,
             onValueChange = { number = it },
             modifier = Modifier.fillMaxWidth(),
-            label = { Text("Guardian phone number") },
+            label = { Text("Accountability partner phone number") },
             singleLine = true,
             placeholder = { Text("+614...") },
         )
         Button(
             enabled = number.isNotBlank(),
             onClick = {
-                settings.setGuardianNumber(number)
+                settings.setPartnerNumber(number)
                 settings.setEnabled(true)
                 SmsPermissionGranter.grantSendSms(context)
                 refreshTrigger++

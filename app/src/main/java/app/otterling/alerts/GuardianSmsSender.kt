@@ -5,7 +5,8 @@ import android.telephony.SmsManager
 import android.util.Log
 
 /**
- * Sends guardian SMS via the device SIM. Retries are handled by [AlertReporter.flushOutbox].
+ * Sends an alert SMS via the device SIM to whatever number it's given. Retries are handled by
+ * [AlertReporter.flushOutbox].
  */
 class GuardianSmsSender(private val context: Context) {
     fun send(body: String, toNumber: String): Boolean {

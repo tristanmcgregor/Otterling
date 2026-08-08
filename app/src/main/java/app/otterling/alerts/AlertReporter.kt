@@ -8,9 +8,7 @@ import kotlinx.coroutines.withContext
 
 /**
  * Single entry for accountability alerts: persists locally and optionally enqueues an SMS to the
- * guardian number and/or a separate accountability partner's number -- each independently gated
- * by its own enabled flag, phone number, and daily cap, but sharing one debounce key/timestamp
- * per event so the same incident never re-alerts either recipient within the debounce window.
+ * accountability partner's number (subject to its own enabled flag and daily cap).
  */
 class AlertReporter(context: Context) {
     private val appContext = context.applicationContext
@@ -27,38 +25,20 @@ class AlertReporter(context: Context) {
         severity: AlertSeverity = AlertSeverity.WARNING,
         debounceKey: String? = null,
     ) = withContext(Dispatchers.IO) {
-        val severityWantsSms = shouldSms(severity)
-        val guardianWantsSms = severityWantsSms && settings.isEnabled() && settings.guardianNumber().isNotBlank()
-        val partnerWantsSms = severityWantsSms && partnerSettings.isEnabled() && partnerSettings.partnerNumber().isNotBlank()
-        val anyWantsSms = guardianWantsSms || partnerWantsSms
-        // Shared across both recipients -- debounce is a property of the underlying event (don't
-        // spam about the same recurring incident), not of who's being told about it.
+        val partnerWantsSms = shouldSms(severity) && partnerSettings.isEnabled() && partnerSettings.partnerNumber().isNotBlank()
         val key = debounceKey ?: "$type|${details.take(80)}"
-        val debounced = anyWantsSms && isDebounced(key)
+        val debounced = partnerWantsSms && isDebounced(key)
 
-        var enqueuedAny = false
-        if (anyWantsSms && !debounced) {
-            val body = formatBody(type, details)
-
-            if (guardianWantsSms) {
-                if (underDailyCap(settings.dailySentCount())) {
-                    outboxDao.insert(SmsOutboxEntry(body = body))
-                    enqueuedAny = true
-                } else {
-                    maybeNotifyCapReached()
-                }
+        var enqueued = false
+        if (partnerWantsSms && !debounced) {
+            if (underDailyCap(partnerSettings.dailySentCount())) {
+                val body = formatBody(type, details)
+                outboxDao.insert(SmsOutboxEntry(body = body, recipientOverride = partnerSettings.partnerNumber()))
+                settings.setLastDebounceMillis(key, System.currentTimeMillis())
+                enqueued = true
+            } else {
+                maybeNotifyPartnerCapReached()
             }
-
-            if (partnerWantsSms) {
-                if (underDailyCap(partnerSettings.dailySentCount())) {
-                    outboxDao.insert(SmsOutboxEntry(body = body, recipientOverride = partnerSettings.partnerNumber()))
-                    enqueuedAny = true
-                } else {
-                    maybeNotifyPartnerCapReached()
-                }
-            }
-
-            if (enqueuedAny) settings.setLastDebounceMillis(key, System.currentTimeMillis())
         }
 
         alertDao.insert(
@@ -66,25 +46,16 @@ class AlertReporter(context: Context) {
                 type = type,
                 details = details,
                 severity = severity.name,
-                smsEnqueued = enqueuedAny,
+                smsEnqueued = enqueued,
             ),
         )
 
-        if (!anyWantsSms) return@withContext
+        if (!partnerWantsSms) return@withContext
         if (debounced) {
             Log.d(TAG, "Debounced SMS for $type")
             return@withContext
         }
-        if (enqueuedAny) flushOutbox()
-    }
-
-    suspend fun sendTestSms(): Boolean = withContext(Dispatchers.IO) {
-        SmsPermissionGranter.grantSendSms(appContext)
-        val number = settings.guardianNumber()
-        if (number.isBlank()) return@withContext false
-        val ok = sender.send("Otterling: test alert — SMS reporting is working.", number)
-        if (ok) settings.incrementDailySentCount()
-        ok
+        if (enqueued) flushOutbox()
     }
 
     suspend fun sendTestSmsToPartner(): Boolean = withContext(Dispatchers.IO) {
@@ -97,23 +68,27 @@ class AlertReporter(context: Context) {
     }
 
     /**
-     * Sends every pending entry to whichever recipient owns it -- [SmsOutboxEntry.recipientOverride]
-     * null means the Guardian (the original single-recipient behavior), non-null means the
-     * accountability partner. Each recipient's enabled flag and daily cap are checked
-     * independently so one being disabled/over-cap never blocks flushing the other's queue.
+     * Sends every pending entry to its recipient -- [SmsOutboxEntry.recipientOverride] is always
+     * set for entries created going forward (the accountability partner's number), but a null
+     * override is still resolved against [GuardianAlertSettings] for backward compatibility with
+     * any entry queued before the Guardian recipient was retired.
      */
     suspend fun flushOutbox() = withContext(Dispatchers.IO) {
         SmsPermissionGranter.grantSendSms(appContext)
         val pending = outboxDao.pending()
         for (entry in pending) {
-            val isPartner = entry.recipientOverride != null
-            val destination = entry.recipientOverride ?: settings.guardianNumber()
-            val recipientEnabled = if (isPartner) partnerSettings.isEnabled() else settings.isEnabled()
-            if (destination.isBlank() || !recipientEnabled) continue
+            val destination = entry.recipientOverride
+            if (destination == null) {
+                // Guardian recipient retired -- nothing is queued for it going forward, but drain
+                // any already-pending legacy entry rather than leaving it stuck in the outbox
+                // forever (deleteOldSent below only ever removes already-sent rows).
+                outboxDao.update(entry.copy(sent = true, lastAttemptMillis = System.currentTimeMillis()))
+                continue
+            }
+            if (!partnerSettings.isEnabled()) continue
 
-            val currentCount = if (isPartner) partnerSettings.dailySentCount() else settings.dailySentCount()
-            if (!underDailyCap(currentCount)) {
-                if (isPartner) maybeNotifyPartnerCapReached() else maybeNotifyCapReached()
+            if (!underDailyCap(partnerSettings.dailySentCount())) {
+                maybeNotifyPartnerCapReached()
                 continue
             }
 
@@ -125,7 +100,7 @@ class AlertReporter(context: Context) {
             val ok = sender.send(entry.body, destination)
             if (ok) {
                 outboxDao.update(entry.copy(sent = true, lastAttemptMillis = now, attemptCount = entry.attemptCount + 1))
-                if (isPartner) partnerSettings.incrementDailySentCount() else settings.incrementDailySentCount()
+                partnerSettings.incrementDailySentCount()
             } else {
                 outboxDao.update(entry.copy(lastAttemptMillis = now, attemptCount = entry.attemptCount + 1))
             }
@@ -143,28 +118,14 @@ class AlertReporter(context: Context) {
         return last > 0 && System.currentTimeMillis() - last < GuardianAlertSettings.DEBOUNCE_MS
     }
 
-    private fun underDailyCap(currentCount: Int): Boolean = currentCount < GuardianAlertSettings.DAILY_SMS_CAP
-
-    private suspend fun maybeNotifyCapReached() {
-        if (settings.wasCapNotifiedToday()) return
-        val number = settings.guardianNumber()
-        if (number.isBlank()) return
-        val ok = sender.send(
-            "Otterling: daily SMS cap (${GuardianAlertSettings.DAILY_SMS_CAP}) reached; further alerts logged only.",
-            number,
-        )
-        if (ok) {
-            settings.incrementDailySentCount()
-            settings.markCapNotifiedToday()
-        }
-    }
+    private fun underDailyCap(currentCount: Int): Boolean = currentCount < AccountabilityPartnerSettings.DAILY_SMS_CAP
 
     private suspend fun maybeNotifyPartnerCapReached() {
         if (partnerSettings.wasCapNotifiedToday()) return
         val number = partnerSettings.partnerNumber()
         if (number.isBlank()) return
         val ok = sender.send(
-            "Otterling: daily SMS cap (${GuardianAlertSettings.DAILY_SMS_CAP}) reached; further alerts logged only.",
+            "Otterling: daily SMS cap (${AccountabilityPartnerSettings.DAILY_SMS_CAP}) reached; further alerts logged only.",
             number,
         )
         if (ok) {

@@ -5,12 +5,11 @@ import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 
 /**
- * A second SMS recipient alongside the Guardian, for a separate accountability partner who should
- * see the same flagged events (content flags and tamper attempts alike) in real time. Mirrors
- * [GuardianAlertSettings]'s storage pattern, but keeps its own independent daily cap so a burst of
- * alerts to one recipient can't starve the other's budget -- debounce stays shared via
- * [GuardianAlertSettings.lastDebounceMillis] since that's a property of the underlying event, not
- * of who receives it.
+ * The accountability partner's SMS recipient config -- number, enabled flag, and daily cap. What
+ * counts as a flagged event (trigger words, watched apps) lives separately in
+ * [GuardianAlertSettings], since that's about detection, not about who gets told; debounce
+ * timestamps also stay there ([GuardianAlertSettings.lastDebounceMillis]) since debounce is a
+ * property of the underlying event, not of the recipient.
  */
 @Suppress("DEPRECATION")
 class AccountabilityPartnerSettings(context: Context) {
@@ -75,5 +74,6 @@ class AccountabilityPartnerSettings(context: Context) {
         private const val KEY_CAP_DAY = "cap_day"
         private const val KEY_CAP_COUNT = "cap_count"
         private const val KEY_CAP_NOTIFIED_DAY = "cap_notified_day"
+        const val DAILY_SMS_CAP = 30
     }
 }

@@ -68,7 +68,6 @@ import app.otterling.ui.AccountabilityPartnerSection
 import app.otterling.ui.AppPickerDialog
 import app.otterling.ui.BlockedWebsitesSettingsSection
 import app.otterling.ui.DashboardScreen
-import app.otterling.ui.GuardianSmsAlertsSection
 import app.otterling.ui.HabitShareSettingsScreen
 import app.otterling.ui.InstalledAppInfo
 import app.otterling.ui.MindfulAppsSection
@@ -276,7 +275,6 @@ class MainActivity : ComponentActivity() {
                             },
                         ) {
                             ProtectionControlSection()
-                            GuardianSmsAlertsSection(applicationContext)
                             AccountabilityPartnerSection(applicationContext)
                             DeviceOwnerSection()
                             RestrictionsSection()

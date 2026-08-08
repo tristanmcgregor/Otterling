@@ -2,14 +2,14 @@ package app.otterling.onboarding
 
 import android.content.Context
 import app.otterling.admin.DeviceOwnerManager
-import app.otterling.alerts.GuardianAlertSettings
+import app.otterling.alerts.AccountabilityPartnerSettings
 import app.otterling.content.VpnFilterManager
 import app.otterling.pin.PinAuthManager
 import app.otterling.restrictions.AccessibilityGuard
 import app.otterling.restrictions.DeviceRestrictionsManager
 import app.otterling.restrictions.Restriction
 
-enum class OnboardingStep { Welcome, DeviceOwner, Pin, Restrictions, ContentFilter, GuardianSms, Accessibility, Done }
+enum class OnboardingStep { Welcome, DeviceOwner, Pin, Restrictions, ContentFilter, AccountabilityPartnerSms, Accessibility, Done }
 
 /**
  * Live, side-effect-free scan of every manager's own persisted/system state, first-incomplete-wins.
@@ -30,8 +30,8 @@ fun resolveOnboardingStep(context: Context): OnboardingStep {
 
     if (!VpnFilterManager(context).wasEnabledByUser()) return OnboardingStep.ContentFilter
 
-    val alerts = GuardianAlertSettings(context)
-    if (!(alerts.isEnabled() && alerts.guardianNumber().isNotBlank())) return OnboardingStep.GuardianSms
+    val alerts = AccountabilityPartnerSettings(context)
+    if (!(alerts.isEnabled() && alerts.partnerNumber().isNotBlank())) return OnboardingStep.AccountabilityPartnerSms
 
     if (!AccessibilityGuard.isEnabled(context)) return OnboardingStep.Accessibility
 

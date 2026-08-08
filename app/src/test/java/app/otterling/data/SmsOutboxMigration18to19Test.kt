@@ -32,7 +32,7 @@ class SmsOutboxMigration18to19Test {
                 )
                 stmt.execute(
                     "INSERT INTO sms_outbox (createdAtMillis, body, attemptCount, lastAttemptMillis, sent) " +
-                        "VALUES (1000, 'pre-migration guardian alert', 0, 0, 0)",
+                        "VALUES (1000, 'pre-migration alert', 0, 0, 0)",
                 )
             }
 
@@ -44,13 +44,13 @@ class SmsOutboxMigration18to19Test {
             conn.createStatement().use { stmt ->
                 val rs = stmt.executeQuery("SELECT body, recipientOverride FROM sms_outbox WHERE id = 1")
                 assertEquals(true, rs.next())
-                assertEquals("pre-migration guardian alert", rs.getString("body"))
+                assertEquals("pre-migration alert", rs.getString("body"))
                 rs.getString("recipientOverride")
                 assertEquals(true, rs.wasNull())
             }
 
-            // A post-migration insert can now target a specific recipient (the accountability
-            // partner case) while an omitted value still defaults to null (the guardian case).
+            // A post-migration insert can target a specific recipient (the accountability partner
+            // case) while an omitted value still defaults to null (the legacy/drained case).
             conn.createStatement().use { stmt ->
                 stmt.execute(
                     "INSERT INTO sms_outbox (createdAtMillis, body, attemptCount, lastAttemptMillis, sent, recipientOverride) " +
@@ -58,7 +58,7 @@ class SmsOutboxMigration18to19Test {
                 )
                 stmt.execute(
                     "INSERT INTO sms_outbox (createdAtMillis, body, attemptCount, lastAttemptMillis, sent) " +
-                        "VALUES (3000, 'guardian alert', 0, 0, 0)",
+                        "VALUES (3000, 'legacy alert', 0, 0, 0)",
                 )
             }
 
