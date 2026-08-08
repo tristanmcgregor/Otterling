@@ -58,6 +58,7 @@ import app.otterling.onboarding.OnboardingState
 import app.otterling.onboarding.OnboardingStep
 import app.otterling.onboarding.resolveOnboardingStep
 import app.otterling.pin.PinAuthManager
+import app.otterling.updates.UpdateCheckWorker
 import app.otterling.restrictions.AppUninstallGuard
 import app.otterling.restrictions.BatteryOptimizationManager
 import app.otterling.restrictions.DeviceRestrictionsManager
@@ -218,6 +219,7 @@ class MainActivity : ComponentActivity() {
         }
         RestrictionEnforcementWorker.enqueuePeriodic(applicationContext)
         BlocklistRefreshWorker.enqueuePeriodic(applicationContext)
+        UpdateCheckWorker.enqueuePeriodic(applicationContext)
         setContent {
             FamilyGuardTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {

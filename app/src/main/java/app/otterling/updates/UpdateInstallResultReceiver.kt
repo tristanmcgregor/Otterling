@@ -1,5 +1,8 @@
 package app.otterling.updates
 
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -22,7 +25,13 @@ class UpdateInstallResultReceiver : BroadcastReceiver() {
         val message = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)
 
         when (status) {
-            PackageInstaller.STATUS_SUCCESS -> Log.i(TAG, "Update installed successfully")
+            PackageInstaller.STATUS_SUCCESS -> {
+                Log.i(TAG, "Update installed successfully")
+                // The one notification this whole background pipeline is allowed to be loud
+                // about -- everything else (daily periodic check, up-to-date, rejected/failed)
+                // stays silent so this doesn't turn into a once-a-day nag.
+                notifyInstalled(context)
+            }
             PackageInstaller.STATUS_PENDING_USER_ACTION -> {
                 // Shouldn't happen once self-delegation (see ensureInstallDelegation) succeeded,
                 // but if it somehow does, forward the confirmation screen rather than letting the
@@ -54,7 +63,32 @@ class UpdateInstallResultReceiver : BroadcastReceiver() {
         }
     }
 
+    /**
+     * Unlike [app.otterling.monitoring.ProtectionEnforcementService]/[app.otterling.content.VpnFilterService]'s
+     * always-on foreground notifications (deliberately minimized -- see those classes), this one
+     * is meant to be noticed: it's the only signal a background update ever happened at all, and
+     * only ever fires once per completed install, not on a schedule.
+     */
+    private fun notifyInstalled(context: Context) {
+        val versionName = runCatching {
+            context.packageManager.getPackageInfo(context.packageName, 0).versionName
+        }.getOrNull()
+        val manager = context.getSystemService(NotificationManager::class.java) ?: return
+        manager.createNotificationChannel(
+            NotificationChannel(CHANNEL_ID, "Update installed", NotificationManager.IMPORTANCE_DEFAULT),
+        )
+        val notification = Notification.Builder(context, CHANNEL_ID)
+            .setContentTitle("Otterling updated")
+            .setContentText(if (versionName != null) "Now running v$versionName" else "Update installed successfully")
+            .setSmallIcon(android.R.drawable.stat_sys_download_done)
+            .setAutoCancel(true)
+            .build()
+        manager.notify(NOTIFICATION_ID, notification)
+    }
+
     private companion object {
         const val TAG = "UpdateInstallReceiver"
+        const val CHANNEL_ID = "update_installed"
+        const val NOTIFICATION_ID = 2001
     }
 }

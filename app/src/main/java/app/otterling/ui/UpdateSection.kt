@@ -30,8 +30,8 @@ import app.otterling.BuildConfig
 import app.otterling.alerts.AlertReporter
 import app.otterling.alerts.AlertSeverity
 import app.otterling.updates.ApprovedUpdateManager
-import app.otterling.updates.InstallResult
 import app.otterling.updates.UpdateCheckResult
+import app.otterling.updates.UpdateCheckWorker
 import app.otterling.updates.UpdateManifest
 import app.otterling.updates.UpdateSettings
 import kotlinx.coroutines.launch
@@ -46,7 +46,6 @@ fun CheckForUpdatesDialog(context: Context, onDismiss: () -> Unit) {
     val coroutineScope = rememberCoroutineScope()
     val updateManager = remember { ApprovedUpdateManager(context) }
     var checking by remember { mutableStateOf(true) }
-    var installing by remember { mutableStateOf(false) }
     var statusMessage by remember { mutableStateOf("Checking…") }
     var availableManifest by remember { mutableStateOf<UpdateManifest?>(null) }
     var componentLines by remember { mutableStateOf<List<String>>(emptyList()) }
@@ -100,18 +99,17 @@ fun CheckForUpdatesDialog(context: Context, onDismiss: () -> Unit) {
                 }
                 availableManifest?.let { manifest ->
                     Button(
-                        enabled = !installing && !checking,
+                        enabled = !checking,
                         modifier = Modifier.fillMaxWidth(),
                         onClick = {
-                            installing = true
-                            statusMessage = "Downloading and verifying…"
-                            coroutineScope.launch {
-                                statusMessage = when (val result = updateManager.downloadVerifyAndInstall(manifest)) {
-                                    is InstallResult.Started -> "Verified — installing now."
-                                    is InstallResult.Rejected -> "Rejected: ${result.reason}"
-                                }
-                                installing = false
-                            }
+                            // Enqueues the same background worker the periodic check uses, rather
+                            // than downloading/verifying/installing inline here -- so this dialog
+                            // can close immediately instead of the user staring at it through a
+                            // full download. UpdateInstallResultReceiver posts a notification once
+                            // it's actually done.
+                            UpdateCheckWorker.enqueueOneShot(context)
+                            statusMessage = "Installing v${manifest.versionName} in the background — " +
+                                "you'll get a notification when it's done."
                         },
                     ) {
                         Text("Install verified update (${manifest.versionName})")
@@ -123,7 +121,7 @@ fun CheckForUpdatesDialog(context: Context, onDismiss: () -> Unit) {
             TextButton(onClick = onDismiss) { Text("Close") }
         },
         dismissButton = {
-            TextButton(onClick = { runCheck() }, enabled = !checking && !installing) {
+            TextButton(onClick = { runCheck() }, enabled = !checking) {
                 Text("Check again")
             }
         },
@@ -137,9 +135,7 @@ fun UpdateSection(context: Context) {
     val updateSettings = remember { UpdateSettings(context) }
 
     var checking by remember { mutableStateOf(false) }
-    var installing by remember { mutableStateOf(false) }
     var statusMessage by remember { mutableStateOf("") }
-    var availableManifest by remember { mutableStateOf<UpdateManifest?>(null) }
     var issuesUrl by remember { mutableStateOf(updateSettings.githubIssuesUrl()) }
     var requestStatusMessage by remember { mutableStateOf("") }
 
@@ -168,13 +164,16 @@ fun UpdateSection(context: Context) {
             onClick = {
                 checking = true
                 statusMessage = "Checking..."
-                availableManifest = null
                 coroutineScope.launch {
                     when (val result = updateManager.checkForUpdate()) {
                         is UpdateCheckResult.UpToDate -> statusMessage = "Already up to date."
                         is UpdateCheckResult.UpdateAvailable -> {
-                            availableManifest = result.manifest
-                            statusMessage = "Update available: ${result.manifest.versionName}"
+                            // Enqueue the same background worker the daily periodic check uses,
+                            // rather than blocking this screen on the full download/verify/install
+                            // -- UpdateInstallResultReceiver posts a notification once it's done.
+                            UpdateCheckWorker.enqueueOneShot(context)
+                            statusMessage = "Update available: ${result.manifest.versionName} -- " +
+                                "installing in the background. You'll get a notification when it's done."
                         }
                         is UpdateCheckResult.Error -> statusMessage = "Check failed: ${result.message}"
                     }
@@ -183,27 +182,6 @@ fun UpdateSection(context: Context) {
             },
         ) {
             Text("Check for update")
-        }
-
-        availableManifest?.let { manifest ->
-            Button(
-                enabled = !installing,
-                modifier = Modifier.fillMaxWidth(),
-                onClick = {
-                    installing = true
-                    statusMessage = "Downloading and verifying..."
-                    coroutineScope.launch {
-                        val result = updateManager.downloadVerifyAndInstall(manifest)
-                        statusMessage = when (result) {
-                            is InstallResult.Started -> "Verified -- installing now."
-                            is InstallResult.Rejected -> "Rejected: ${result.reason}"
-                        }
-                        installing = false
-                    }
-                },
-            ) {
-                Text("Install verified update (${manifest.versionName})")
-            }
         }
         if (statusMessage.isNotEmpty()) {
             Text(statusMessage, style = MaterialTheme.typography.bodySmall)

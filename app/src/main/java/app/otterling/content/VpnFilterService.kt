@@ -448,22 +448,40 @@ class VpnFilterService : VpnService() {
         super.onRevoke()
     }
 
+    /**
+     * As quiet as Android's foreground-service requirements allow -- see the identical reasoning
+     * on `ProtectionEnforcementService.buildNotification`. This notification can't be dropped
+     * (the VPN would be killed / flagged non-compliant without an active FGS notification), but
+     * nothing requires it to make noise: `IMPORTANCE_MIN` plus the channel's own
+     * `setSound(null, null)`/`enableVibration(false)`/`setShowBadge(false)` gets no sound/
+     * vibration/heads-up/badge -- the authoritative source of truth for silence on API 28+
+     * (channels are mandatory there); the plain framework `Notification.Builder` used here has no
+     * separate per-notification "silent" flag (that's AndroidX `NotificationCompat.Builder`-only).
+     * `_v2` channel suffix for the same reason -- channel
+     * settings are locked in after first creation, so an existing install's already-created
+     * louder channel needs a new ID to pick up these quieter defaults.
+     */
     private fun buildNotification(): Notification {
         val manager = getSystemService(NotificationManager::class.java)
         manager?.createNotificationChannel(
-            NotificationChannel(CHANNEL_ID, "Content filter VPN active", NotificationManager.IMPORTANCE_MIN),
+            NotificationChannel(CHANNEL_ID, "Content filter VPN active", NotificationManager.IMPORTANCE_MIN).apply {
+                setShowBadge(false)
+                setSound(null, null)
+                enableVibration(false)
+            },
         )
         return Notification.Builder(this, CHANNEL_ID)
             .setContentTitle("Otterling")
-            .setContentText("Content filtering is active")
+            .setContentText("")
             .setSmallIcon(android.R.drawable.ic_lock_lock)
             .setOngoing(true)
+            .setShowWhen(false)
             .build()
     }
 
     companion object {
         private const val TAG = "VpnFilterService"
-        private const val CHANNEL_ID = "vpn_content_filter"
+        private const val CHANNEL_ID = "vpn_content_filter_v2"
         private const val NOTIFICATION_ID = 1002
         private const val VIRTUAL_IP = "10.111.222.1"
         private const val DNS_SERVER_IP = "10.111.222.2"

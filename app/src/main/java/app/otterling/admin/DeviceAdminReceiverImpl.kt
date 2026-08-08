@@ -10,6 +10,7 @@ import app.otterling.restrictions.AccessibilityGuard
 import app.otterling.restrictions.DeviceRestrictionsManager
 import app.otterling.restrictions.RestrictionEnforcementWorker
 import app.otterling.tamper.TamperEventLogger
+import app.otterling.updates.UpdateCheckWorker
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -23,6 +24,7 @@ class DeviceAdminReceiverImpl : DeviceAdminReceiver() {
         app.otterling.alerts.SmsPermissionGranter.grantSendSms(context)
         ProtectionEnforcementService.start(context)
         RestrictionEnforcementWorker.enqueuePeriodic(context)
+        UpdateCheckWorker.enqueuePeriodic(context)
     }
 
     override fun onDisabled(context: Context, intent: Intent) {

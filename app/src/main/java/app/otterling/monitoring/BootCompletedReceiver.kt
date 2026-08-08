@@ -6,6 +6,7 @@ import android.content.Intent
 import app.otterling.content.BlocklistRefreshWorker
 import app.otterling.content.VpnFilterManager
 import app.otterling.restrictions.RestrictionEnforcementWorker
+import app.otterling.updates.UpdateCheckWorker
 
 class BootCompletedReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
@@ -14,6 +15,7 @@ class BootCompletedReceiver : BroadcastReceiver() {
         ProtectionEnforcementService.start(context)
         RestrictionEnforcementWorker.enqueuePeriodic(context)
         BlocklistRefreshWorker.enqueuePeriodic(context)
+        UpdateCheckWorker.enqueuePeriodic(context)
         VpnFilterManager(context).reapplyIfEnabled()
     }
 }

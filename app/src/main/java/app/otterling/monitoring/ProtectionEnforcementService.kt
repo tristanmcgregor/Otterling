@@ -165,22 +165,41 @@ class ProtectionEnforcementService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    /**
+     * As quiet as Android's foreground-service requirements allow: this service must stay a
+     * visible FGS to legally keep running (`startForeground` can't be dropped without the OS
+     * killing it / flagging it non-compliant), but nothing says that notification has to be
+     * noticed. `IMPORTANCE_MIN` plus the channel's own `setSound(null, null)`/`enableVibration(false)`/
+     * `setShowBadge(false)` push it to the bottom of the shade with no sound/vibration/heads-up/
+     * badge -- that's the authoritative source of truth for silence on API 28+ (channels are
+     * mandatory there), so there's no separate per-notification "silent" flag to also set on the
+     * plain framework `Notification.Builder` this file uses (that method only exists on AndroidX's
+     * `NotificationCompat.Builder`, not the platform class). The channel ID has a `_v2` suffix because
+     * channel importance/sound settings are locked in on first creation and never update for an
+     * existing channel -- an install that already created the old, louder channel needs a new ID
+     * to actually pick up these quieter defaults.
+     */
     private fun buildNotification(): Notification {
         val manager = getSystemService(NotificationManager::class.java)
         manager?.createNotificationChannel(
-            NotificationChannel(CHANNEL_ID, "Device protection active", NotificationManager.IMPORTANCE_MIN),
+            NotificationChannel(CHANNEL_ID, "Device protection active", NotificationManager.IMPORTANCE_MIN).apply {
+                setShowBadge(false)
+                setSound(null, null)
+                enableVibration(false)
+            },
         )
         return Notification.Builder(this, CHANNEL_ID)
             .setContentTitle("Otterling")
-            .setContentText("Protections are active")
+            .setContentText("")
             .setSmallIcon(android.R.drawable.ic_lock_lock)
             .setOngoing(true)
+            .setShowWhen(false)
             .build()
     }
 
     companion object {
         private const val TAG = "ProtectionEnforcementService"
-        private const val CHANNEL_ID = "protection_enforcement"
+        private const val CHANNEL_ID = "protection_enforcement_v2"
         private const val NOTIFICATION_ID = 1001
         private const val POLL_INTERVAL_MS = 5 * 60 * 1000L
         private const val HABITSHARE_SYNC_INTERVAL_MS = 30 * 1000L
