@@ -30,6 +30,22 @@ class DeviceAdminReceiverImpl : DeviceAdminReceiver() {
     override fun onDisabled(context: Context, intent: Intent) {
         super.onDisabled(context, intent)
         Log.w(TAG, "Device admin disabled")
+        // Best-effort, last-chance signal -- by the time this fires, Device Owner status (and
+        // whatever enforcement it backed) is already gone, so delivery isn't guaranteed, but it's
+        // strictly better than the previous total silence. Same goAsync() pattern as
+        // onDisableRequested, needed for the same reason: this callback's process can be killed
+        // the moment it returns unless the broadcast's lifetime is explicitly extended.
+        val pendingResult = goAsync()
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                TamperEventLogger(context).log(
+                    type = "ADMIN_DISABLED",
+                    details = "Device Admin was disabled",
+                )
+            } finally {
+                pendingResult.finish()
+            }
+        }
     }
 
     override fun onDisableRequested(context: Context, intent: Intent): CharSequence {

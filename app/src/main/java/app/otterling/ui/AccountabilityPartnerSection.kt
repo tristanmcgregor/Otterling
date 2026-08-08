@@ -26,7 +26,9 @@ import androidx.compose.ui.Modifier
 import app.otterling.alerts.AccountabilityPartnerSettings
 import app.otterling.alerts.AlertReporter
 import app.otterling.alerts.GuardianAlertSettings
+import app.otterling.alerts.GuardianSmsSender
 import app.otterling.alerts.SmsPermissionGranter
+import app.otterling.tamper.TamperEventLogger
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -92,9 +94,33 @@ fun AccountabilityPartnerSection(context: Context) {
             Text("SMS alerts enabled", style = MaterialTheme.typography.bodyLarge)
             Switch(
                 checked = enabled,
-                onCheckedChange = {
-                    settings.setEnabled(it)
-                    enabled = it
+                onCheckedChange = { newValue ->
+                    if (!newValue && enabled) {
+                        // Notify BEFORE persisting the disable -- once settings.isEnabled() is
+                        // false, the normal AlertReporter path would correctly refuse to send
+                        // anything, so this is the only way any of these numbers ever hear about
+                        // their own alerting being turned off.
+                        val goingSilentNumbers = settings.partnerNumbers()
+                        scope.launch {
+                            withContext(Dispatchers.IO) {
+                                val sender = GuardianSmsSender(context)
+                                goingSilentNumbers.forEach { number ->
+                                    sender.send(
+                                        "Otterling: accountability partner alerts were just turned off on this device.",
+                                        number,
+                                    )
+                                }
+                            }
+                            runCatching {
+                                TamperEventLogger(context).log(
+                                    type = "ACCOUNTABILITY_ALERTS_DISABLED",
+                                    details = "SMS alerts turned off (was texting ${goingSilentNumbers.size} number(s))",
+                                )
+                            }
+                        }
+                    }
+                    settings.setEnabled(newValue)
+                    enabled = newValue
                     SmsPermissionGranter.grantSendSms(context)
                 },
             )
@@ -133,6 +159,23 @@ fun AccountabilityPartnerSection(context: Context) {
                     style = MaterialTheme.typography.bodySmall,
                 )
                 TextButton(onClick = {
+                    // Same reasoning as disabling the master switch -- notify this specific
+                    // number before it's removed, since it's the last chance to reach it.
+                    scope.launch {
+                        withContext(Dispatchers.IO) {
+                            GuardianSmsSender(context).send(
+                                "Otterling: you've been removed from accountability alerts on this device.",
+                                num,
+                            )
+                        }
+                        runCatching {
+                            TamperEventLogger(context).log(
+                                type = "ACCOUNTABILITY_PARTNER_REMOVED",
+                                details = "Removed $num",
+                                debounceKey = "ACCOUNTABILITY_PARTNER_REMOVED|$num",
+                            )
+                        }
+                    }
                     settings.removePartnerNumber(num)
                     refresh++
                 }) {

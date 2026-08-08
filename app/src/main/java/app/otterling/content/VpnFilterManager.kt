@@ -6,6 +6,11 @@ import android.content.Context
 import android.util.Log
 import app.otterling.monitoring.ProtectionController
 import app.otterling.admin.DeviceAdminReceiverImpl
+import app.otterling.tamper.TamperEventLogger
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 /**
  * Registers [VpnFilterService] as the device's mandatory always-on VPN via Device Owner's
@@ -36,6 +41,11 @@ class VpnFilterManager(private val context: Context) {
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     private val privateDnsFilterManager = PrivateDnsFilterManager(context)
     private val caCertInstaller = CaCertInstaller(context)
+
+    // Fire-and-forget only -- disable()/ensureActive() stay synchronous (existing call sites,
+    // including a Settings-screen button with no coroutine scope of its own) while still being
+    // able to invoke TamperEventLogger.log's suspend API.
+    private val alertScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     /** Persisted separately from the DPM query so [reapplyIfEnabled] survives a DPM/system reset. */
     fun wasEnabledByUser(): Boolean = prefs.getBoolean(KEY_ENABLED, false)
@@ -102,8 +112,16 @@ class VpnFilterManager(private val context: Context) {
     /**
      * Removes the always-on lock and stops the service -- requires Settings/PIN access. Blocking
      * call (the Private DNS restore may perform a connectivity check) -- call off the main thread.
+     *
+     * [notifyIfDisabling] alerts on this front-door disable itself (turning off content filtering
+     * through this app's own Settings screen is exactly the kind of "trying to get around it"
+     * action that should reach an accountability partner) -- pass false only when the caller is
+     * already about to fire its own broader alert for the same action (e.g.
+     * [app.otterling.monitoring.ProtectionController.shutdown]'s "PROTECTION_OFF"), so turning off
+     * master protection doesn't also send a second, redundant text about the VPN specifically.
      */
-    fun disable(): Boolean {
+    fun disable(notifyIfDisabling: Boolean = true): Boolean {
+        val wasEnabled = wasEnabledByUser()
         val dpm = devicePolicyManager
         val cleared = if (dpm == null) {
             false
@@ -122,6 +140,16 @@ class VpnFilterManager(private val context: Context) {
         VpnFilterService.stop(context)
         prefs.edit().putBoolean(KEY_ENABLED, false).apply()
         restoreSuppressedPrivateDns()
+        if (notifyIfDisabling && wasEnabled) {
+            alertScope.launch {
+                runCatching {
+                    TamperEventLogger(context).log(
+                        type = "CONTENT_FILTER_DISABLED_BY_USER",
+                        details = "Content filter VPN turned off via Settings",
+                    )
+                }
+            }
+        }
         return cleared
     }
 
@@ -163,6 +191,17 @@ class VpnFilterManager(private val context: Context) {
                 Log.w(TAG, "Always-on VPN drifted (was $current, lockdown=${isLockdownEnabled()}) -- re-registering")
                 dpm.setAlwaysOnVpnPackage(adminComponent, context.packageName, true)
                 suppressConflictingPrivateDns()
+                // Same reasoning as DeviceRestrictionsManager.detectDriftAndReapply -- this used
+                // to silently fix always-on VPN drift with only a Log.w, unlike the equivalent
+                // restriction-drift check which already alerted.
+                alertScope.launch {
+                    runCatching {
+                        TamperEventLogger(context).log(
+                            type = "CONTENT_FILTER_DRIFT",
+                            details = "Content filter VPN registration changed unexpectedly, restored",
+                        )
+                    }
+                }
             }
         }.onFailure { Log.w(TAG, "Watchdog always-on re-registration failed", it) }
         // Cheap (isInstalled() short-circuits installCaCertNow() before any DPM mutation) and

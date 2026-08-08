@@ -12,6 +12,7 @@ import app.otterling.alerts.AlertSeverity
 import app.otterling.alerts.GuardianAlertSettings
 import app.otterling.content.CustomBlocklistManager
 import app.otterling.content.UrlPathBlockEnforcer
+import app.otterling.tamper.TamperEventLogger
 import app.otterling.monitoring.ProtectionController
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -438,9 +439,34 @@ class FocusGuardAccessibilityService : AccessibilityService() {
         Toast.makeText(applicationContext, message, Toast.LENGTH_SHORT).show()
     }
 
-    override fun onInterrupt() {}
+    /** Fires when the system interrupts this service (e.g. another accessibility service takes
+     *  over, or the framework resets it) -- a faster signal than waiting for the next
+     *  [app.otterling.restrictions.AccessibilityGuard.isEnabled] poll, which can lag up to 15
+     *  minutes on the WorkManager-only path. */
+    override fun onInterrupt() {
+        scope.launch {
+            runCatching {
+                TamperEventLogger(applicationContext).log(
+                    type = "ACCESSIBILITY_SERVICE_INTERRUPTED",
+                    details = "Accessibility service was interrupted",
+                )
+            }
+        }
+    }
 
     override fun onDestroy() {
+        // Best-effort, last-chance signal (same reasoning as
+        // DeviceAdminReceiverImpl.onDisabled) -- fires right as the service is torn down, so this
+        // uses its own short-lived scope rather than the service's own `scope` field, which gets
+        // cancelled two lines down and would silently drop a launch on itself.
+        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
+            runCatching {
+                TamperEventLogger(applicationContext).log(
+                    type = "ACCESSIBILITY_SERVICE_DESTROYED",
+                    details = "Accessibility service process was destroyed",
+                )
+            }
+        }
         tickJob?.cancel()
         habitPollJob?.cancel()
         scope.cancel()

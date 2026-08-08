@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.util.Log
 import app.otterling.admin.DeviceAdminReceiverImpl
+import app.otterling.tamper.TamperEventLogger
 
 /**
  * Tracks apps blocked via suspend / hide when a habit or manual block targets them, and backs the
@@ -99,13 +100,23 @@ class PackageDisableStore(context: Context) {
 
     /**
      * Unsuspends/unhides/re-enables [packageName] and exempts it from automatic re-block until
-     * [disable] / [markBlocked] is called again.
+     * [disable] / [markBlocked] is called again. This is the single most direct "trying to get
+     * around a block" action available in the app, so it alerts -- unlike [release], which is the
+     * app's own rule-based unlock (a habit reward unlocking, etc.), not a user override.
      */
-    fun undisable(packageName: String): Boolean {
+    suspend fun undisable(packageName: String): Boolean {
         mutateSet(KEY_TRACKED) { it.add(packageName) }
         mutateSet(KEY_EXEMPT) { it.add(packageName) }
         suspendPackage(packageName, suspended = false)
-        return enablePackage(packageName)
+        val result = enablePackage(packageName)
+        runCatching {
+            TamperEventLogger(appContext).log(
+                type = "APP_UNBLOCKED_BY_USER",
+                details = "${labelFor(packageName)} un-blocked via Settings",
+                debounceKey = "APP_UNBLOCKED_BY_USER|$packageName",
+            )
+        }
+        return result
     }
 
     /** Unsuspends/unhides and drops tracking/exemption — used when a rule unlocks. */

@@ -6,6 +6,10 @@ import android.content.Context
 import android.util.Log
 import app.otterling.admin.DeviceAdminReceiverImpl
 import app.otterling.tamper.TamperEventLogger
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 class DeviceRestrictionsManager(private val context: Context) {
     private val devicePolicyManager: DevicePolicyManager? =
@@ -15,14 +19,36 @@ class DeviceRestrictionsManager(private val context: Context) {
 
     private val preferences = RestrictionPreferences(context)
 
+    // Fire-and-forget only -- setEnabled/setUninstallBlocked stay synchronous (many call sites,
+    // including Settings-screen SwitchRow onClick handlers with no coroutine scope of their own)
+    // while still being able to invoke TamperEventLogger.log's suspend API.
+    private val alertScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
     fun isEnabled(restriction: Restriction): Boolean =
         devicePolicyManager?.getUserRestrictions(adminComponent)
             ?.getBoolean(restriction.userManagerKey) == true
 
-    /** Applies the change and remembers it as the parent's intended state for drift checks. */
+    /**
+     * Applies the change and remembers it as the parent's intended state for drift checks.
+     * Deliberately alerts on the front-door disable itself, not just later drift -- turning a
+     * protection off through this app's own Settings screen is exactly the kind of "trying to get
+     * around it" action that should reach an accountability partner, not just external tampering.
+     */
     fun setEnabled(restriction: Restriction, enabled: Boolean) {
+        val wasEnabled = isEnabled(restriction)
         preferences.setDesired(restriction, enabled)
         applyToSystem(restriction, enabled)
+        if (!enabled && wasEnabled) {
+            alertScope.launch {
+                runCatching {
+                    TamperEventLogger(context).log(
+                        type = "RESTRICTION_DISABLED_BY_USER",
+                        details = "${restriction.displayName} turned off via Settings",
+                        debounceKey = "RESTRICTION_DISABLED_BY_USER|${restriction.name}",
+                    )
+                }
+            }
+        }
     }
 
     private fun applyToSystem(restriction: Restriction, enabled: Boolean) {
@@ -42,10 +68,22 @@ class DeviceRestrictionsManager(private val context: Context) {
     fun isUninstallBlocked(): Boolean =
         devicePolicyManager?.isUninstallBlocked(adminComponent, context.packageName) == true
 
-    /** Applies the change and remembers it as the parent's intended state for drift checks. */
+    /** Applies the change and remembers it as the parent's intended state for drift checks.
+     *  Alerts on the front-door disable itself, same reasoning as [setEnabled]. */
     fun setUninstallBlocked(blocked: Boolean) {
+        val wasBlocked = isUninstallBlocked()
         preferences.setUninstallBlockDesired(blocked)
         applyUninstallBlockedToSystem(blocked)
+        if (!blocked && wasBlocked) {
+            alertScope.launch {
+                runCatching {
+                    TamperEventLogger(context).log(
+                        type = "UNINSTALL_PROTECTION_DISABLED_BY_USER",
+                        details = "Uninstall protection turned off via Settings",
+                    )
+                }
+            }
+        }
     }
 
     private fun applyUninstallBlockedToSystem(blocked: Boolean) {

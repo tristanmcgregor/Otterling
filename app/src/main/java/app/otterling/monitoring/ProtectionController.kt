@@ -42,7 +42,9 @@ class ProtectionController(private val context: Context) {
 
         ProtectionEnforcementService.stop(context)
         if (vpnWasOn) {
-            VpnFilterManager(context).disable()
+            // "PROTECTION_OFF" below already covers this action -- don't also send a second,
+            // redundant alert specifically about the VPN.
+            VpnFilterManager(context).disable(notifyIfDisabling = false)
         }
 
         HabitRuleManager(context).unsuspendAllTargets()
