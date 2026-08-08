@@ -124,6 +124,9 @@ dependencies {
     implementation("com.google.mediapipe:tasks-vision:0.10.35")
 
     testImplementation("junit:junit:4.13.2")
+    // Runs raw Room migration SQL against a real SQLite engine (not Room/Robolectric) so a typo
+    // in a migration string is caught here instead of on a real device's first post-update launch.
+    testImplementation("org.xerial:sqlite-jdbc:3.46.1.3")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
