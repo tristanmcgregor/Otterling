@@ -32,6 +32,25 @@ Device Owner one-liner (app must be installed; no other accounts/users on the AV
 adb shell dpm set-device-owner app.otterling/.admin.DeviceAdminReceiverImpl
 ```
 
+## Blocker test harness
+
+End-to-end content-blocker checks on `otterling_api34` (DNS allow/block, MITM allow/block, YouTube exemption, Shorts path seed, package suspend). Uses debug broadcasts with **`always_on=false`** / **`lockdown=false`** so adb stays usable on this host (production phones still use always-on lockdown VPN).
+
+Prerequisites: KVM AVD scripts above, healthy mitmproxy (`otterling-mitmproxy` on `:8090` + mux on `:8080`), `PROXY_PASSWORD` in `filter-server/.env`.
+
+```bash
+cd /home/admin/Otterling
+KEEP_EMU=1 ./scripts/emulator/run-blocker-tests.sh
+# Reuse an already-booted emulator:
+SKIP_BOOT=1 KEEP_EMU=1 ./scripts/emulator/run-blocker-tests.sh
+```
+
+Fixture matrix: [`testdata/cases.json`](testdata/cases.json). Victim stub package: `test.blocker.victim` (`:emulator-victim` Gradle module).
+
+The harness **pre-builds APKs before booting qemu** (Gradle + emulator together OOMs this host). Google APIs images must be account-free for Device Owner — `install-debug.sh` disables the setup wizard and retries `dpm set-device-owner`.
+
+Not wired into release CI (needs KVM + live filter-server on bartholomew).
+
 ## Notes
 
 - Logs: `/tmp/otterling-emulator.log`, `/tmp/otterling-xvfb.log`

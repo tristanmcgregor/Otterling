@@ -28,8 +28,15 @@ fi
 
 if [ -f "$EMU_PID_FILE" ] && kill -0 "$(cat "$EMU_PID_FILE")" 2>/dev/null; then
   echo "emulator already running (pid $(cat "$EMU_PID_FILE"))"
-  adb wait-for-device
-  exit 0
+  # Don't hang forever if adb is offline (e.g. after always-on VPN lockdown).
+  if timeout 20 adb wait-for-device >/dev/null 2>&1 \
+    && [ "$(adb get-state 2>/dev/null)" = "device" ]; then
+    exit 0
+  fi
+  echo "warning: emulator process up but adb not ready; restarting" >&2
+  kill "$(cat "$EMU_PID_FILE")" 2>/dev/null || true
+  sleep 2
+  rm -f "$EMU_PID_FILE"
 fi
 
 if ! pgrep -f "Xvfb :${DISPLAY_NUM}" >/dev/null 2>&1; then

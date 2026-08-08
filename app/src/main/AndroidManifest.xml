@@ -71,6 +71,11 @@
                 <action android:name="${applicationId}.DEBUG_DISABLE" />
                 <action android:name="${applicationId}.DEBUG_PERMIT_A11Y" />
                 <action android:name="${applicationId}.DEBUG_ALLOW_UNINSTALL" />
+                <action android:name="${applicationId}.DEBUG_ENABLE_FILTER" />
+                <action android:name="${applicationId}.DEBUG_REFRESH_BLOCKLIST" />
+                <action android:name="${applicationId}.DEBUG_SEED_CUSTOM_BLOCK" />
+                <action android:name="${applicationId}.DEBUG_SEED_BLOCK_APP" />
+                <action android:name="${applicationId}.DEBUG_PROBE_DNS" />
             </intent-filter>
         </receiver>
 

@@ -32,9 +32,29 @@ fi
 adb shell pm path app.otterling
 
 if [ "${DEVICE_OWNER:-0}" = "1" ]; then
+  echo "preparing Device Owner (no Google accounts / setup wizard)..."
+  adb root >/dev/null 2>&1 || true
+  adb wait-for-device
+  adb shell settings put secure user_setup_complete 1 >/dev/null 2>&1 || true
+  adb shell settings put global device_provisioned 1 >/dev/null 2>&1 || true
+  for p in com.google.android.setupwizard com.google.android.apps.restore; do
+    adb shell pm disable-user --user 0 "$p" >/dev/null 2>&1 || true
+  done
   echo "setting Device Owner..."
-  # Fresh AVD / no accounts required
-  adb shell dpm set-device-owner app.otterling/.admin.DeviceAdminReceiverImpl
+  # Retry: Google APIs images can briefly report accounts during first boot.
+  ok=0
+  for i in 1 2 3 4 5 6; do
+    if adb shell dpm set-device-owner app.otterling/.admin.DeviceAdminReceiverImpl; then
+      ok=1
+      break
+    fi
+    echo "retry $i: waiting for account-free state..."
+    sleep 3
+  done
+  if [ "$ok" != "1" ]; then
+    echo "error: could not set Device Owner (remove Google accounts on the AVD / wipe-data)" >&2
+    exit 1
+  fi
   adb shell dpm list-owners
 fi
 

@@ -9,9 +9,17 @@ import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.util.Log
 import app.otterling.admin.DeviceAdminReceiverImpl
+import app.otterling.content.AppSuspensionManager
+import app.otterling.content.CloudFilterSettings
+import app.otterling.content.CustomBlocklistManager
+import app.otterling.content.DomainBlocklistManager
+import app.otterling.content.MitmExemptManager
+import app.otterling.content.VpnFilterManager
 import app.otterling.restrictions.AccessibilityGuard
 import app.otterling.restrictions.ActiveAdminRemover
+import app.otterling.restrictions.PackageBlockEnforcer
 import app.otterling.restrictions.PackageDisableStore
+import kotlinx.coroutines.runBlocking
 
 /**
  * DEBUG-ONLY receiver: clears live blocks OR tries to strip another app's device admin and
@@ -39,6 +47,30 @@ import app.otterling.restrictions.PackageDisableStore
  *   adb shell am broadcast -a app.otterling.DEBUG_ALLOW_UNINSTALL \
  *     -n app.otterling/.monitoring.DebugUnsuspendReceiver \
  *     --esa packages com.accountable2you.ap1.googleplay
+ *
+ * Enable always-on VPN + cloud filter + MITM proxy (for emulator smoke tests):
+ *   adb shell am broadcast -a app.otterling.DEBUG_ENABLE_FILTER \
+ *     -n app.otterling/.monitoring.DebugUnsuspendReceiver \
+ *     --es proxy_password '…' [--ez proxy_enabled true] [--ez lockdown false]
+ *
+ * Refresh downloaded domain blocklist:
+ *   adb shell am broadcast -a app.otterling.DEBUG_REFRESH_BLOCKLIST \
+ *     -n app.otterling/.monitoring.DebugUnsuspendReceiver
+ *
+ * Seed a custom domain or path rule:
+ *   adb shell am broadcast -a app.otterling.DEBUG_SEED_CUSTOM_BLOCK \
+ *     -n app.otterling/.monitoring.DebugUnsuspendReceiver \
+ *     --es rule 'blockme.otterling.test'   # or youtube.com/shorts
+ *
+ * Suspend/block a package (Device Owner):
+ *   adb shell am broadcast -a app.otterling.DEBUG_SEED_BLOCK_APP \
+ *     -n app.otterling/.monitoring.DebugUnsuspendReceiver \
+ *     --es package test.blocker.victim [--ez blocked true]
+ *
+ * Probe whether a hostname would be DNS-blocked (local + custom lists):
+ *   adb shell am broadcast -a app.otterling.DEBUG_PROBE_DNS \
+ *     -n app.otterling/.monitoring.DebugUnsuspendReceiver \
+ *     --es host blockme.otterling.test
  */
 class DebugUnsuspendReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
@@ -49,6 +81,97 @@ class DebugUnsuspendReceiver : BroadcastReceiver() {
         Thread {
             try {
                 when {
+                    action.endsWith("DEBUG_ENABLE_FILTER") -> {
+                        val cloud = CloudFilterSettings(context)
+                        val host = intent?.getStringExtra("host").orEmpty().ifBlank { cloud.host() }
+                        val proxyPassword = intent?.getStringExtra("proxy_password").orEmpty()
+                        val proxyEnabled = intent?.getBooleanExtra("proxy_enabled", true) ?: true
+                        cloud.setHost(host)
+                        cloud.setEnabled(true)
+                        cloud.setProxyEnabled(proxyEnabled)
+                        if (proxyPassword.isNotEmpty()) cloud.setProxyPassword(proxyPassword)
+                        // Ensure YouTube (and other defaults) are seeded before the tunnel starts.
+                        MitmExemptManager(context).exemptPackages()
+                        val lockdown = intent?.getBooleanExtra("lockdown", true) ?: true
+                        val alwaysOn = intent?.getBooleanExtra("always_on", true) ?: true
+                        val vpnOk = VpnFilterManager(context).enable(
+                            lockdownEnabled = lockdown,
+                            registerAlwaysOn = alwaysOn,
+                        )
+                        // Reachability probes can hang under lockdown; keep them short and best-effort.
+                        val dnsOk = runCatching { cloud.testReachable(timeoutMs = 2_000) }.getOrDefault(false)
+                        val proxyOk = if (proxyEnabled) {
+                            runCatching { cloud.testProxyReachable(timeoutMs = 2_000) }.getOrDefault(false)
+                        } else {
+                            true
+                        }
+                        Log.i(
+                            TAG,
+                            "DEBUG_ENABLE_FILTER vpnOk=$vpnOk dnsOk=$dnsOk proxyOk=$proxyOk " +
+                                "proxyEnabled=$proxyEnabled lockdown=$lockdown alwaysOn=$alwaysOn host=$host " +
+                                "passwordSet=${proxyPassword.isNotEmpty()} " +
+                                "exempt=${MitmExemptManager(context).exemptPackages()}",
+                        )
+                    }
+                    action.endsWith("DEBUG_REFRESH_BLOCKLIST") -> {
+                        val manager = DomainBlocklistManager(context)
+                        val result = manager.refresh()
+                        val count = result.getOrElse { -1 }
+                        val err = result.exceptionOrNull()?.message.orEmpty()
+                        Log.i(
+                            TAG,
+                            "DEBUG_REFRESH_BLOCKLIST ok=${result.isSuccess} count=$count " +
+                                "cached=${manager.domainCount()} err=$err",
+                        )
+                    }
+                    action.endsWith("DEBUG_SEED_CUSTOM_BLOCK") -> {
+                        val rule = intent?.getStringExtra("rule")
+                            ?: intent?.getStringExtra("domain")
+                            ?: intent?.getStringExtra("path")
+                            ?: ""
+                        val added = CustomBlocklistManager(context).add(rule)
+                        Log.i(
+                            TAG,
+                            "DEBUG_SEED_CUSTOM_BLOCK ok=${added.isSuccess} rule=${added.getOrNull()} " +
+                                "err=${added.exceptionOrNull()?.message.orEmpty()}",
+                        )
+                    }
+                    action.endsWith("DEBUG_SEED_BLOCK_APP") -> {
+                        val pkg = intent?.getStringExtra("package").orEmpty()
+                        val blocked = intent?.getBooleanExtra("blocked", true) ?: true
+                        if (pkg.isEmpty()) {
+                            Log.w(TAG, "DEBUG_SEED_BLOCK_APP missing package=")
+                        } else {
+                            runBlocking {
+                                AppSuspensionManager(context).setBlocked(pkg, blocked)
+                            }
+                            // Also apply enforcer immediately in case Room path races.
+                            PackageBlockEnforcer.setBlocked(context, pkg, blocked)
+                            val suspended = if (android.os.Build.VERSION.SDK_INT >= 29) {
+                                runCatching {
+                                    context.packageManager.isPackageSuspended(pkg)
+                                }.getOrDefault(false)
+                            } else {
+                                false
+                            }
+                            Log.i(
+                                TAG,
+                                "DEBUG_SEED_BLOCK_APP package=$pkg blocked=$blocked suspended=$suspended",
+                            )
+                        }
+                    }
+                    action.endsWith("DEBUG_PROBE_DNS") -> {
+                        val host = intent?.getStringExtra("host").orEmpty().trim().lowercase()
+                        if (host.isEmpty()) {
+                            Log.w(TAG, "DEBUG_PROBE_DNS missing host=")
+                        } else {
+                            // Otterling itself is excluded from the VPN tunnel, so we report the
+                            // same decision VpnFilterService would make for a captured DNS query
+                            // (downloaded list + domain-only custom rules).
+                            val blocked = DomainBlocklistManager(context).isBlocked(host)
+                            Log.i(TAG, "PROBE_DNS host=$host blocked=$blocked")
+                        }
+                    }
                     action.endsWith("DEBUG_ALLOW_UNINSTALL") -> {
                         val dpm = context.getSystemService(DevicePolicyManager::class.java) ?: return@Thread
                         val admin = ComponentName(context, DeviceAdminReceiverImpl::class.java)
@@ -75,7 +198,7 @@ class DebugUnsuspendReceiver : BroadcastReceiver() {
                                 .onSuccess { Log.i(TAG, "setApplicationHidden(false) ok $pkg") }
                                 .onFailure { Log.w(TAG, "setApplicationHidden(false) failed for $pkg", it) }
                             runCatching { dpm.setPackagesSuspended(admin, arrayOf(pkg), false) }
-                            kotlinx.coroutines.runBlocking { runCatching { dao.delete(pkg) } }
+                            runBlocking { runCatching { dao.delete(pkg) } }
                         }
                         AccessibilityGuard.reapplyAllowlist(context)
                     }

@@ -1,0 +1,61 @@
+{
+  "seed": {
+    "custom_domains": ["blockme.otterling.test"],
+    "custom_paths": ["youtube.com/shorts"],
+    "victim_package": "test.blocker.victim"
+  },
+  "cases": [
+    {
+      "id": "dns_allow_example",
+      "type": "dns",
+      "host": "example.com",
+      "expect_blocked": false
+    },
+    {
+      "id": "dns_allow_wikipedia",
+      "type": "dns",
+      "host": "wikipedia.org",
+      "expect_blocked": false
+    },
+    {
+      "id": "dns_block_seeded",
+      "type": "dns",
+      "host": "blockme.otterling.test",
+      "expect_blocked": true
+    },
+    {
+      "id": "dns_block_seeded_subdomain",
+      "type": "dns",
+      "host": "www.blockme.otterling.test",
+      "expect_blocked": true
+    },
+    {
+      "id": "mitm_allow_example",
+      "type": "chrome",
+      "url": "https://example.com/",
+      "expect": "allow"
+    },
+    {
+      "id": "mitm_block_path_token",
+      "type": "chrome",
+      "url": "https://www.pornhub.com/",
+      "expect": "block_or_fail_closed"
+    },
+    {
+      "id": "exempt_youtube_launch",
+      "type": "youtube_exempt",
+      "package": "com.google.android.youtube"
+    },
+    {
+      "id": "path_shorts_seeded",
+      "type": "path_rule",
+      "rule": "youtube.com/shorts",
+      "url": "https://m.youtube.com/shorts/dQw4w9WgXcQ"
+    },
+    {
+      "id": "package_suspend_victim",
+      "type": "package_suspend",
+      "package": "test.blocker.victim"
+    }
+  ]
+}

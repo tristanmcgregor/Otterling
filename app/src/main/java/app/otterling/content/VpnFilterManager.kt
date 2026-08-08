@@ -62,7 +62,7 @@ class VpnFilterManager(private val context: Context) {
      * Blocking call (the Private DNS reconciliation may perform a connectivity check) -- call off
      * the main thread.
      */
-    fun enable(): Boolean {
+    fun enable(lockdownEnabled: Boolean = true, registerAlwaysOn: Boolean = true): Boolean {
         prefs.edit().putBoolean(KEY_ENABLED, true).apply()
         val dpm = devicePolicyManager ?: return false
         // Register the always-on VPN FIRST: this is what actually makes the system bring the
@@ -72,8 +72,12 @@ class VpnFilterManager(private val context: Context) {
         // toggled it on while the app is open" case -- if it throws (e.g. started from the boot
         // receiver on Android 12+), we must NOT let that abort the always-on registration, or the
         // VPN silently never comes back after a restart.
-        val registered = try {
-            dpm.setAlwaysOnVpnPackage(adminComponent, context.packageName, true)
+        // Emulator harness may pass registerAlwaysOn=false: always-on VPN makes adb go offline
+        // on this host even with lockdown disabled.
+        val registered = if (!registerAlwaysOn) {
+            true
+        } else try {
+            dpm.setAlwaysOnVpnPackage(adminComponent, context.packageName, lockdownEnabled)
             suppressConflictingPrivateDns()
             true
         } catch (error: SecurityException) {
