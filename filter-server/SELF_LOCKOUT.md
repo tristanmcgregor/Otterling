@@ -145,6 +145,8 @@ are missing, the page says "no review data yet".
 sudo otterling-release --git-sha <commitsha>
 # Emergency only (overrides last_published_sha; logged loudly):
 sudo otterling-release --git-sha <commitsha> --before <review-base-sha>
+# Emergency only — skip AI and publish (root-only; reason logged + GitHub status):
+sudo otterling-release --git-sha <commitsha> --force-publish 'operator reason'
 # or a local tree (still prefers last_published_sha when that commit is in the tree):
 sudo otterling-release /home/admin/Otterling
 ```
