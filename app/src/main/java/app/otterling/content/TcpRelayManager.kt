@@ -1,7 +1,9 @@
 package app.otterling.content
 
 import android.util.Log
+import java.io.BufferedInputStream
 import java.io.IOException
+import java.io.InputStream
 import java.net.Inet4Address
 import java.net.InetAddress
 import java.net.InetSocketAddress
@@ -81,6 +83,13 @@ class TcpRelayManager(
         val inbox = Channel<IpPacket>(Channel.UNLIMITED)
 
         @Volatile var socket: Socket? = null
+
+        // Set for proxied connections only (see performHttpConnect) -- relayFromSocket reads from
+        // this same buffered stream instead of a fresh socket.getInputStream(), so any bytes the
+        // CONNECT-response line reader already buffered-but-didn't-consume (the client's own TLS
+        // ClientHello, already pipelined onto the wire right after the CONNECT request) are still
+        // correctly delivered to the relay, never dropped.
+        @Volatile var socketInput: InputStream? = null
 
         @Volatile var clientNextSeq: Long = 0
 
@@ -202,6 +211,7 @@ class TcpRelayManager(
         connection.ownerUidForBlame = ownerUid
 
         val socket = Socket()
+        var connectInputStream: BufferedInputStream? = null
         val connected = try {
             // A freshly-constructed Socket has no underlying file descriptor until it's bound (or
             // connected) -- protect() silently fails on it otherwise, since there's nothing to mark.
@@ -225,7 +235,7 @@ class TcpRelayManager(
                 // ClientHello SNI / plaintext HTTP Host header either way, so a cache miss here
                 // (falling back to the IP) doesn't weaken filtering at all.
                 val targetHost = resolveHostname(connection.key.dstIp) ?: connection.key.dstIp
-                performHttpConnect(socket, targetHost, connection.key.dstPort)
+                connectInputStream = performHttpConnect(socket, targetHost, connection.key.dstPort)
             } else {
                 socket.connect(InetSocketAddress(InetAddress.getByName(connection.key.dstIp), connection.key.dstPort), CONNECT_TIMEOUT_MS)
                 socket.tcpNoDelay = true
@@ -264,6 +274,7 @@ class TcpRelayManager(
         }
 
         connection.socket = socket
+        connection.socketInput = connectInputStream
         connection.clientNextSeq = (synPacket.tcpSeq + 1) and SEQ_MASK
         val isn = Random.nextInt().toLong() and SEQ_MASK
         connection.serverSeq = (isn + 1) and SEQ_MASK
@@ -372,7 +383,13 @@ class TcpRelayManager(
         val socket = connection.socket ?: return
         val buffer = ByteArray(MAX_SEGMENT_SIZE)
         try {
-            val input = socket.getInputStream()
+            // Proxied connections must keep reading from the same buffered stream
+            // performHttpConnect used for the CONNECT response -- a fresh socket.getInputStream()
+            // here would silently drop whatever that stream's buffer already read ahead from the
+            // socket but hadn't handed back yet (the client's own pipelined TLS bytes). Direct
+            // (non-proxied) connections never had a stream created, so they fall back to a plain
+            // one here, same as before this optimization.
+            val input = connection.socketInput ?: socket.getInputStream()
             while (true) {
                 val readStart = System.currentTimeMillis()
                 val read = input.read(buffer)
@@ -456,8 +473,14 @@ class TcpRelayManager(
      * (causing the caller to fail the flow closed) unless the proxy replies with a 2xx status --
      * after that, the socket is a raw, opaque tunnel to the real destination and the existing
      * relay loops below take over untouched, exactly as if this had connected directly.
+     *
+     * Returns the [BufferedInputStream] used to read the response, which the caller must keep
+     * using for the rest of this connection's lifetime (see [Connection.socketInput]) -- a fresh
+     * unbuffered `socket.getInputStream()` call afterward would skip whatever this stream's
+     * internal buffer already read ahead from the socket but never handed back (some of the
+     * client's own pipelined TLS bytes, not just the CONNECT response itself).
      */
-    private fun performHttpConnect(socket: Socket, targetHost: String, targetPort: Int) {
+    private fun performHttpConnect(socket: Socket, targetHost: String, targetPort: Int): BufferedInputStream {
         val credentials = Base64.getEncoder().encodeToString("${proxyConfig.user}:${proxyConfig.password}".toByteArray())
         val request = "CONNECT $targetHost:$targetPort HTTP/1.1\r\n" +
             "Host: $targetHost:$targetPort\r\n" +
@@ -467,22 +490,24 @@ class TcpRelayManager(
         socket.getOutputStream().write(request.toByteArray(Charsets.US_ASCII))
         socket.getOutputStream().flush()
 
-        // Read one byte at a time until each line's terminating CRLF, rather than buffering a
-        // fixed-size chunk -- any byte read past the response's blank line would belong to the
-        // destination's own data (e.g. the client's TLS ClientHello, already relayed through the
-        // now-established tunnel), so this must stop reading at exactly the right place.
-        val statusLine = readOneHttpLine(socket) ?: throw IOException("Proxy CONNECT: no response")
+        // Buffered (unlike a raw socket read) so parsing the response's several short lines costs
+        // one or two real syscalls total instead of one per byte -- still stops at exactly the
+        // right place (readOneHttpLine only ever consumes up to and including the blank line), so
+        // nothing past the response is lost; any bytes this buffer read ahead but didn't hand back
+        // stay available to whoever reads from this same stream next (relayFromSocket).
+        val input = BufferedInputStream(socket.getInputStream(), CONNECT_RESPONSE_BUFFER_SIZE)
+        val statusLine = readOneHttpLine(input) ?: throw IOException("Proxy CONNECT: no response")
         if (!Regex("""HTTP/1\.[01] 2\d\d""").containsMatchIn(statusLine)) {
             throw IOException("Proxy CONNECT to $targetHost:$targetPort failed: $statusLine")
         }
         while (true) {
-            val line = readOneHttpLine(socket) ?: throw IOException("Proxy CONNECT: truncated response headers")
+            val line = readOneHttpLine(input) ?: throw IOException("Proxy CONNECT: truncated response headers")
             if (line.isEmpty()) break
         }
+        return input
     }
 
-    private fun readOneHttpLine(socket: Socket): String? {
-        val input = socket.getInputStream()
+    private fun readOneHttpLine(input: InputStream): String? {
         val line = StringBuilder()
         var previousWasCr = false
         while (true) {
@@ -507,6 +532,30 @@ class TcpRelayManager(
     }
 
     /**
+     * Resolved once per relay instance (a fresh [TcpRelayManager] is created on every tunnel
+     * reestablish(), which is exactly when a changed proxy host should take effect anyway) instead
+     * of a fresh DNS lookup on every single new TCP connection -- that per-connection resolution
+     * added real, avoidable latency to every new flow while the proxy is enabled, for a value that
+     * never changes across this instance's lifetime. Trade-off: if the proxy host's IP changes
+     * (e.g. a home broadband lease renewal) mid-session without a reestablish(), this stays stale
+     * until the next one -- rare in practice, and the failure mode is just reverting to the
+     * pre-optimization behavior (this destination briefly treated as proxy-eligible again), not a
+     * filtering bypass.
+     */
+    private val filterHostAddresses: Set<String> by lazy {
+        val host = proxyConfig.host.trim()
+        if (host.isEmpty()) {
+            emptySet()
+        } else {
+            try {
+                InetAddress.getAllByName(host).mapNotNullTo(mutableSetOf()) { it.hostAddress }
+            } catch (_: Exception) {
+                emptySet()
+            }
+        }
+    }
+
+    /**
      * Don't MITM the family's own filter/update host: CONNECT-through-mitmproxy to
      * vpn.bartholomew.help (same box) hairpins TLS and breaks App updates / Caddy fetches with
      * TLSV1_ALERT_INTERNAL_ERROR. Relay those destinations directly (still protect()'d).
@@ -515,11 +564,7 @@ class TcpRelayManager(
         val host = proxyConfig.host.trim()
         if (host.isEmpty()) return false
         if (dstIp.equals(host, ignoreCase = true)) return true
-        return try {
-            InetAddress.getAllByName(host).any { it.hostAddress == dstIp }
-        } catch (_: Exception) {
-            false
-        }
+        return dstIp in filterHostAddresses
     }
 
     private companion object {
@@ -536,6 +581,9 @@ class TcpRelayManager(
         // "real" 1500-byte Ethernet MTU.
         const val MAX_SEGMENT_SIZE = 16 * 1024 - 100
         const val CONNECT_TIMEOUT_MS = 8_000
+        // The CONNECT response is just a status line + a handful of short headers -- this only
+        // needs to be big enough to avoid multiple refill syscalls for that, not sized for payload.
+        const val CONNECT_RESPONSE_BUFFER_SIZE = 512
         const val SEQ_MASK = 0xFFFFFFFFL
         const val WRAP_THRESHOLD = 0x80000000L
         const val WINDOW_POLL_DELAY_MS = 10L
