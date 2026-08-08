@@ -78,12 +78,25 @@ class GuardianAlertSettings(context: Context) {
         private const val KEY_TRIGGERS = "trigger_words"
         private const val KEY_WATCHED = "watched_packages"
         private const val KEY_SMS_INFO = "sms_info_events"
-        private const val KEY_SEEDED_DEFAULT_TRIGGERS = "seeded_default_triggers_v1"
+        // Bump the trailing version (_v1 -> _v2 -> ...) whenever DEFAULT_TRIGGER_WORDS grows, so
+        // the merge in seedDefaultTriggerWordsIfNeeded() runs one more time for installs that
+        // already seeded an earlier version -- otherwise an expanded list would only ever reach
+        // brand-new installs, never existing ones.
+        private const val KEY_SEEDED_DEFAULT_TRIGGERS = "seeded_default_triggers_v2"
         const val DEBOUNCE_MS = 10 * 60_000L
 
-        /** Reuses the same low-false-positive keyword set the server-side filter's title/page
-         *  check already uses (mitm_nsfw_addon.py's TITLE_KEYWORDS), plus well-known explicit
-         *  site/service names worth catching as a search term even before any page loads. */
+        /**
+         * Starts from the same low-false-positive keyword set the server-side filter's title/page
+         * check already uses (mitm_nsfw_addon.py's TITLE_KEYWORDS) plus well-known site/service
+         * names, then adds a curated subset of the public LDNOOBW word list
+         * (github.com/LDNOOBW/List-of-Dirty-Naughty-Obscene-and-Otherwise-Bad-Words) -- NOT the
+         * whole thing. That list mixes genuinely explicit terms with generic profanity ("fuck",
+         * "shit", "bitch"), unrelated slurs, and ambiguous clinical/common words ("ass", "cock",
+         * "cum", "tit", "dick", "vagina", "viagra") that would either misfire constantly against
+         * this app's plain substring match (bare "cum" matches "cucumber"/"document"; bare "ass"
+         * matches "class"/"assignment") or flag things that have nothing to do with adult content
+         * at all. Only specific, unambiguous, multi-character explicit terms/phrases were kept.
+         */
         val DEFAULT_TRIGGER_WORDS = setOf(
             "porn",
             "pornstar",
@@ -108,6 +121,77 @@ class GuardianAlertSettings(context: Context) {
             "chaturbate",
             "brazzers",
             "bangbros",
+            // Curated additions from LDNOOBW (see doc comment above for what was excluded/why).
+            "2g1c",
+            "alabama hot pocket",
+            "anilingus",
+            "autoerotic",
+            "ball gag",
+            "bareback",
+            "barely legal",
+            "bdsm",
+            "beastiality",
+            "bestiality",
+            "big tits",
+            "blowjob",
+            "blow job",
+            "blue waffle",
+            "bondage",
+            "bukkake",
+            "camgirl",
+            "camslut",
+            "camwhore",
+            "cleveland steamer",
+            "clitoris",
+            "creampie",
+            "cumshot",
+            "cunnilingus",
+            "deepthroat",
+            "deep throat",
+            "dildo",
+            "doggystyle",
+            "doggy style",
+            "dominatrix",
+            "double penetration",
+            "ejaculation",
+            "erotica",
+            "fellatio",
+            "fisting",
+            "futanari",
+            "gangbang",
+            "gang bang",
+            "gokkun",
+            "golden shower",
+            "hardcore porn",
+            "incest porn",
+            "jailbait",
+            "jizz",
+            "lolita",
+            "masturbate",
+            "masturbating",
+            "masturbation",
+            "milf",
+            "missionary position",
+            "nympho",
+            "nymphomania",
+            "orgy",
+            "paedophile",
+            "pedophile",
+            "pegging",
+            "prostitute",
+            "rimjob",
+            "semen",
+            "sex tape",
+            "sexcam",
+            "squirting",
+            "strapon",
+            "strap on",
+            "swinger",
+            "threesome",
+            "upskirt",
+            "voyeur",
+            "webcam sex",
+            "cybersex",
         )
     }
 }
