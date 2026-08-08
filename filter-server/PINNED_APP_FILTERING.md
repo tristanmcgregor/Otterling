@@ -125,9 +125,16 @@ today's tolerated pinning failure for that one flow; a false positive would be a
 bypass, which this design never allows).
 
 Exact `getConnectionOwnerUid` behavior across the full OEM/Android-version range this app targets
-(minSdk 28, so pre-Q devices always take the hostname-suffix fallback path) hasn't been verified on
-real hardware from this dev environment -- see the manual on-device checklist in the implementation
-plan/commit for what to confirm.
+(minSdk 28, so pre-Q devices always take the hostname-suffix fallback path) hasn't been fully
+verified on real hardware -- first live-device test (Galaxy S22, Android 16) surfaced a real gap:
+the family's actual YouTube client is `app.morphe.android.youtube` (a fork), not
+`com.google.android.youtube` (unused for 569 days per `dumpsys usagestats`) -- the fork wasn't in
+`DEFAULT_EXEMPT_PACKAGES`, so it correctly went through MITM and broke, same as any unexempted
+pinned app. Fixed by adding it to the default list. Whether `getConnectionOwnerUid` itself resolves
+correctly hasn't been independently confirmed yet, since the same test session also hit an
+unrelated mitmproxy server outage (every proxied CONNECT failing with "no response", including to
+apps never meant to be exempt) that masked cleaner signal -- worth re-testing once the server side
+is healthy.
 
 ## If banking/YouTube look "blocked" right now, check this first
 
@@ -136,5 +143,61 @@ that list (and any Guardian-added entries) is only re-read when the tunnel is (r
 (`VpnFilterService.runPacketLoop`, called from `startVpn()`/`reestablish()`). A device whose VPN
 tunnel was already running *before* an app update that changed this list won't pick up the change
 until the tunnel actually rebuilds -- toggling the content filter VPN off/on in Settings (or a
-reboot) forces that. Worth ruling out as a simple "hasn't taken effect yet" explanation before
-assuming something is broken.
+reboot) forces that. Also check whether the actual app in use matches a package name on the list at
+all -- YouTube/banking forks and rebrands (ReVanced, RVX, Morphe, etc.) are common and won't be
+covered by a name seeded for the official app. Worth ruling out both before assuming something is
+broken.
+
+## Automatic pinning detection -- researched, not built
+
+The recurring gap above (a static list missing an app nobody thought to add) raises the obvious
+question: can the app detect pinning failures itself instead of relying on a human noticing and
+adding an exemption? Researched what real products in this exact space (enterprise SSL-inspection
+appliances, which have solved "some apps break under our MITM" at far larger scale for years) 
+actually do.
+
+**Finding: nobody does fully-automatic, silent, runtime detection-and-self-exemption -- including
+sophisticated commercial products.** Palo Alto's own decryption troubleshooting docs describe a
+*manual* admin workflow: query logs for `UnknownCA`/`BadCertificate` error codes, confirm by
+"looking for the client breaking the connection immediately after the TLS handshake," then manually
+add the site to an exclusion list ([Palo Alto Networks: Troubleshoot Pinned
+Certificates](https://docs.paloaltonetworks.com/pan-os/10-1/pan-os-admin/decryption/troubleshoot-and-monitor-decryption/decryption-troubleshooting-workflow-examples/troubleshoot-pinned-certificates)).
+Netskope and Symantec/Broadcom both ship **vendor-curated static bypass lists** (Crowdstrike,
+Dropbox, iCloud, etc.) that customers supplement manually when something not on the list breaks
+([Netskope: Add Bypasses](https://docs.netskope.com/en/add-bypasses-in-netskope),
+[Broadcom: SSL-pinned application
+list](https://knowledge.broadcom.com/external/article/173380/list-of-applications-and-mobile-applicat.html))
+-- structurally the same pattern as `DEFAULT_EXEMPT_PACKAGES` + the Settings "Add exempt app"
+button this project already has, just with a bigger vendor-maintained seed list. OWASP's own MASTG
+test notes why nobody closes this loop automatically: **"A passive observer cannot reliably
+differentiate pinning rejection from other certificate validation failures without additional
+context, as both produce similar TLS alert sequences"** ([OWASP MASTG-TEST-0244](https://mas.owasp.org/MASTG/tests/android/MASVS-NETWORK/MASTG-TEST-0244/)).
+An app failing right after our proxy's certificate could just as easily be a network blip, a
+mitmproxy hiccup, or an unrelated server error -- not pinning at all. Auto-exempting on that signal
+alone risks silently reducing filtering coverage for an app that never actually needed it.
+
+**The detection signal itself is real and well-documented, though** -- both Palo Alto's and OWASP's
+docs describe the same observable pattern: the client receives our substitute certificate, then
+aborts (an Alert record, or just an abrupt close) within moments, having exchanged little to no
+further data, well short of a real request/response cycle. This is visible from *connection
+metadata alone* -- bytes exchanged, timing, which side closed first -- without decrypting anything.
+`TcpRelayManager.Connection` already tracks exactly this (`bytesFromSocket`, `startedAtMillis`,
+etc.) for its existing debug throughput logging in `closeConnection` -- the raw signal needed is
+already flowing through code that exists today.
+
+**Proposed design, if built: detect-and-suggest, not detect-and-auto-exempt.** Given the industry
+consensus above, closing the loop *silently* isn't the right target. A sounder version: extend
+`closeConnection` to flag a proxied connection as a suspected-pinning-failure when it closes
+abnormally fast with minimal data exchanged; require several such failures for the *same app* (via
+the UID this design already resolves) before acting, to filter out one-off blips or a transient
+proxy outage (like the one that muddied the live test above); then surface a one-tap suggestion to
+the Guardian (a notification, reusing the existing `AlertReporter` pattern) -- "Otterling noticed
+[App] repeatedly fails to load with HTTPS filtering on. Add it to the exempt list?" -- rather than
+silently mutating `MitmExemptManager`'s list. This keeps a human decision in the loop for the actual
+filtering-coverage trade-off (matching how every reference product above still requires a human to
+add the final exception) while automating the part that's actually toil: noticing the pattern and
+diagnosing it, which is exactly the gap that caused the Morphe YouTube issue above -- the signal was
+there in logcat the whole time, nobody was watching it.
+
+Not built -- this is a real feature (parsing thresholds, notification UX, false-positive tuning) 
+that deserves its own pass, not a drive-by addition to the exemption fix above.
