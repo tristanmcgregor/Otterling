@@ -48,10 +48,13 @@ import kotlinx.coroutines.runBlocking
  *     -n app.otterling/.monitoring.DebugUnsuspendReceiver \
  *     --esa packages com.accountable2you.ap1.googleplay
  *
- * Enable always-on VPN + cloud filter + MITM proxy (for emulator smoke tests):
+ * Enable always-on VPN + cloud filter + MITM proxy (debuggable builds only; FLAG_DEBUGGABLE gate):
  *   adb shell am broadcast -a app.otterling.DEBUG_ENABLE_FILTER \
  *     -n app.otterling/.monitoring.DebugUnsuspendReceiver \
- *     --es proxy_password '…' [--ez proxy_enabled true] [--ez lockdown false]
+ *     --es proxy_password '…' [--ez proxy_enabled true]
+ *
+ * Always registers lockdown always-on VPN via [VpnFilterManager.enable] -- there is no intent
+ * extra that can weaken lockdown (checklist §2 / §7).
  *
  * Refresh downloaded domain blocklist:
  *   adb shell am broadcast -a app.otterling.DEBUG_REFRESH_BLOCKLIST \
@@ -92,12 +95,7 @@ class DebugUnsuspendReceiver : BroadcastReceiver() {
                         if (proxyPassword.isNotEmpty()) cloud.setProxyPassword(proxyPassword)
                         // Ensure YouTube (and other defaults) are seeded before the tunnel starts.
                         MitmExemptManager(context).exemptPackages()
-                        val lockdown = intent?.getBooleanExtra("lockdown", true) ?: true
-                        val alwaysOn = intent?.getBooleanExtra("always_on", true) ?: true
-                        val vpnOk = VpnFilterManager(context).enable(
-                            lockdownEnabled = lockdown,
-                            registerAlwaysOn = alwaysOn,
-                        )
+                        val vpnOk = VpnFilterManager(context).enable()
                         // Reachability probes can hang under lockdown; keep them short and best-effort.
                         val dnsOk = runCatching { cloud.testReachable(timeoutMs = 2_000) }.getOrDefault(false)
                         val proxyOk = if (proxyEnabled) {
@@ -108,7 +106,7 @@ class DebugUnsuspendReceiver : BroadcastReceiver() {
                         Log.i(
                             TAG,
                             "DEBUG_ENABLE_FILTER vpnOk=$vpnOk dnsOk=$dnsOk proxyOk=$proxyOk " +
-                                "proxyEnabled=$proxyEnabled lockdown=$lockdown alwaysOn=$alwaysOn host=$host " +
+                                "proxyEnabled=$proxyEnabled host=$host " +
                                 "passwordSet=${proxyPassword.isNotEmpty()} " +
                                 "exempt=${MitmExemptManager(context).exemptPackages()}",
                         )

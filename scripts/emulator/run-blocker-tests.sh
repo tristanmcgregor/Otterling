@@ -154,13 +154,14 @@ install_apps() {
 }
 
 enable_filter() {
-  log "== DEBUG_ENABLE_FILTER (lockdown=false) =="
+  log "== DEBUG_ENABLE_FILTER (always-on lockdown via VpnFilterManager.enable) =="
   clear_otterling_logs
+  # Prefer TCP adb before lockdown VPN can drop USB adb (checklist forbids weakening lockdown).
+  adb tcpip 5555 >/dev/null 2>&1 || true
+  sleep 1
   adb_broadcast DEBUG_ENABLE_FILTER \
     --es host "${FILTER_HOST:-vpn.bartholomew.help}" \
     --ez proxy_enabled true \
-    --ez lockdown false \
-    --ez always_on false \
     --es proxy_password "$PROXY_PASSWORD" >/dev/null || true
   sleep 3
   if ! wait_log 'DEBUG_ENABLE_FILTER vpnOk=' 90; then
@@ -172,6 +173,10 @@ enable_filter() {
   local vpn_app
   vpn_app="$(adb shell settings get global always_on_vpn_app 2>/dev/null | tr -d '\r')"
   log "always_on_vpn_app=$vpn_app"
+  if [[ "$vpn_app" != "app.otterling" ]]; then
+    echo "error: expected always_on_vpn_app=app.otterling, got '$vpn_app'" >&2
+    exit 3
+  fi
 }
 
 refresh_and_seed() {

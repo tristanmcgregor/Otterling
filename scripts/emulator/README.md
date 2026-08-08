@@ -34,7 +34,7 @@ adb shell dpm set-device-owner app.otterling/.admin.DeviceAdminReceiverImpl
 
 ## Blocker test harness
 
-End-to-end content-blocker checks on `otterling_api34` (DNS allow/block, MITM allow/block, YouTube exemption, Shorts path seed, package suspend). Uses debug broadcasts with **`always_on=false`** / **`lockdown=false`** so adb stays usable on this host (production phones still use always-on lockdown VPN).
+End-to-end content-blocker checks on `otterling_api34` (DNS allow/block, MITM allow/block, YouTube exemption, Shorts path seed, package suspend). Uses debug broadcasts on **debuggable** builds only (`FLAG_DEBUGGABLE` gate). Filter enable always registers **always-on lockdown VPN** via `VpnFilterManager.enable()` — there is no harness switch to weaken lockdown (checklist §2). If USB adb drops after enable, switch to `adb connect <emu-ip>:5555` (the harness runs `adb tcpip 5555` before enabling).
 
 Prerequisites: KVM AVD scripts above, healthy mitmproxy (`otterling-mitmproxy` on `:8090` + mux on `:8080`), `PROXY_PASSWORD` in `filter-server/.env`.
 
