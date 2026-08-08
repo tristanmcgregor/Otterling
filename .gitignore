@@ -2,6 +2,8 @@
 .gradle/
 .idea/
 .kotlin/
+.claude/
+.cursor/
 build/
 captures/
 local.properties
@@ -9,12 +11,19 @@ app/build/
 app/libs/*.jar
 !app/libs/README.md
 
+# Local release/debug APKs — publish via the update host, don't commit binaries.
+*.apk
+
 # macOS FocusLock (Swift Package Manager)
 macos/FocusLock/.build/
 macos/FocusLock/.swiftpm/
 
-# Independent nested git repo (Play Store variant) -- never tracked by this repo.
+# Local scratch
+phone-apps.txt
+
+# Nested sibling checkouts / production mirrors — never tracked by this repo.
 TrittyBlocker-Playstore/
+Otterling - Production (DO NOT TOUCH)/
 
 # filter-server runtime data -- generated per-deployment, never committed (the mitmproxy CA in
 # particular is unique per server and is a private key, not just a public cert).
