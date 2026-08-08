@@ -331,8 +331,12 @@ class FocusGuardAccessibilityService : AccessibilityService() {
         }.lowercase(Locale.US)
         if (haystack.isBlank()) return
 
+        // Word-boundary, not plain substring -- a bare short word like "ass" or "sex" would
+        // otherwise match inside "class"/"assignment"/"Sussex" and fire constantly on unrelated
+        // text. \b works the same way for a multi-word phrase (e.g. "hardcore sex") since it only
+        // asserts a boundary at the very start/end of the whole phrase, not at the internal space.
         val hit = words.firstOrNull { word ->
-            haystack.contains(word.lowercase(Locale.US))
+            Regex("\\b${Regex.escape(word.lowercase(Locale.US))}\\b").containsMatchIn(haystack)
         } ?: return
 
         scope.launch {
