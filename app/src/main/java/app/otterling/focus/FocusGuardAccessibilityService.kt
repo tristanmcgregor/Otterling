@@ -154,17 +154,30 @@ class FocusGuardAccessibilityService : AccessibilityService() {
     /**
      * True if a "Reels" title sits near the very top of the screen -- the header the Reels *tab*
      * player shows. Position-gated so the bottom-nav "Reels" tab doesn't count.
+     *
+     * Bounded BFS (not unbounded recursion) for the same reason as [hasFullscreenReelsViewer]'s
+     * own queue -- this runs on every Facebook content-change event (roughly every
+     * [REELS_BOUNCE_DEBOUNCE_MS]), and Facebook's view hierarchy is routinely hundreds of nodes
+     * deep. An unbounded walk here was allocating an AccessibilityNodeInfo per node with no cap at
+     * all, which is exactly what showed up as recurring OutOfMemoryError crashes in
+     * AccessibilityNodeInfo.getChild() after 1-4 hours of real usage.
      */
     private fun hasReelsTitleAtTop(node: AccessibilityNodeInfo, screenHeight: Int): Boolean {
-        val label = node.text?.toString()?.trim() ?: node.contentDescription?.toString()?.trim()
-        if (label != null && REELS_TITLE_PATTERN.matches(label)) {
-            val bounds = Rect()
-            node.getBoundsInScreen(bounds)
-            if (!bounds.isEmpty && bounds.top < screenHeight * REELS_TITLE_TOP_FRACTION) return true
-        }
-        for (i in 0 until node.childCount) {
-            val child = node.getChild(i) ?: continue
-            if (hasReelsTitleAtTop(child, screenHeight)) return true
+        val queue = ArrayDeque<AccessibilityNodeInfo>()
+        queue.add(node)
+        var visited = 0
+        while (queue.isNotEmpty() && visited < REELS_SCAN_MAX_NODES) {
+            val current = queue.removeFirst()
+            visited++
+            val label = current.text?.toString()?.trim() ?: current.contentDescription?.toString()?.trim()
+            if (label != null && REELS_TITLE_PATTERN.matches(label)) {
+                val bounds = Rect()
+                current.getBoundsInScreen(bounds)
+                if (!bounds.isEmpty && bounds.top < screenHeight * REELS_TITLE_TOP_FRACTION) return true
+            }
+            for (i in 0 until current.childCount) {
+                queue.add(current.getChild(i) ?: continue)
+            }
         }
         return false
     }
@@ -233,12 +246,20 @@ class FocusGuardAccessibilityService : AccessibilityService() {
         return hasStrongReelsViewerId(root)
     }
 
+    /** Bounded BFS, same reasoning as [hasReelsTitleAtTop] -- this was the other unbounded
+     *  traversal contributing to the OOM crashes. */
     private fun hasStrongReelsViewerId(node: AccessibilityNodeInfo): Boolean {
-        val id = node.viewIdResourceName?.lowercase().orEmpty()
-        if (REELS_STRONG_VIEWER_ID_HINTS.any { id.contains(it) }) return true
-        for (i in 0 until node.childCount) {
-            val child = node.getChild(i) ?: continue
-            if (hasStrongReelsViewerId(child)) return true
+        val queue = ArrayDeque<AccessibilityNodeInfo>()
+        queue.add(node)
+        var visited = 0
+        while (queue.isNotEmpty() && visited < REELS_SCAN_MAX_NODES) {
+            val current = queue.removeFirst()
+            visited++
+            val id = current.viewIdResourceName?.lowercase().orEmpty()
+            if (REELS_STRONG_VIEWER_ID_HINTS.any { id.contains(it) }) return true
+            for (i in 0 until current.childCount) {
+                queue.add(current.getChild(i) ?: continue)
+            }
         }
         return false
     }
@@ -371,18 +392,31 @@ class FocusGuardAccessibilityService : AccessibilityService() {
         return ids.any { id -> SUB_FEATURE_HINTS.any { hint -> id.contains(hint, ignoreCase = true) } }
     }
 
+    /**
+     * Bounded BFS (not unbounded recursion) -- [maxNodes] used to only cap how much text/id data
+     * got collected, not how many nodes got visited, so a subtree full of empty-text/no-id
+     * container views (extremely common) recursed through all of them anyway, each still
+     * allocating a fresh AccessibilityNodeInfo via getChild(). That was one of the causes behind
+     * this service's recurring OutOfMemoryError crashes; this now stops at [maxNodes] *visited*
+     * nodes regardless of what they contributed.
+     */
     private fun collectNodeInfo(
         node: AccessibilityNodeInfo,
         texts: MutableList<String>,
         resourceIds: MutableList<String>,
         maxNodes: Int,
     ) {
-        if (texts.size + resourceIds.size >= maxNodes) return
-        node.text?.toString()?.takeIf { it.isNotBlank() }?.let { texts.add(it) }
-        node.viewIdResourceName?.let { resourceIds.add(it) }
-        for (i in 0 until node.childCount) {
-            val child = node.getChild(i) ?: continue
-            collectNodeInfo(child, texts, resourceIds, maxNodes)
+        val queue = ArrayDeque<AccessibilityNodeInfo>()
+        queue.add(node)
+        var visited = 0
+        while (queue.isNotEmpty() && visited < maxNodes) {
+            val current = queue.removeFirst()
+            visited++
+            current.text?.toString()?.takeIf { it.isNotBlank() }?.let { texts.add(it) }
+            current.viewIdResourceName?.let { resourceIds.add(it) }
+            for (i in 0 until current.childCount) {
+                queue.add(current.getChild(i) ?: continue)
+            }
         }
     }
 
