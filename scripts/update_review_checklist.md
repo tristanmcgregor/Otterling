@@ -111,6 +111,11 @@ weakened, nothing else here matters, because a bypassed build could ship anyway.
   on-title-keyword logic and the deny cache must remain intact and reachable from `request()`/
   `response()`. FAIL any diff that makes `NsfwFilter` a no-op (e.g. removing it from `addons = [...]`,
   or making `_block` never get called).
+  Narrowing the deny-cache's key scope (e.g. host → host+path) or shortening its TTL is **not**
+  automatically a FAIL, provided the domain-list / path-pattern / title-keyword checks in
+  `request()` / `response()` still execute unconditionally on every request regardless of cache
+  state. Only FAIL if the actual detection logic — not just the cache — stops running or stops
+  calling `_block` / `_respond_blocked`.
 
 ## 5. Device Owner / tamper resistance
 
