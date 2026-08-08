@@ -18,7 +18,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.FilterAlt
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.VerifiedUser
@@ -46,10 +45,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import app.otterling.admin.DeviceOwnerManager
-import app.otterling.content.AppSuspensionManager
 import app.otterling.content.BlocklistRefreshWorker
-import app.otterling.content.PrivateDnsFilterManager
-import app.otterling.data.BlockedApp
 import app.otterling.data.ProtectedApp
 import app.otterling.knox.KnoxLicenseManager
 import app.otterling.monitoring.ProtectionController
@@ -283,7 +279,6 @@ class MainActivity : ComponentActivity() {
                             DeviceOwnerSection()
                             RestrictionsSection()
                             UninstallProtectionSection()
-                            ContentFilterSection()
                             DisabledAppsSection()
                             VpnFilterSection(applicationContext)
                             BlockedWebsitesSettingsSection(applicationContext)
@@ -705,110 +700,6 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun ContentFilterSection() {
-        val coroutineScope = rememberCoroutineScope()
-        val suspensionManager = remember { AppSuspensionManager(applicationContext) }
-        val dnsManager = remember { PrivateDnsFilterManager(applicationContext) }
-
-        var refreshTrigger by remember { mutableIntStateOf(0) }
-        var blockedApps by remember { mutableStateOf<List<BlockedApp>>(emptyList()) }
-        var installedApps by remember { mutableStateOf<List<InstalledAppInfo>>(emptyList()) }
-        var showAppPicker by remember { mutableStateOf(false) }
-        var dnsStatus by remember { mutableStateOf("Checking…") }
-
-        LaunchedEffect(refreshTrigger) {
-            blockedApps = suspensionManager.blockedApps()
-            dnsStatus = when {
-                !dnsManager.isSupported ->
-                    "Requires Android 10+ (this device: API ${Build.VERSION.SDK_INT})"
-                else -> withContext(Dispatchers.IO) { dnsManager.currentHost() }
-                    ?.let { "Active: $it" }
-                    ?: "Not set"
-            }
-        }
-
-        if (showAppPicker) {
-            AppPickerDialog(
-                apps = installedApps,
-                onDismiss = { showAppPicker = false },
-                onSelect = { app ->
-                    coroutineScope.launch {
-                        suspensionManager.setBlocked(app.packageName, true)
-                        refreshTrigger++
-                    }
-                    showAppPicker = false
-                },
-            )
-        }
-
-        SectionCard(title = "Content Filtering", icon = Icons.Default.FilterAlt) {
-            Text("DNS content filter (blocks adult content + Safe Search)", style = MaterialTheme.typography.bodyLarge)
-            Text(dnsStatus, style = MaterialTheme.typography.bodySmall)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = {
-                    coroutineScope.launch {
-                        val result = withContext(Dispatchers.IO) {
-                            dnsManager.enable(PrivateDnsFilterManager.FilterProfile.FAMILY)
-                        }
-                        dnsStatus = describeDnsResult(result)
-                        refreshTrigger++
-                    }
-                }) {
-                    Text("Enable")
-                }
-                OutlinedButton(onClick = {
-                    coroutineScope.launch {
-                        val result = withContext(Dispatchers.IO) { dnsManager.disable() }
-                        dnsStatus = describeDnsResult(result)
-                        refreshTrigger++
-                    }
-                }) {
-                    Text("Disable")
-                }
-            }
-
-            HorizontalDivider()
-
-            Text("Blocked apps", style = MaterialTheme.typography.bodyLarge)
-            Button(onClick = {
-                coroutineScope.launch {
-                    installedApps = withContext(Dispatchers.IO) { loadInstalledApps(applicationContext) }
-                    showAppPicker = true
-                }
-            }) {
-                Text("Choose app to block")
-            }
-
-            blockedApps.forEach { app ->
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(app.packageName, modifier = Modifier.weight(1f))
-                    Switch(
-                        checked = app.blocked,
-                        onCheckedChange = { checked ->
-                            coroutineScope.launch {
-                                suspensionManager.setBlocked(app.packageName, checked)
-                                refreshTrigger++
-                            }
-                        },
-                    )
-                    TextButton(onClick = {
-                        coroutineScope.launch {
-                            suspensionManager.remove(app.packageName)
-                            refreshTrigger++
-                        }
-                    }) {
-                        Text("Remove")
-                    }
-                }
-            }
-        }
-    }
-
-    @Composable
     private fun DisabledAppsSection() {
         val coroutineScope = rememberCoroutineScope()
         val disableStore = remember { PackageDisableStore(applicationContext) }
@@ -879,12 +770,6 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
-    }
-
-    private fun describeDnsResult(result: PrivateDnsFilterManager.Result): String = when (result) {
-        PrivateDnsFilterManager.Result.Success -> "Applied"
-        PrivateDnsFilterManager.Result.UnsupportedApiLevel -> "Requires Android 10+"
-        is PrivateDnsFilterManager.Result.Failed -> "Failed: ${result.message}"
     }
 
     @Composable
