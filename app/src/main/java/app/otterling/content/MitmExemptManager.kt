@@ -62,6 +62,8 @@ class MitmExemptManager(context: Context) {
          */
         val DEFAULT_EXEMPT_PACKAGES = setOf(
             "com.google.android.youtube", // YouTube
+            "app.morphe.android.youtube", // Morphe (YouTube client fork; talks to the same
+            // pinned Google/YouTube endpoints as the official app)
             "com.commbank.netbank", // Commonwealth Bank (CommBank)
             "org.westpac.bank", // Westpac
             "au.com.up.money", // Up (neobank)
