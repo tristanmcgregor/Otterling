@@ -164,11 +164,12 @@ Logs: `/var/lib/otterling/ci/logs/`
 
 ## Phone updates
 
-Each PASS rebuild auto-bumps `versionCode` / `versionName` from the **live**
-`/updates/manifest.json` (live+1) before Gradle runs. Phones only install when the
-manifest `versionCode` is greater than the installed app, so filter-server-only
-commits still produce an installable update. The values in git `app/build.gradle.kts`
-may lag; the published manifest is authoritative.
+When the cumulative review range touches Android app inputs (`app/`, root Gradle
+wrapper/project files), PASS auto-bumps `versionCode` / `versionName` from the **live**
+`/updates/manifest.json` (live+1) and rebuilds the signed APK. filter-server / docs /
+checklist-only changes still deploy the server stack and advance `last_published_sha`,
+but **skip** the APK rebuild and version bump so phones are not nudged for unchanged app
+code. The published manifest remains authoritative for phones.
 
 
 `ApprovedUpdateManager` only installs APKs whose signing cert matches
