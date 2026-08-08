@@ -54,3 +54,36 @@
 
 	encode gzip
 }
+
+# LAN IP has no ACME cert. Without this, Caddy's HTTP→HTTPS redirect sends browsers to
+# https://192.168.0.254/ which fails TLS (Chrome often shows ERR_CONNECTION_REFUSED).
+http://192.168.0.254 {
+	bind 0.0.0.0
+
+	handle /hooks/github* {
+		reverse_proxy 127.0.0.1:9070
+	}
+	handle_path /updates/* {
+		root * /srv/updates
+		file_server
+	}
+
+	@review path /review /review/* /review-data/*
+	basic_auth @review {
+		{$REVIEW_DASHBOARD_USER} {$REVIEW_DASHBOARD_PASSWORD_HASH}
+	}
+	handle_path /review-data/* {
+		root * /srv/review-data
+		file_server
+	}
+	handle_path /review* {
+		root * /srv/review-dashboard
+		file_server
+	}
+
+	handle {
+		redir https://{$UPDATE_HOST:vpn.bartholomew.help}{uri} permanent
+	}
+
+	encode gzip
+}
