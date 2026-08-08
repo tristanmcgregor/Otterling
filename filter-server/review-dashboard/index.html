@@ -265,6 +265,7 @@
 
     <div class="tabs" role="tablist">
       <button class="tab active" data-tab="ai" type="button">AI output</button>
+      <button class="tab" data-tab="console" type="button">Console</button>
       <button class="tab" data-tab="files" type="button">Files</button>
       <button class="tab" data-tab="diff" type="button">Diff</button>
       <button class="tab" data-tab="stat" type="button">Diff stat</button>
@@ -276,6 +277,14 @@
         <span id="ai-meta" class="chip" hidden></span>
       </div>
       <pre id="ai-output" class="mono">Waiting for status.json…</pre>
+    </div>
+
+    <div id="tab-console" class="tab-panel">
+      <div class="section-title">
+        <span>Console (release.sh output: build, sign, publish)</span>
+        <span id="console-meta" class="chip" hidden></span>
+      </div>
+      <pre id="console-output" class="mono">No console output yet.</pre>
     </div>
 
     <div id="tab-files" class="tab-panel">
@@ -312,6 +321,8 @@ let activeTab = "ai";
 let lastDiffUrl = null;
 let stickAiScroll = true;
 let stickDiffScroll = true;
+let stickConsoleScroll = true;
+let lastConsoleLength = -1;
 
 function escapeHtml(str) {
   return String(str ?? "").replace(/[&<>"']/g, (c) => ({
@@ -444,6 +455,34 @@ async function loadDiff(url) {
   }
 }
 
+async function loadConsole() {
+  const el = document.getElementById("console-output");
+  const meta = document.getElementById("console-meta");
+  try {
+    const res = await fetch(`${DATA_BASE}/console.log`, { cache: "no-store" });
+    if (res.status === 404) {
+      el.textContent = "No console output yet.";
+      setChip(meta, "", false);
+      lastConsoleLength = -1;
+      return;
+    }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    let text = await res.text();
+    if (text.length === lastConsoleLength) return; // unchanged since last poll -- skip the re-render/scroll churn
+    lastConsoleLength = text.length;
+    const bytes = new Blob([text]).size;
+    const truncated = text.length > 400_000;
+    if (truncated) text = "…[earlier output truncated for display]\n\n" + text.slice(-400_000);
+    const prevStick = stickConsoleScroll && (el.scrollTop + el.clientHeight >= el.scrollHeight - 40);
+    el.textContent = text;
+    setChip(meta, truncated ? `~${Math.round(bytes / 1024)} KB (truncated)` : `${Math.round(bytes / 1024)} KB`, true);
+    if (prevStick) el.scrollTop = el.scrollHeight;
+  } catch (e) {
+    el.textContent = `Could not load console output: ${e.message || e}`;
+    setChip(meta, "", false);
+  }
+}
+
 function renderStatus(data) {
   const badge = document.getElementById("status-badge");
   const label = document.getElementById("status-label");
@@ -537,6 +576,8 @@ async function refresh() {
     // best-effort
   }
 
+  await loadConsole(); // best-effort -- own try/catch inside, never blocks the rest of refresh()
+
   document.getElementById("refresh-note").textContent =
     `Last checked ${new Date().toLocaleTimeString()} — refreshes every ${live ? 1 : 5}s` +
     (live ? " (live)" : "");
@@ -558,6 +599,10 @@ document.getElementById("ai-output").addEventListener("scroll", (e) => {
 document.getElementById("diff-output").addEventListener("scroll", (e) => {
   const el = e.target;
   stickDiffScroll = el.scrollTop + el.clientHeight >= el.scrollHeight - 40;
+});
+document.getElementById("console-output").addEventListener("scroll", (e) => {
+  const el = e.target;
+  stickConsoleScroll = el.scrollTop + el.clientHeight >= el.scrollHeight - 40;
 });
 
 refresh();
