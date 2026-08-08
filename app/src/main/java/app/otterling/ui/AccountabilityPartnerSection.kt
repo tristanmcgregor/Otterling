@@ -32,11 +32,12 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * The single, complete SMS-alert settings section: who gets texted (the accountability partner's
- * number, its own enabled flag and daily cap -- [AccountabilityPartnerSettings]) and what counts
- * as a flagged event (trigger words, watched apps, info-level opt-in -- [GuardianAlertSettings],
- * kept under that name only to avoid resetting already-configured detection settings). Replaces
- * the old separate Guardian SMS section entirely -- there is only one recipient now.
+ * The single, complete SMS-alert settings section: who gets texted (any number of accountability
+ * partners, each with its own independent daily cap -- [AccountabilityPartnerSettings]) and what
+ * counts as a flagged event (trigger words, watched apps, info-level opt-in --
+ * [GuardianAlertSettings], kept under that name only to avoid resetting already-configured
+ * detection settings). Replaces the old separate Guardian SMS section entirely -- there's no
+ * separate Guardian recipient anymore, just this list.
  */
 @Composable
 fun AccountabilityPartnerSection(context: Context) {
@@ -46,7 +47,8 @@ fun AccountabilityPartnerSection(context: Context) {
     val scope = rememberCoroutineScope()
     var refresh by remember { mutableIntStateOf(0) }
     var enabled by remember { mutableStateOf(false) }
-    var number by remember { mutableStateOf("") }
+    var numbers by remember { mutableStateOf<List<String>>(emptyList()) }
+    var newNumber by remember { mutableStateOf("") }
     var triggers by remember { mutableStateOf("") }
     var smsInfo by remember { mutableStateOf(false) }
     var watched by remember { mutableStateOf<Set<String>>(emptySet()) }
@@ -56,7 +58,7 @@ fun AccountabilityPartnerSection(context: Context) {
 
     LaunchedEffect(refresh) {
         enabled = settings.isEnabled()
-        number = settings.partnerNumber()
+        numbers = settings.partnerNumbers()
         triggers = detectionSettings.triggerWords().joinToString("\n")
         smsInfo = detectionSettings.smsInfoEvents()
         watched = detectionSettings.watchedPackages()
@@ -78,9 +80,9 @@ fun AccountabilityPartnerSection(context: Context) {
     SectionCard(
         title = "Accountability partner SMS alerts",
         icon = Icons.Default.Groups,
-        subtitle = "Text an accountability partner when something needs attention -- tamper, " +
-            "watched apps, trigger words, blocked sites. Uses this phone's SIM; Device Owner " +
-            "locks SEND_SMS.",
+        subtitle = "Text one or more accountability partners when something needs attention -- " +
+            "tamper, watched apps, trigger words, blocked sites. Uses this phone's SIM; Device " +
+            "Owner locks SEND_SMS.",
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -98,23 +100,45 @@ fun AccountabilityPartnerSection(context: Context) {
             )
         }
 
+        Text("Accountability partners", style = MaterialTheme.typography.bodyLarge)
         OutlinedTextField(
-            value = number,
-            onValueChange = { number = it },
+            value = newNumber,
+            onValueChange = { newNumber = it },
             modifier = Modifier.fillMaxWidth(),
-            label = { Text("Accountability partner phone number") },
+            label = { Text("Add phone number") },
             singleLine = true,
             placeholder = { Text("+614...") },
         )
         Button(
             onClick = {
-                settings.setPartnerNumber(number)
-                status = "Number saved"
+                settings.addPartnerNumber(newNumber)
+                newNumber = ""
+                status = "Number added"
                 refresh++
             },
             modifier = Modifier.fillMaxWidth(),
+            enabled = newNumber.isNotBlank(),
         ) {
-            Text("Save number")
+            Text("Add number")
+        }
+        numbers.forEach { num ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "$num — ${settings.dailySentCount(num)}/${AccountabilityPartnerSettings.DAILY_SMS_CAP} today",
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                TextButton(onClick = {
+                    settings.removePartnerNumber(num)
+                    refresh++
+                }) {
+                    Text("Remove")
+                }
+            }
         }
 
         OutlinedTextField(
@@ -186,17 +210,17 @@ fun AccountabilityPartnerSection(context: Context) {
             onClick = {
                 scope.launch {
                     SmsPermissionGranter.grantSendSms(context)
-                    settings.setPartnerNumber(number)
-                    val ok = reporter.sendTestSmsToPartner()
-                    status = if (ok) {
-                        "Test SMS sent"
+                    val count = reporter.sendTestSmsToPartner()
+                    status = if (count > 0) {
+                        "Test SMS sent to $count partner(s)"
                     } else {
-                        "Test SMS failed (check number / SIM / permission)"
+                        "Test SMS failed (check numbers / SIM / permission)"
                     }
+                    refresh++
                 }
             },
             modifier = Modifier.fillMaxWidth(),
-            enabled = number.isNotBlank(),
+            enabled = numbers.isNotEmpty(),
         ) {
             Text("Send test SMS")
         }
@@ -204,10 +228,5 @@ fun AccountabilityPartnerSection(context: Context) {
         if (status.isNotBlank()) {
             Text(status, style = MaterialTheme.typography.bodySmall)
         }
-        Text(
-            "Today: ${settings.dailySentCount()} / ${AccountabilityPartnerSettings.DAILY_SMS_CAP} SMS",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
     }
 }

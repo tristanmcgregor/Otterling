@@ -31,7 +31,7 @@ fun resolveOnboardingStep(context: Context): OnboardingStep {
     if (!VpnFilterManager(context).wasEnabledByUser()) return OnboardingStep.ContentFilter
 
     val alerts = AccountabilityPartnerSettings(context)
-    if (!(alerts.isEnabled() && alerts.partnerNumber().isNotBlank())) return OnboardingStep.AccountabilityPartnerSms
+    if (!(alerts.isEnabled() && alerts.partnerNumbers().isNotEmpty())) return OnboardingStep.AccountabilityPartnerSms
 
     if (!AccessibilityGuard.isEnabled(context)) return OnboardingStep.Accessibility
 

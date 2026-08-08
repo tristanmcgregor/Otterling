@@ -285,14 +285,15 @@ private fun ContentFilterStep(context: Context, onContinue: () -> Unit) {
 @Composable
 private fun AccountabilityPartnerSmsStep(context: Context, onContinue: () -> Unit) {
     val settings = remember { AccountabilityPartnerSettings(context) }
-    var number by remember { mutableStateOf(settings.partnerNumber()) }
+    var number by remember { mutableStateOf("") }
     var refreshTrigger by remember { mutableIntStateOf(0) }
-    val satisfied = remember(refreshTrigger) { settings.isEnabled() && settings.partnerNumber().isNotBlank() }
+    val satisfied = remember(refreshTrigger) { settings.isEnabled() && settings.partnerNumbers().isNotEmpty() }
 
     WizardScaffold(
         title = "Accountability partner alerts",
         subtitle = "Otterling can text an accountability partner's phone when something needs " +
-            "attention -- a blocked site, a tamper attempt, or similar. Uses this phone's own SIM.",
+            "attention -- a blocked site, a tamper attempt, or similar. Uses this phone's own " +
+            "SIM. You can add more partners later in settings.",
         onContinue = if (satisfied) onContinue else null,
     ) {
         OutlinedTextField(
@@ -306,9 +307,10 @@ private fun AccountabilityPartnerSmsStep(context: Context, onContinue: () -> Uni
         Button(
             enabled = number.isNotBlank(),
             onClick = {
-                settings.setPartnerNumber(number)
+                settings.addPartnerNumber(number)
                 settings.setEnabled(true)
                 SmsPermissionGranter.grantSendSms(context)
+                number = ""
                 refreshTrigger++
             },
         ) {
