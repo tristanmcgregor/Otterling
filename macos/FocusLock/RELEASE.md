@@ -12,9 +12,20 @@ described here is a manual, local process until that changes (see "Closing the C
 
 1. **A real Apple Developer Program membership** (paid, $99/year) with a **Developer ID
    Application** (or Distribution) signing identity -- not the free "Apple Development" identity
-   `README.md`'s normal build instructions use for personal, single-machine use. A build signed
-   ad-hoc or with "Apple Development" has no stable Team Identifier, so there's nothing for
-   auto-update to pin trust to; `publish_release.sh` refuses to publish one.
+   `README.md`'s normal build instructions use for personal, single-machine use. This is *not*
+   about Team Identifier stability -- a free "Apple Development" identity has a perfectly stable
+   Team ID too (Xcode's free "Personal Team"), so `UpdateManager`'s own SHA-256 + Team ID check
+   would accept it. The real reason: "Apple Development" certificates are for running your own
+   build on your own registered Mac through Xcode, not for software that gets downloaded and
+   launched elsewhere -- which is exactly what an update is. Gatekeeper treats it accordingly and
+   will likely block or heavily warn on launch regardless of what this project's own verification
+   says. "Developer ID Application" is the certificate class Apple actually built for downloaded,
+   distributed-outside-the-App-Store software (typically paired with notarization -- see "Closing
+   the CI gap" below) -- and Apple will only issue that certificate type to paying Developer
+   Program members; there's no free path to it. `publish_release.sh` refuses to publish a build
+   with no Team Identifier at all (genuinely ad-hoc/unsigned), and separately checks the signing
+   identity matches your pinned value, but the Developer-ID-vs-Apple-Development distinction above
+   is a Gatekeeper/policy reality this project can't verify for you -- use the right identity type.
 2. **Pin your Team ID**: find it with `security find-identity -v -p codesigning` (the parenthesized
    suffix after your certificate's name) or in the Apple Developer portal, then set
    `FocusLockConstants.pinnedUpdateTeamID` in `Sources/FocusLockShared/Constants.swift` to it, and

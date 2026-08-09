@@ -35,16 +35,34 @@ if [ ! -d "$APP_PATH" ]; then
   exit 1
 fi
 
-echo "==> Verifying $APP_PATH is signed with a real Team Identifier (not ad-hoc/Apple Development)"
-TEAM_ID=$(codesign -dv --verbose=4 "$APP_PATH" 2>&1 | sed -n 's/^TeamIdentifier=//p')
+echo "==> Verifying $APP_PATH is signed with a Developer ID (not ad-hoc or Apple Development)"
+CODESIGN_INFO=$(codesign -dv --verbose=4 "$APP_PATH" 2>&1)
+TEAM_ID=$(echo "$CODESIGN_INFO" | sed -n 's/^TeamIdentifier=//p')
+SIGNING_AUTHORITY=$(echo "$CODESIGN_INFO" | sed -n 's/^Authority=//p' | head -1)
+
 if [ -z "$TEAM_ID" ] || [ "$TEAM_ID" = "not set" ]; then
-  echo "ERROR: $APP_PATH has no Team Identifier -- it's signed ad-hoc or with a free" >&2
-  echo "'Apple Development' identity, neither of which auto-update can trust (there'd be" >&2
-  echo "nothing distinguishing your build from anyone else's). Sign with a real Apple" >&2
-  echo "Developer Program (paid) Developer ID or Distribution identity to publish a release." >&2
+  echo "ERROR: $APP_PATH has no Team Identifier -- it's signed ad-hoc (no identity at all)." >&2
+  echo "Sign with a real Developer ID Application identity to publish a release." >&2
   exit 1
 fi
+# Team ID alone isn't enough -- a free "Apple Development" identity has a perfectly stable Team ID
+# too (Xcode's free "Personal Team"), so the check above wouldn't catch it. That certificate class
+# is for running your own build on your own registered Mac, not for software downloaded and
+# launched elsewhere (exactly what an update is) -- Gatekeeper treats it accordingly regardless of
+# what this project's own SHA-256/Team-ID verification says. See RELEASE.md.
+case "$SIGNING_AUTHORITY" in
+  "Developer ID Application:"*|"3rd Party Mac Developer Application:"*) ;;
+  *)
+    echo "ERROR: $APP_PATH is signed with '$SIGNING_AUTHORITY', not a Developer ID Application" >&2
+    echo "identity. A free 'Apple Development' certificate (or Mac App Store distribution cert)" >&2
+    echo "is not meant for software downloaded and launched outside Xcode/the App Store -- see" >&2
+    echo "RELEASE.md's one-time setup section for why this needs a paid Developer Program" >&2
+    echo "membership. Rebuild with: ./Scripts/build_app.sh \"Developer ID Application: ...\"" >&2
+    exit 1
+    ;;
+esac
 echo "    Team Identifier: $TEAM_ID"
+echo "    Signing authority: $SIGNING_AUTHORITY"
 
 CONSTANTS_FILE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/Sources/FocusLockShared/Constants.swift"
 PINNED_TEAM_ID=$(sed -n 's/.*pinnedUpdateTeamID = "\(.*\)".*/\1/p' "$CONSTANTS_FILE" | head -1)
