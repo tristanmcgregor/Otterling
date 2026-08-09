@@ -45,20 +45,27 @@ if [ -z "$TEAM_ID" ] || [ "$TEAM_ID" = "not set" ]; then
   echo "Sign with a real Developer ID Application identity to publish a release." >&2
   exit 1
 fi
-# Team ID alone isn't enough -- a free "Apple Development" identity has a perfectly stable Team ID
-# too (Xcode's free "Personal Team"), so the check above wouldn't catch it. That certificate class
-# is for running your own build on your own registered Mac, not for software downloaded and
-# launched elsewhere (exactly what an update is) -- Gatekeeper treats it accordingly regardless of
-# what this project's own SHA-256/Team-ID verification says. See RELEASE.md.
+# A free "Apple Development" identity has a perfectly stable Team ID too (Xcode's free "Personal
+# Team"), so the check above alone wouldn't catch it. This is a WARNING, not a hard block, and
+# honestly so: UpdateManager's own downloads go through URLSession, which -- unlike a browser --
+# doesn't set com.apple.quarantine, and Gatekeeper's signature/notarization assessment only runs
+# against quarantined files. So this likely still works with a free identity in practice. Developer
+# ID is still the *right* certificate class for software downloaded and run outside Xcode/the App
+# Store, and relying on "Gatekeeper doesn't happen to check this code path" is depending on an
+# enforcement gap Apple has tightened before (Mojave vs. Catalina+), not a guarantee -- see
+# RELEASE.md's one-time setup section. Set ALLOW_NON_DEVELOPER_ID=1 to publish anyway.
 case "$SIGNING_AUTHORITY" in
   "Developer ID Application:"*|"3rd Party Mac Developer Application:"*) ;;
   *)
-    echo "ERROR: $APP_PATH is signed with '$SIGNING_AUTHORITY', not a Developer ID Application" >&2
-    echo "identity. A free 'Apple Development' certificate (or Mac App Store distribution cert)" >&2
-    echo "is not meant for software downloaded and launched outside Xcode/the App Store -- see" >&2
-    echo "RELEASE.md's one-time setup section for why this needs a paid Developer Program" >&2
-    echo "membership. Rebuild with: ./Scripts/build_app.sh \"Developer ID Application: ...\"" >&2
-    exit 1
+    echo "WARNING: $APP_PATH is signed with '$SIGNING_AUTHORITY', not a Developer ID Application" >&2
+    echo "identity. This will likely still work (the download path here doesn't set the quarantine" >&2
+    echo "flag Gatekeeper's checks key off), but Developer ID is the certificate class Apple" >&2
+    echo "actually built for this. See RELEASE.md's one-time setup section." >&2
+    if [ "${ALLOW_NON_DEVELOPER_ID:-}" != "1" ]; then
+      echo "Set ALLOW_NON_DEVELOPER_ID=1 to publish anyway, or rebuild with a Developer ID" >&2
+      echo "identity: ./Scripts/build_app.sh \"Developer ID Application: ...\"" >&2
+      exit 1
+    fi
     ;;
 esac
 echo "    Team Identifier: $TEAM_ID"

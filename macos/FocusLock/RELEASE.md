@@ -10,22 +10,31 @@ described here is a manual, local process until that changes (see "Closing the C
 
 ## One-time setup
 
-1. **A real Apple Developer Program membership** (paid, $99/year) with a **Developer ID
-   Application** (or Distribution) signing identity -- not the free "Apple Development" identity
-   `README.md`'s normal build instructions use for personal, single-machine use. This is *not*
-   about Team Identifier stability -- a free "Apple Development" identity has a perfectly stable
-   Team ID too (Xcode's free "Personal Team"), so `UpdateManager`'s own SHA-256 + Team ID check
-   would accept it. The real reason: "Apple Development" certificates are for running your own
-   build on your own registered Mac through Xcode, not for software that gets downloaded and
-   launched elsewhere -- which is exactly what an update is. Gatekeeper treats it accordingly and
-   will likely block or heavily warn on launch regardless of what this project's own verification
-   says. "Developer ID Application" is the certificate class Apple actually built for downloaded,
-   distributed-outside-the-App-Store software (typically paired with notarization -- see "Closing
-   the CI gap" below) -- and Apple will only issue that certificate type to paying Developer
-   Program members; there's no free path to it. `publish_release.sh` refuses to publish a build
-   with no Team Identifier at all (genuinely ad-hoc/unsigned), and separately checks the signing
-   identity matches your pinned value, but the Developer-ID-vs-Apple-Development distinction above
-   is a Gatekeeper/policy reality this project can't verify for you -- use the right identity type.
+1. **Recommended: a real Apple Developer Program membership** (paid, $99/year) with a **Developer
+   ID Application** (or Distribution) signing identity -- not the free "Apple Development" identity
+   `README.md`'s normal build instructions use for personal, single-machine use. Read this
+   carefully before deciding whether to bother, since it's genuinely not a hard requirement:
+   - It's **not** about Team Identifier stability -- a free "Apple Development" identity has a
+     perfectly stable Team ID too (Xcode's free "Personal Team"), so `UpdateManager`'s own
+     SHA-256 + Team ID check would accept it.
+   - It's **probably not** about Gatekeeper blocking the launch either, in practice: `UpdateManager`
+     downloads over `URLSession`, which -- unlike a browser -- doesn't set the `com.apple.quarantine`
+     attribute Gatekeeper's signature/notarization assessment keys off, and launchd starting its own
+     `Program` historically hasn't gone through the same check a Finder double-click does. So a free
+     identity will most likely just work here.
+   - The actual reason to still do it: "Apple Development" certificates are for running your own
+     build on your own registered Mac through Xcode -- not for software downloaded and launched
+     elsewhere, which is exactly what an update is. "Developer ID Application" is the certificate
+     class Apple built for that (typically paired with notarization -- see "Closing the CI gap"
+     below), and only paying Developer Program members can get one. Relying on "Gatekeeper doesn't
+     happen to check this particular code path" is depending on an enforcement gap, not a
+     guarantee -- Apple has tightened this exact behavior before (more permissive on Mojave, less
+     so from Catalina on) and could again.
+
+   `publish_release.sh` warns (doesn't hard-block) if you publish with anything other than a
+   Developer ID identity -- set `ALLOW_NON_DEVELOPER_ID=1` to proceed anyway for personal use. It
+   does still hard-refuse a genuinely ad-hoc/unsigned build (no Team Identifier at all) and any
+   build whose Team ID doesn't match your pinned value.
 2. **Pin your Team ID**: find it with `security find-identity -v -p codesigning` (the parenthesized
    suffix after your certificate's name) or in the Apple Developer portal, then set
    `FocusLockConstants.pinnedUpdateTeamID` in `Sources/FocusLockShared/Constants.swift` to it, and
