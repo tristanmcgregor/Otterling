@@ -108,6 +108,9 @@ services:
     environment:
       - LOCKPROFILE_TOKEN=${LOCKPROFILE_TOKEN:?set LOCKPROFILE_TOKEN in .env}
       - LOCKPROFILE_LISTEN_PORT=8091
+      # Optional -- blank disables push notification, events still log to lockprofile-data/alerts/.
+      - NTFY_TOPIC=${NTFY_TOPIC:-}
+      - NTFY_SERVER=${NTFY_SERVER:-https://ntfy.sh}
     working_dir: /opt/otterling
     command: python3 lockprofile_service.py
 

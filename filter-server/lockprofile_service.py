@@ -23,6 +23,15 @@ Families" DoH endpoint (`family.cloudflare-dns.com`, the DoH form of the 1.1.1.3
 that needs no new server infrastructure, layered alongside (not replacing) the daemon's own
 DNS/hosts/pf enforcement. Wiring this at the profile's own cloud filter host would need that host
 to expose a DoH endpoint of its own -- not set up here, a possible future upgrade.
+
+Notification: every accepted `/alerts/tamper` event is appended to `ALERTS_PATH` regardless, and --
+if `NTFY_TOPIC` is set -- also best-effort pushed to ntfy.sh (https://ntfy.sh), a free push
+notification service with no signup and no message caps: the accountability partner installs the
+ntfy app and subscribes to this one topic, the server does a plain HTTP POST, they get a push
+within seconds. `NTFY_TOPIC` should be a long random string (`openssl rand -hex 16` or similar),
+not something guessable -- ntfy's public server is topic-name-secret, not authenticated, so anyone
+who learns the topic name can read (or spoof) alerts on it. A failed ntfy push never blocks or
+fails the request from the daemon; the JSONL log is always the source of truth.
 """
 
 from __future__ import annotations
@@ -33,6 +42,8 @@ import plistlib
 import secrets
 import threading
 import time
+import urllib.error
+import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -43,6 +54,20 @@ ALERTS_PATH = os.path.join(DATA_DIR, "alerts", "events.jsonl")
 LISTEN_HOST = os.environ.get("LOCKPROFILE_LISTEN_HOST", "0.0.0.0")
 LISTEN_PORT = int(os.environ.get("LOCKPROFILE_LISTEN_PORT", "8091"))
 TOKEN = os.environ.get("LOCKPROFILE_TOKEN", "")
+
+NTFY_SERVER = os.environ.get("NTFY_SERVER", "https://ntfy.sh").rstrip("/")
+NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "")
+
+# (title, priority, tag) per tamper event type -- see TamperReporter.swift / LockProfileGuard.swift
+# / FocusLockWatchdog for the `type` values these correspond to. Falls back to a generic
+# medium-priority notification for any type not listed here, so a future new event type still
+# reaches the partner instead of silently not notifying.
+NTFY_EVENT_STYLE = {
+    "lock_profile_removed": ("Otterling: lock profile removed", "urgent", "warning"),
+    "lock_profile_installed": ("Otterling: lock profile installed", "default", "white_check_mark"),
+    "daemon_unloaded_recovered": ("Otterling: daemon was down, watchdog recovered it", "high", "robot"),
+    "watchdog_or_daemon_reregistered": ("Otterling: needed re-registration on GUI launch", "high", "warning"),
+}
 
 PROFILE_IDENTIFIER = "au.com.tbmcgregor.bwparker.focuslock.lockprofile"
 DNS_PAYLOAD_IDENTIFIER = f"{PROFILE_IDENTIFIER}.dns"
@@ -131,6 +156,31 @@ def _append_alert(event: dict) -> None:
         fh.write(json.dumps(event, sort_keys=True) + "\n")
 
 
+def _send_ntfy_notification(event: dict) -> None:
+    """Best-effort push via ntfy.sh -- see module docstring. Never raises: a down/unreachable ntfy
+    server must not turn an accepted tamper report into a failed request."""
+    if not NTFY_TOPIC:
+        return
+    title, priority, tag = NTFY_EVENT_STYLE.get(
+        event["type"], (f"Otterling: {event['type']}", "default", "warning")
+    )
+    message = f"{event['details']}\n(device {event['device_id']})" if event.get("details") else f"device {event['device_id']}"
+    request = urllib.request.Request(
+        f"{NTFY_SERVER}/{NTFY_TOPIC}",
+        data=message.encode("utf-8"),
+        method="POST",
+        headers={
+            "Title": title,
+            "Priority": priority,
+            "Tags": tag,
+        },
+    )
+    try:
+        urllib.request.urlopen(request, timeout=10).close()
+    except (urllib.error.URLError, OSError) as error:
+        print(f"[lockprofile] ntfy push failed for {event['type']}: {error}", flush=True)
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "OtterlingLockProfile/1.0"
 
@@ -189,6 +239,10 @@ class Handler(BaseHTTPRequestHandler):
                 "received_at": time.time(),
             }
             _append_alert(event)
+            # Backgrounded so a slow/unreachable ntfy.sh can't delay this response -- the daemon's
+            # own TamperReporter has just a 10s timeout and one retry, and the JSONL append above
+            # (the actual source of truth) is already durable before this fires.
+            threading.Thread(target=_send_ntfy_notification, args=(event,), daemon=True).start()
             return self._send_json(200, {"status": "ok"})
 
         return self._send_json(404, {"error": "not found"})

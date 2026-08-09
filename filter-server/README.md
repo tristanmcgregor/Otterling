@@ -153,8 +153,10 @@ surface. **Read the module docstring in `lockprofile_service.py` before touching
 exists specifically because a config profile's `RemovalPasscode` does *not* hold against a local
 admin account on macOS (confirmed against Apple's own documentation: Option-click Remove + your
 own admin password bypasses it, no passcode needed), so this is deliberately a detection layer,
-not a removal lock. `/alerts/tamper` is ingestion-only for now (appends to
-`lockprofile-data/alerts/events.jsonl`) -- no outbound notification is wired up yet; see
+not a removal lock. `/alerts/tamper` always appends to `lockprofile-data/alerts/events.jsonl`
+(the source of truth) and, if `NTFY_TOPIC` is set in `.env`, also best-effort pushes to
+[ntfy.sh](https://ntfy.sh) so the accountability partner gets a phone notification within seconds
+-- free, no signup, no message caps; see `.env.example` for how to set it up. See
 `macos/FocusLock/GUARDIAN_SETUP.md` §6 for the full honest accounting of what this does and
 doesn't protect against. Requires `LOCKPROFILE_TOKEN` in `.env` (`openssl rand -hex 32`, same
 pattern as `GITHUB_WEBHOOK_SECRET`).
