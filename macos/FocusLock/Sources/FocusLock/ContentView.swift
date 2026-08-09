@@ -21,6 +21,8 @@ struct ContentView: View {
                     protectedAppsSection
                     Divider()
                     dnsSection
+                    Divider()
+                    updateSection
                 }
             }
         }
@@ -223,6 +225,29 @@ struct ContentView: View {
                 if let result = viewModel.cloudFilterTestResult {
                     Text(result).font(.caption).foregroundStyle(.secondary)
                 }
+            }
+        }
+    }
+
+    private var updateSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("App updates").font(.headline)
+            Text("Checked automatically every hour; this is the same check, run on demand. A verified update's SHA-256 and code-signing Team ID must both match before anything installs -- see UpdateManager.swift.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text("This build: \(FocusLockConstants.appVersionCode)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            HStack {
+                Button("Check for update") { viewModel.checkForUpdate() }
+                    .disabled(viewModel.updateChecking || viewModel.updateInstalling)
+                if viewModel.updateAvailable {
+                    Button("Install update") { viewModel.installAvailableUpdate() }
+                        .disabled(viewModel.updateInstalling)
+                }
+            }
+            if !viewModel.updateStatusText.isEmpty {
+                Text(viewModel.updateStatusText).font(.caption).foregroundStyle(.secondary)
             }
         }
     }

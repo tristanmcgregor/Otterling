@@ -174,4 +174,37 @@ final class XPCService: NSObject, FocusLockXPCProtocol {
         guard state.dnsEnforcementEnabled else { return }
         DNSEnforcer.apply(cloudHost: state.cloudFilterHost, cloudEnabled: state.cloudFilterEnabled)
     }
+
+    func checkForUpdate(reply: @escaping (Data) -> Void) {
+        // UpdateManager blocks (synchronous network I/O) -- dispatch off whatever queue XPC
+        // delivered this call on so a slow/unreachable update host can't stall other XPC traffic.
+        DispatchQueue.global().async {
+            let host = self.stateStore.snapshot().cloudFilterHost
+            let status = UpdateManager.checkForUpdate(host: host)
+            reply(FocusLockCodec.encode(status))
+        }
+    }
+
+    func installAvailableUpdate(reply: @escaping (Data) -> Void) {
+        DispatchQueue.global().async {
+            let host = self.stateStore.snapshot().cloudFilterHost
+            // Never trusts a manifest the caller might supply -- re-checks against the real host.
+            switch UpdateManager.checkForUpdate(host: host) {
+            case .upToDate:
+                reply(FocusLockCodec.encode(UpdateInstallResult.rejected("Already up to date")))
+            case .error(let message):
+                reply(FocusLockCodec.encode(UpdateInstallResult.rejected("Update check failed: \(message)")))
+            case .updateAvailable(let manifest):
+                let result = UpdateManager.downloadVerifyAndInstall(manifest)
+                reply(FocusLockCodec.encode(result))
+                if case .installedPendingRestart = result {
+                    // A couple of seconds' grace so this reply actually reaches the caller over
+                    // the Mach port before the process that would send it exits.
+                    DispatchQueue.global().asyncAfter(deadline: .now() + 2) {
+                        UpdateManager.restartAfterInstall()
+                    }
+                }
+            }
+        }
+    }
 }

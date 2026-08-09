@@ -19,6 +19,8 @@ app/libs/*.jar
 # macOS FocusLock (Swift Package Manager)
 macos/FocusLock/.build/
 macos/FocusLock/.swiftpm/
+# publish_release.sh output -- a real signed build + manifest, not for git (see RELEASE.md).
+macos/FocusLock/.release/
 
 # Local scratch
 phone-apps.txt
@@ -38,6 +40,7 @@ filter-server/ca/*.pem
 !filter-server/ca/README.md
 filter-server/updates/*
 !filter-server/updates/README.md
+!filter-server/updates/macos-manifest.example.json
 filter-server/caddy-data/
 filter-server/caddy-config/
 filter-server/lockprofile-data/

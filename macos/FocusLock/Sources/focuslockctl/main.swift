@@ -26,6 +26,9 @@ func printUsage() {
       focuslockctl disable-dns                     (Guardian admin account only)
       focuslockctl set-filter-host <host>
 
+      focuslockctl check-update
+      focuslockctl install-update
+
     Protected apps (e.g. an accountability app) can't be quit -- the daemon relaunches them
     within seconds -- or deleted -- their bundle is locked with the filesystem-level immutable
     flag, which only root can clear, so a Standard account can't touch it even with sudo. This is
@@ -136,6 +139,26 @@ Task {
     case "set-filter-host":
         guard arguments.count >= 3 else { printUsage(); finished = true; exit(1) }
         printResult(await client.setCloudFilterHost(arguments[2]))
+
+    case "check-update":
+        switch await client.checkForUpdate() {
+        case .upToDate:
+            print("Up to date (build \(FocusLockConstants.appVersionCode)).")
+        case .updateAvailable(let manifest):
+            print("Update available: \(manifest.versionName). Run `focuslockctl install-update` to install.")
+        case .error(let message):
+            print("Check failed: \(message)")
+        case nil:
+            print("Could not reach FocusLockHelperd. Is it registered and running?")
+        }
+
+    case "install-update":
+        switch await client.installAvailableUpdate() {
+        case .installedPendingRestart(let manifest):
+            print("Installed \(manifest.versionName). Restarting the filter daemon now.")
+        case .rejected(let reason):
+            print("DENIED: \(reason)")
+        }
 
     default:
         printUsage()

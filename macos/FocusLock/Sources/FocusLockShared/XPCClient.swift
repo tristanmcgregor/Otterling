@@ -133,4 +133,20 @@ public final class FocusLockXPCClient {
             }
         }, onError: .denied("Could not reach FocusLockHelperd"))
     }
+
+    public func checkForUpdate() async -> UpdateCheckStatus? {
+        await withXPCContinuation({ resume, onError in
+            proxy(errorHandler: onError).checkForUpdate { data in
+                resume(FocusLockCodec.decode(UpdateCheckStatus.self, from: data))
+            }
+        }, onError: nil)
+    }
+
+    public func installAvailableUpdate() async -> UpdateInstallResult {
+        await withXPCContinuation({ resume, onError in
+            proxy(errorHandler: onError).installAvailableUpdate { data in
+                resume(FocusLockCodec.decode(UpdateInstallResult.self, from: data) ?? .rejected("Malformed reply"))
+            }
+        }, onError: .rejected("Could not reach FocusLockHelperd"))
+    }
 }

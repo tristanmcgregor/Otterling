@@ -31,6 +31,10 @@ BUNDLE_ID="au.com.tbmcgregor.bwparker.focuslock"
 HELPER_LABEL="au.com.tbmcgregor.bwparker.focuslock.helperd"
 WATCHDOG_LABEL="au.com.tbmcgregor.bwparker.focuslock.watchdog"
 INSTALL_PATH="/Applications/${APP_NAME}.app"
+# Must match FocusLockConstants.appVersionCode in Sources/FocusLockShared/Constants.swift -- kept
+# in sync by hand (see that constant's doc comment); UpdateManager compares against the Swift
+# constant, not this plist value, but they should always read the same to a human checking either.
+APP_VERSION="1"
 
 echo "==> Building with SwiftPM"
 swift build --package-path "$PROJECT_DIR"
@@ -66,7 +70,7 @@ tee "$INSTALL_PATH/Contents/Info.plist" > /dev/null <<PLIST
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.1</string>
+    <string>${APP_VERSION}</string>
     <key>LSMinimumSystemVersion</key>
     <string>13.0</string>
 </dict>
