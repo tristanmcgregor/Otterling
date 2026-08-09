@@ -58,6 +58,12 @@ func formatState(_ state: FocusLockState) -> String {
     }
     lines.append("DNS enforcement: \(state.dnsEnforcementEnabled ? "ON" : "off")")
     lines.append("Cloud filter host: \(state.cloudFilterHost) (\(state.cloudFilterEnabled ? "enabled" : "disabled, Cloudflare Family fallback only"))")
+    if state.lockProfileInstalled {
+        lines.append("Lock profile: installed")
+    } else {
+        lines.append("⚠️  Lock profile: NOT installed -- DNS floor + removal tripwire are missing. " +
+                      "See GUARDIAN_SETUP.md / Scripts/install_lock_profile.command.")
+    }
     return lines.joined(separator: "\n")
 }
 

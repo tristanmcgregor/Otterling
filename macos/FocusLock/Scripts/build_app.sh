@@ -29,6 +29,7 @@ APP_NAME="Otterling"
 DISPLAY_NAME="Otterling"
 BUNDLE_ID="au.com.tbmcgregor.bwparker.focuslock"
 HELPER_LABEL="au.com.tbmcgregor.bwparker.focuslock.helperd"
+WATCHDOG_LABEL="au.com.tbmcgregor.bwparker.focuslock.watchdog"
 INSTALL_PATH="/Applications/${APP_NAME}.app"
 
 echo "==> Building with SwiftPM"
@@ -42,6 +43,7 @@ mkdir -p "$INSTALL_PATH/Contents/Resources"
 
 cp "$BUILD_DIR/${EXECUTABLE_NAME}" "$INSTALL_PATH/Contents/MacOS/${EXECUTABLE_NAME}"
 cp "$BUILD_DIR/FocusLockHelperd" "$INSTALL_PATH/Contents/MacOS/FocusLockHelperd"
+cp "$BUILD_DIR/FocusLockWatchdog" "$INSTALL_PATH/Contents/MacOS/FocusLockWatchdog"
 if [ -f "$PROJECT_DIR/Resources/AppIcon.icns" ]; then
   cp "$PROJECT_DIR/Resources/AppIcon.icns" "$INSTALL_PATH/Contents/Resources/AppIcon.icns"
 fi
@@ -97,14 +99,40 @@ tee "$INSTALL_PATH/Contents/Library/LaunchDaemons/${HELPER_LABEL}.plist" > /dev/
 </plist>
 PLIST
 
-echo "==> Code-signing (daemon first, then app bundle)"
+# Independent of the daemon's own plist above on purpose -- see FocusLockWatchdog/main.swift's doc
+# comment. No MachServices entry: this one has no XPC service of its own, it only calls out to
+# FocusLockHelperd's.
+tee "$INSTALL_PATH/Contents/Library/LaunchDaemons/${WATCHDOG_LABEL}.plist" > /dev/null <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>${WATCHDOG_LABEL}</string>
+    <key>Program</key>
+    <string>${INSTALL_PATH}/Contents/MacOS/FocusLockWatchdog</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/var/log/focuslock-watchdog.log</string>
+    <key>StandardErrorPath</key>
+    <string>/var/log/focuslock-watchdog.log</string>
+</dict>
+</plist>
+PLIST
+
+echo "==> Code-signing (daemons first, then app bundle)"
 codesign --force --options runtime --sign "$SIGN_IDENTITY" "$INSTALL_PATH/Contents/MacOS/FocusLockHelperd"
+codesign --force --options runtime --sign "$SIGN_IDENTITY" "$INSTALL_PATH/Contents/MacOS/FocusLockWatchdog"
 codesign --force --options runtime --sign "$SIGN_IDENTITY" "$INSTALL_PATH/Contents/MacOS/${EXECUTABLE_NAME}"
 codesign --force --options runtime --sign "$SIGN_IDENTITY" "$INSTALL_PATH"
 
 echo "==> Verifying signatures"
 codesign -dv --verbose=4 "$INSTALL_PATH" 2>&1 | grep -E "Identifier|TeamIdentifier|Authority"
 codesign -dv --verbose=4 "$INSTALL_PATH/Contents/MacOS/FocusLockHelperd" 2>&1 | grep -E "Identifier|TeamIdentifier|Authority"
+codesign -dv --verbose=4 "$INSTALL_PATH/Contents/MacOS/FocusLockWatchdog" 2>&1 | grep -E "Identifier|TeamIdentifier|Authority"
 
 echo "==> Installing focuslockctl to /usr/local/bin"
 mkdir -p /usr/local/bin

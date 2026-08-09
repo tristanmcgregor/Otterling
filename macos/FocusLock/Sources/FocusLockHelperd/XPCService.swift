@@ -21,7 +21,10 @@ final class XPCService: NSObject, FocusLockXPCProtocol {
     }
 
     func getStatus(reply: @escaping (Data?) -> Void) {
-        reply(FocusLockCodec.encode(stateStore.snapshot()))
+        var state = stateStore.snapshot()
+        // Overlaid, not persisted -- see the field's doc comment on FocusLockState.
+        state.lockProfileInstalled = LockProfileGuard.lastKnownState
+        reply(FocusLockCodec.encode(state))
     }
 
     func addBlockedApp(_ appJSON: Data, reply: @escaping (Data) -> Void) {

@@ -51,7 +51,15 @@ The remove should print `DENIED: Only the Guardian admin account can remove a bl
 If it instead succeeds, the demotion in step 2 didn't take; recheck Users & Groups. (Clean up the
 test entry once verified: have the Guardian run the remove command themselves.)
 
-## 5. What this does and doesn't protect against
+## 5. Install the lock-profile tripwire (optional, recommended)
+
+While logged in as the Guardian, run `Scripts/install_lock_profile.command` once (see
+`README.md`'s "Using it" section for prerequisites -- a `filter-server` deployment with
+`lockprofile_service.py` running, and its `LOCKPROFILE_TOKEN`). It hands off a `.mobileconfig` to
+System Settings for the Guardian to approve. Read §6 immediately below before relying on this for
+anything -- it is a tamper *tripwire*, not a stronger version of the account split above.
+
+## 6. What this does and doesn't protect against
 
 **Does protect against:** removing a blocked app or domain from your normal login, including via
 the GUI, `focuslockctl`, or a raw XPC call from any code you write -- the check is on the daemon
@@ -60,6 +68,26 @@ permanent once added: there's no timer to wait out, only removal by the Guardian
 
 **Does not protect against**, because no software running under an admin-controlled OS can:
 
+- **A routine `sudo` command that never touches the daemon's XPC surface at all.** The admin-group
+  check above only guards `removeBlockedApp`/`removeBlockedDomain`/`disableDNSEnforcement`/
+  `setCloudFilterEnabled(false)` -- it says nothing about `sudo launchctl bootout
+  system/au.com.tbmcgregor.bwparker.focuslock.helperd` (unloads the daemon outright),
+  `sudo rm /Library/Application\ Support/FocusLock/state.json` or the embedded LaunchDaemon plist,
+  `sudo pfctl -d`, or `networksetup -setdnsservers <service> Empty`. Anyone who already has the
+  Guardian's admin password can run any of these from a normal Terminal, no reboot required -- this
+  is meaningfully easier than everything else in this list, not a variant of it. Two detection (not
+  prevention) layers narrow this: the lock profile (see `install_lock_profile.py`) moves DNS
+  enforcement into a configuration profile, and the daemon reports it within ~15s if that profile
+  is ever removed or the DNS it sets is overridden; a separate watchdog LaunchDaemon detects and
+  reports the main daemon being unloaded. **Be clear about what the profile does and doesn't buy:**
+  it carries `RemovalPasscode`, but on macOS that passcode is not effective against a local admin
+  -- verified against Apple's own documentation, an admin can remove any profile by holding Option
+  and clicking Remove in the Profiles pane and authenticating with their own admin password,
+  passcode not required. `PayloadRemovalDisallowed` only becomes genuinely un-removable-by-anyone
+  when a profile is delivered by an actual MDM server, which this project does not set up. So the
+  profile here is a tripwire, not a lock: it makes tampering *loud*, it doesn't make tampering
+  *impossible* for someone who already has the Guardian's password. Neither this nor the watchdog
+  stops `rm`/`pfctl` run directly by someone who already has root -- both only make it get noticed.
 - **Recovery Mode / Internet Recovery / an external boot drive.** Booting off another volume can
   reinstall macOS or run `rm`/`csrutil` against the daemon's files entirely outside this system.
   A real firmware password (T2/Apple Silicon "Lock Boot"), or on a Hackintosh whatever your

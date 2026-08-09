@@ -8,6 +8,9 @@ struct ContentView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             header
+            if !viewModel.state.lockProfileInstalled {
+                lockProfileWarningBanner
+            }
             Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
@@ -47,6 +50,24 @@ struct ContentView: View {
 
     private var isEnforcingDNS: Bool {
         viewModel.state.dnsEnforcementEnabled
+    }
+
+    /// `LockProfileGuard` (daemon-side) reports this within ~15s of the profile disappearing, but
+    /// polling here is what actually surfaces it to a human -- see GUARDIAN_SETUP.md §5 for what
+    /// the profile does and doesn't protect against (a tripwire, not a removal lock).
+    private var lockProfileWarningBanner: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Lock profile not installed").font(.subheadline).bold()
+                Text("The DNS floor and removal tripwire from GUARDIAN_SETUP.md are missing. Run Scripts/install_lock_profile.command to set it up.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(10)
+        .background(Color.orange.opacity(0.12))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
     private var header: some View {

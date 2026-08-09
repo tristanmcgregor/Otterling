@@ -94,6 +94,23 @@ services:
     # this container behaves the same way for its homepage-fetch/AI-classification calls.
     command: python3 dns_classify_mux.py
 
+  lockprofile:
+    image: python:3.12-slim
+    container_name: otterling-lockprofile
+    restart: unless-stopped
+    ports:
+      # Loopback-only -- reached through Caddy (see Caddyfile), never exposed directly. Same
+      # reasoning as the admin UI note in README.md's Firewall section.
+      - "127.0.0.1:${LOCKPROFILE_PORT:-8091}:8091/tcp"
+    volumes:
+      - ./lockprofile_service.py:/opt/otterling/lockprofile_service.py:ro
+      - ./lockprofile-data:/data
+    environment:
+      - LOCKPROFILE_TOKEN=${LOCKPROFILE_TOKEN:?set LOCKPROFILE_TOKEN in .env}
+      - LOCKPROFILE_LISTEN_PORT=8091
+    working_dir: /opt/otterling
+    command: python3 lockprofile_service.py
+
   updates:
     image: caddy:alpine
     container_name: otterling-updates

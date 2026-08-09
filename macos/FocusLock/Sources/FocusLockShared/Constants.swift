@@ -36,4 +36,29 @@ public enum FocusLockConstants {
     /// Default cloud content-filter DNS host (a Canopy-style AdGuard Home deployment -- see
     /// filter-server/README.md at the repo root), mirroring the Android app's `CloudFilterSettings`.
     public static let defaultCloudFilterHost = "vpn.bartholomew.help"
+
+    /// PayloadIdentifier of the lock profile `Scripts/install_lock_profile.py` installs (matches
+    /// `PROFILE_IDENTIFIER` in `filter-server/lockprofile_service.py`). A tamper *tripwire*, not a
+    /// removal lock -- see GUARDIAN_SETUP.md §5. `LockProfileGuard` polls for this identifier's
+    /// presence via `profiles show -type configuration`.
+    public static let lockProfileIdentifier = "au.com.tbmcgregor.bwparker.focuslock.lockprofile"
+
+    /// Root-only files `install_lock_profile.py` writes next to `state.json`, holding the
+    /// filter-server host + bearer token `TamperReporter` needs to POST to `/alerts/tamper`.
+    public static let lockProfileTokenPath = "\(stateDirectory)/lockprofile_token"
+    public static let lockProfileHostPath = "\(stateDirectory)/lockprofile_host"
+
+    /// Fixed install location `Scripts/build_app.sh` assembles the app bundle at -- both
+    /// LaunchDaemon plists live under here, embedded (see `Contents/Library/LaunchDaemons` in that
+    /// script) so `SMAppService`/`launchctl bootstrap` can find them.
+    public static let installedAppBundlePath = "/Applications/Otterling.app"
+    public static let helperLaunchDaemonPlistPath =
+        "\(installedAppBundlePath)/Contents/Library/LaunchDaemons/\(helperBundleIdentifier).plist"
+
+    /// FocusLockWatchdog: an independent LaunchDaemon whose only job is re-bootstrapping
+    /// FocusLockHelperd if it's ever unloaded outside its own XPC surface (e.g. `sudo launchctl
+    /// bootout`) -- detects and reports, doesn't prevent; see GUARDIAN_SETUP.md §5.
+    public static let watchdogBundleIdentifier = "au.com.tbmcgregor.bwparker.focuslock.watchdog"
+    public static let watchdogLaunchDaemonPlistPath =
+        "\(installedAppBundlePath)/Contents/Library/LaunchDaemons/\(watchdogBundleIdentifier).plist"
 }

@@ -143,6 +143,22 @@ AI `VERDICT: PASS` (see [`SELF_LOCKOUT.md`](SELF_LOCKOUT.md)). Caddy serves upda
 webhook. Phones use `ApprovedUpdateManager` (Settings → App updates). Secrets and the live
 checklist live under `/var/lib/otterling/ci/` (root-owned), not in GitHub Actions.
 
+## macOS lock-profile tripwire
+
+`lockprofile_service.py` (`otterling-lockprofile`, loopback port `8091`, reached only via Caddy at
+`/lockprofile/*` and `/alerts/*`) issues the `.mobileconfig` that `macos/FocusLock/Scripts/
+install_lock_profile.py` installs on a Guardian-set-up Mac, and ingests the tamper reports the
+daemon sends when that profile disappears or the main daemon gets unloaded outside its own XPC
+surface. **Read the module docstring in `lockprofile_service.py` before touching this** -- it
+exists specifically because a config profile's `RemovalPasscode` does *not* hold against a local
+admin account on macOS (confirmed against Apple's own documentation: Option-click Remove + your
+own admin password bypasses it, no passcode needed), so this is deliberately a detection layer,
+not a removal lock. `/alerts/tamper` is ingestion-only for now (appends to
+`lockprofile-data/alerts/events.jsonl`) -- no outbound notification is wired up yet; see
+`macos/FocusLock/GUARDIAN_SETUP.md` §6 for the full honest accounting of what this does and
+doesn't protect against. Requires `LOCKPROFILE_TOKEN` in `.env` (`openssl rand -hex 32`, same
+pattern as `GITHUB_WEBHOOK_SECRET`).
+
 ## Production host (vpn.bartholomew.help)
 
 Intended public hostname: **`vpn.bartholomew.help`** (points at the home/server PC).
