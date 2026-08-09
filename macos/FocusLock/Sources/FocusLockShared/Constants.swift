@@ -78,7 +78,7 @@ public enum FocusLockConstants {
     /// with no `RELEASE_CERT_SHA256`. Fill in your own Apple Developer Team ID here and rebuild
     /// before relying on auto-update; find it with `security find-identity -v -p codesigning` (the
     /// parenthesized suffix after your certificate name) or in the Apple Developer portal.
-    public static let pinnedUpdateTeamID = ""
+    public static let pinnedUpdateTeamID = "C438Q9HAHP"
 
     /// Where `UpdateManager` looks for the manifest -- see `filter-server/updates/README.md` and
     /// `macos/FocusLock/RELEASE.md` for how it gets published. Uses the same host as the cloud
