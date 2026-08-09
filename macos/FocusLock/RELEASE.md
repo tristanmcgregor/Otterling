@@ -10,45 +10,45 @@ described here is a manual, local process until that changes (see "Closing the C
 
 ## One-time setup
 
-1. **Recommended: a real Apple Developer Program membership** (paid, $99/year) with a **Developer
-   ID Application** (or Distribution) signing identity -- not the free "Apple Development" identity
-   `README.md`'s normal build instructions use for personal, single-machine use. Read this
-   carefully before deciding whether to bother, since it's genuinely not a hard requirement:
-   - It's **not** about Team Identifier stability -- a free "Apple Development" identity has a
-     perfectly stable Team ID too (Xcode's free "Personal Team"), so `UpdateManager`'s own
-     SHA-256 + Team ID check would accept it.
-   - It's **probably not** about Gatekeeper blocking the launch either, in practice: `UpdateManager`
-     downloads over `URLSession`, which -- unlike a browser -- doesn't set the `com.apple.quarantine`
-     attribute Gatekeeper's signature/notarization assessment keys off, and launchd starting its own
-     `Program` historically hasn't gone through the same check a Finder double-click does. So a free
-     identity will most likely just work here.
-   - The actual reason to still do it: "Apple Development" certificates are for running your own
-     build on your own registered Mac through Xcode -- not for software downloaded and launched
-     elsewhere, which is exactly what an update is. "Developer ID Application" is the certificate
-     class Apple built for that (typically paired with notarization -- see "Closing the CI gap"
-     below), and only paying Developer Program members can get one. Relying on "Gatekeeper doesn't
-     happen to check this particular code path" is depending on an enforcement gap, not a
-     guarantee -- Apple has tightened this exact behavior before (more permissive on Mojave, less
-     so from Catalina on) and could again.
+This project uses the **free "Apple Development" identity** (the same one `README.md`'s normal
+build instructions already use) for releases too, not a paid Developer ID -- a deliberate choice
+for a personal, single-family setup, made with the trade-off below understood:
 
-   `publish_release.sh` warns (doesn't hard-block) if you publish with anything other than a
-   Developer ID identity -- set `ALLOW_NON_DEVELOPER_ID=1` to proceed anyway for personal use. It
-   does still hard-refuse a genuinely ad-hoc/unsigned build (no Team Identifier at all) and any
-   build whose Team ID doesn't match your pinned value.
-2. **Pin your Team ID**: find it with `security find-identity -v -p codesigning` (the parenthesized
-   suffix after your certificate's name) or in the Apple Developer portal, then set
-   `FocusLockConstants.pinnedUpdateTeamID` in `Sources/FocusLockShared/Constants.swift` to it, and
-   rebuild every install that should trust future updates. **This is the actual root of trust** --
-   see that constant's doc comment and `UpdateManager.swift`'s. Left empty, `UpdateManager` refuses
-   to install anything at all (fail closed), matching Android's stance for a build with no
-   `RELEASE_CERT_SHA256`.
+- The actual trust check (SHA-256 + pinned Team Identifier) works exactly the same either way -- a
+  free "Apple Development" identity has a perfectly stable Team ID too (Xcode's free "Personal
+  Team"), so this is not a weaker check.
+- `UpdateManager` downloads over `URLSession`, which -- unlike a browser -- doesn't set the
+  `com.apple.quarantine` attribute Gatekeeper's signature/notarization assessment keys off, and
+  launchd starting its own `Program` historically hasn't gone through the same check a Finder
+  double-click does. So this update path most likely just works with a free identity.
+- The trade-off, stated honestly: "Developer ID Application" is the certificate class Apple
+  actually built for software downloaded and run outside Xcode/the App Store (only paying Developer
+  Program members can get one). Using "Apple Development" instead means depending on "Gatekeeper
+  doesn't happen to check this particular code path" rather than a guarantee -- Apple has tightened
+  this exact behavior before (more permissive on Mojave, less so from Catalina on) and could again.
+  If a future macOS update ever starts blocking this, switching to a paid Developer ID identity
+  (see "Closing the CI gap" below) is the fix, not a code change here.
+
+`publish_release.sh` only warns, doesn't block, when the signing identity isn't Developer ID --
+pass `ALLOW_NON_DEVELOPER_ID=1` to proceed (see "Per-release" below). It still hard-refuses a
+genuinely ad-hoc/unsigned build (no Team Identifier at all) and any build whose Team ID doesn't
+match your pinned value.
+
+**Pin your Team ID**: find it with `security find-identity -v -p codesigning` (the parenthesized
+suffix after your "Apple Development" certificate's name -- Xcode's free "Personal Team" assigns
+one same as a paid account) or in Keychain Access under the certificate's Organizational Unit
+field, then set `FocusLockConstants.pinnedUpdateTeamID` in `Sources/FocusLockShared/Constants.swift`
+to it, and rebuild every install that should trust future updates. **This is the actual root of
+trust** -- see that constant's doc comment and `UpdateManager.swift`'s. Left empty, `UpdateManager`
+refuses to install anything at all (fail closed), matching Android's stance for a build with no
+`RELEASE_CERT_SHA256`.
 
 ## Per-release
 
 ```bash
 cd macos/FocusLock
-./Scripts/build_app.sh "Developer ID Application: Your Name (TEAMID)"   # not "Apple Development"
-./Scripts/publish_release.sh <versionCode> <versionName>                # e.g. 2 "0.2"
+./Scripts/build_app.sh "Apple Development: Your Name (TEAMID)"
+ALLOW_NON_DEVELOPER_ID=1 ./Scripts/publish_release.sh <versionCode> <versionName>   # e.g. 2 "0.2"
 ```
 
 `publish_release.sh`:
