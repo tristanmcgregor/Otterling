@@ -32,6 +32,16 @@ within seconds. `NTFY_TOPIC` should be a long random string (`openssl rand -hex 
 not something guessable -- ntfy's public server is topic-name-secret, not authenticated, so anyone
 who learns the topic name can read (or spoof) alerts on it. A failed ntfy push never blocks or
 fails the request from the daemon; the JSONL log is always the source of truth.
+
+Phone polling: `GET /alerts/poll?since_id=<int>` (see `MacTamperPollWorker.kt` on the Android side)
+returns every event with `id > since_id`, so the phone's existing on-device SMS pipeline
+(`AlertReporter`/`GuardianSmsSender` -- it already has a SIM, no new SMS provider needed) can alert
+on these too, polled on a `WorkManager` cadence rather than pushed. Reuses `LOCKPROFILE_TOKEN` for
+auth rather than minting a separate phone-scoped token -- a deliberate simplification for this
+single-operator deployment, not an oversight; see the token's own comment in `.env.example`. `id`
+is assigned as each event is appended (its 1-based position in `ALERTS_PATH`), under `_alerts_lock`
+so concurrent reporters (the daemon and the watchdog can both be POSTing around the same moment)
+never race onto the same id.
 """
 
 from __future__ import annotations
@@ -43,6 +53,7 @@ import secrets
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -76,6 +87,7 @@ FAMILY_DOH_URL = "https://family.cloudflare-dns.com/dns-query"
 MAX_BODY_BYTES = 16 * 1024
 
 _state_lock = threading.Lock()
+_alerts_lock = threading.Lock()
 
 
 def _load_state() -> dict:
@@ -150,10 +162,37 @@ def build_mobileconfig(device_id: str) -> bytes:
     return plistlib.dumps(profile, fmt=plistlib.FMT_XML)
 
 
-def _append_alert(event: dict) -> None:
+def _append_alert(event: dict) -> dict:
+    """Assigns `id` (1-based, this event's position in the file) and appends. Returns the event
+    including that id -- callers that need it (the poll endpoint, ntfy) get it without a re-read."""
     os.makedirs(os.path.dirname(ALERTS_PATH), exist_ok=True)
-    with open(ALERTS_PATH, "a", encoding="utf-8") as fh:
-        fh.write(json.dumps(event, sort_keys=True) + "\n")
+    with _alerts_lock:
+        existing_count = 0
+        if os.path.exists(ALERTS_PATH):
+            with open(ALERTS_PATH, "r", encoding="utf-8") as fh:
+                existing_count = sum(1 for _ in fh)
+        event = {**event, "id": existing_count + 1}
+        with open(ALERTS_PATH, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(event, sort_keys=True) + "\n")
+    return event
+
+
+def _read_alerts_since(since_id: int) -> list[dict]:
+    if not os.path.exists(ALERTS_PATH):
+        return []
+    events = []
+    with open(ALERTS_PATH, "r", encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if event.get("id", 0) > since_id:
+                events.append(event)
+    return events
 
 
 def _send_ntfy_notification(event: dict) -> None:
@@ -238,12 +277,29 @@ class Handler(BaseHTTPRequestHandler):
                 "reported_at": body.get("ts", time.time()),
                 "received_at": time.time(),
             }
-            _append_alert(event)
+            event = _append_alert(event)
             # Backgrounded so a slow/unreachable ntfy.sh can't delay this response -- the daemon's
             # own TamperReporter has just a 10s timeout and one retry, and the JSONL append above
             # (the actual source of truth) is already durable before this fires.
             threading.Thread(target=_send_ntfy_notification, args=(event,), daemon=True).start()
             return self._send_json(200, {"status": "ok"})
+
+        return self._send_json(404, {"error": "not found"})
+
+    def do_GET(self):  # noqa: N802
+        if not self._authorized():
+            return self._send_json(401, {"error": "unauthorized"})
+
+        parsed = urllib.parse.urlparse(self.path)
+        if parsed.path == "/alerts/poll":
+            query = urllib.parse.parse_qs(parsed.query)
+            try:
+                since_id = int(query.get("since_id", ["0"])[0])
+            except ValueError:
+                return self._send_json(400, {"error": "since_id must be an integer"})
+            events = _read_alerts_since(since_id)
+            max_id = events[-1]["id"] if events else since_id
+            return self._send_json(200, {"events": events, "max_id": max_id})
 
         return self._send_json(404, {"error": "not found"})
 
