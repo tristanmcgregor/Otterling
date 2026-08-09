@@ -6,10 +6,9 @@ services:
     ports:
       # Admin UI (AdGuard moves here after setup; keep it on 3000 — host firewall blocks docker→:80).
       - "${ADMIN_UI_PORT:-3000}:3000/tcp"
-      # Plain DNS -- fallback/failsafe layer + used by anything not going through the proxy.
-      # Bind to LAN IP so we don't clash with unbound/systemd-resolved on 127.0.0.1:53.
-      - "${DNS_BIND:-192.168.0.254}:${DNS_PORT:-53}:53/tcp"
-      - "${DNS_BIND:-192.168.0.254}:${DNS_PORT:-53}:53/udp"
+      # No LAN-facing DNS port here anymore -- dns-classifier now holds it (below) and relays
+      # here internally over Docker's own network (adguardhome:53). Parental control/Safe Search
+      # and the blocklists configured in its own UI still apply to everything relayed through.
     volumes:
       - ./work:/opt/adguardhome/work
       - ./conf:/opt/adguardhome/conf
@@ -31,6 +30,11 @@ services:
       # first run if this is empty) plus any other mitmproxy state across container restarts.
       - ./mitm-ca:/home/mitmproxy/.mitmproxy
       - ./mitm_nsfw_addon.py:/home/mitmproxy/mitm_nsfw_addon.py:ro
+      # mitm_nsfw_addon.py imports these two as local modules (mitmproxy's script loader puts the
+      # addon's own directory on sys.path) -- same files volume-mounted into dns-classifier below,
+      # so both containers check the exact same blocklist/classifier logic without sharing a process.
+      - ./ai_classifier.py:/home/mitmproxy/ai_classifier.py:ro
+      - ./domain_blocklist.py:/home/mitmproxy/domain_blocklist.py:ro
     environment:
       - PROXY_USER=${PROXY_USER:-otterling}
       - PROXY_PASSWORD=${PROXY_PASSWORD:?set PROXY_PASSWORD in .env}
@@ -59,6 +63,36 @@ services:
       --set confdir=/home/mitmproxy/.mitmproxy
       --set block_global=false
       -s /home/mitmproxy/mitm_nsfw_addon.py
+
+  dns-classifier:
+    image: python:3.12-slim
+    container_name: otterling-dns-classifier
+    restart: unless-stopped
+    depends_on:
+      - adguardhome
+    ports:
+      # Takes over the LAN-facing DNS port AdGuardHome used to hold. tcp binding just closes the
+      # port rather than handling it -- v1 is UDP-only, see dns_classify_mux.py's docstring.
+      - "${DNS_BIND:-192.168.0.254}:${DNS_PORT:-53}:53/tcp"
+      - "${DNS_BIND:-192.168.0.254}:${DNS_PORT:-53}:53/udp"
+    volumes:
+      - ./dns_classify_mux.py:/opt/otterling/dns_classify_mux.py:ro
+      - ./ai_classifier.py:/opt/otterling/ai_classifier.py:ro
+      - ./domain_blocklist.py:/opt/otterling/domain_blocklist.py:ro
+    environment:
+      # Same key already deployed for the release-review pipeline and mitm_nsfw_addon.py's own
+      # third-tier classifier -- reused here rather than provisioning a third one. Fails open (no
+      # block, domain resolves normally) if unset.
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - DNS_MUX_LISTEN_HOST=0.0.0.0
+      - DNS_MUX_LISTEN_PORT=53
+      - UPSTREAM_DNS_HOST=adguardhome
+      - UPSTREAM_DNS_PORT=53
+    working_dir: /opt/otterling
+    # No outbound-HTTPS proxy config needed -- mitmproxy already does unrestricted outbound
+    # fetches (its own domain-list refresh) from a plain Docker container on this same host, so
+    # this container behaves the same way for its homepage-fetch/AI-classification calls.
+    command: python3 dns_classify_mux.py
 
   updates:
     image: caddy:alpine

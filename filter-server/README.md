@@ -1,7 +1,7 @@
 # Otterling filter server
 
-Cloud-side half of Otterling's NSFW content filter, deployed to a home server/VPS you control. Two
-services:
+Cloud-side half of Otterling's NSFW content filter, deployed to a home server/VPS you control.
+Four services:
 
 1. **[mitmproxy](https://mitmproxy.org/)** (`otterling-mitmproxy`, host port `8090`, listening on
    `8080` inside the container) -- a real HTTPS MITM proxy. `8090` (not `8080`) is what phones
@@ -13,21 +13,41 @@ services:
    certificate-pin** (YouTube, banking apps -- see "App MITM exemptions" below), whose flows stay
    inside the tunnel but connect directly instead of through mitmproxy. `mitm_nsfw_addon.py`
    decides, server-side, whether to let a request through or return a block page -- **whole
-   requests/pages are blocked, not scrubbed in-page** (no Canopy-style image blanking).
-2. **[AdGuard Home](https://github.com/AdguardTeam/AdGuardHome)** (`otterling-filter-server`, port
-   `53`) -- plain DNS, kept as a fallback/failsafe layer and for anything that isn't proxied
-   traffic. Its **Parental control** and **Safe Search** settings (see "Deploy" below) are a
-   category/search-level backstop for traffic that *does* reach it -- including MITM-exempt apps
-   (see "App MITM exemptions" below), since exemption only skips the proxy hop, not the tunnel or
-   its DNS.
-3. **[Caddy](https://caddyserver.com/)** (`otterling-updates`, ports `80`/`443`) -- serves
+   requests/pages are blocked, not scrubbed in-page** (no Canopy-style image blanking). Its domain
+   blocklist and AI classifier live in `domain_blocklist.py`/`ai_classifier.py`, shared (via
+   volume mount, not import -- separate containers) with `dns_classify_mux.py` below.
+2. **`dns_classify_mux.py`** (`otterling-dns-classifier`, port `53`) -- a small stdlib-`asyncio`
+   UDP relay that now holds the LAN-facing DNS port. It checks every query's domain against the
+   same blocklist mitmproxy uses and, for domains that aren't already known-good/known-bad, fetches
+   the domain's homepage and runs it through the same AI classifier `mitm_nsfw_addon.py` uses --
+   all *before* the very first lookup of that domain completes (bounded by a timeout; fails open
+   on timeout/error). This is what closes the DNS-only gap for MITM-exempt apps: they never reach
+   `mitm_nsfw_addon.py`'s HTML-level checks, but every app's DNS query passes through here
+   equally. It can only ever judge "is this domain's own content bad," never "is this specific
+   page bad" -- a DNS query has no path, and one lookup gets reused for many page loads
+   afterward -- so it doesn't replace mitmproxy's per-request checks for non-pinned apps, it
+   narrows the blind spot for pinned ones. Allowed queries are relayed to AdGuardHome (below,
+   internal `adguardhome:53`) and its raw answer relayed back verbatim; blocked ones get a
+   synthetic NXDOMAIN, same wire format as `DnsMessage.kt`'s `buildBlockedResponse` on the Android
+   side. UDP only for v1 -- a truncated response needing a TCP retry falls through this mux
+   (named gap, not silently dropped; rare for ordinary A-record lookups).
+3. **[AdGuard Home](https://github.com/AdguardTeam/AdGuardHome)** (`otterling-filter-server`,
+   admin UI port `3000` only -- no longer LAN-facing on `53`, see above) -- plain DNS, reached
+   internally by `dns_classify_mux.py` over Docker's own network. Its **Parental control** and
+   **Safe Search** settings (see "Deploy" below) are a category/search-level backstop for
+   everything relayed through it -- including MITM-exempt apps (see "App MITM exemptions" below),
+   since exemption only skips the proxy hop, not the tunnel or its DNS.
+4. **[Caddy](https://caddyserver.com/)** (`otterling-updates`, ports `80`/`443`) -- serves
    `updates/manifest.json` + signed release APKs over HTTPS with an auto-provisioned Let's Encrypt
    cert. This is the *only* place the Otterling app will install an update from -- see "Gated app
    updates" below.
 
 The phone still applies its own local adult-domain list first, client-side, regardless of whether
-either server is reachable (see the app's `DomainBlocklistManager`) -- a brief outage here doesn't
-remove filtering entirely, it just loses the server-side category/page-content layer.
+any server is reachable (see the app's `DomainBlocklistManager`) -- a brief outage here doesn't
+remove filtering entirely, it just loses the server-side category/domain-classification/
+page-content layers. No Android app changes were needed for the DNS classifier -- the app already
+forwards every non-locally-blocked DNS query to the same configured host:port; only what's
+*listening* there on the server changed.
 
 ## App MITM exemptions
 
@@ -63,6 +83,11 @@ ruled out).
 - No custom ML, no image inspection -- keyword/domain rules only, deliberately narrow to keep
   false positives low. See [`VISUAL_FILTERING.md`](VISUAL_FILTERING.md) for research on lighter
   visual/image-level filtering options (not implemented yet).
+- Separately, at DNS resolution time, `dns_classify_mux.py` checks the same domain blocklist and,
+  for new domains, AI-classifies the domain's own homepage -- this is what applies to MITM-exempt
+  apps too, since it runs before mitmproxy would ever see (or not see) their traffic. Its
+  allow/deny cache is its own, per-domain, 24h -- separate process/container from
+  `mitm_nsfw_addon.py`'s per-path caches, not shared.
 
 ## Deploy
 
@@ -169,7 +194,8 @@ access to the machine.
   committed to this repo (see `.gitignore`) -- treat the private key half as sensitive as any other
   root CA key, since anyone who has it can transparently MITM TLS for any host, not just the ones
   this addon blocks.
-- No DNS-over-HTTPS/TLS for the AdGuard fallback layer -- the app talks plain DNS to it. That's
+- No DNS-over-HTTPS/TLS for the DNS layer (`dns_classify_mux.py` in front of AdGuard Home) -- the
+  app talks plain DNS to it. That's
   fine since the VPN tunnel itself protects the query from being read/tampered with anywhere else
   on the path, and the phone already refuses known public DoH/DoT resolver IPs so nothing
   on-device can dodge this by hardcoding its own encrypted resolver. QUIC (UDP/443) is dropped
