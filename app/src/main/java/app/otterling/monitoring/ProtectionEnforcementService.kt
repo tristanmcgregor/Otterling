@@ -23,6 +23,7 @@ import app.otterling.focus.RewardLedgerManager
 import app.otterling.restrictions.AccessibilityGuard
 import app.otterling.restrictions.AppUninstallGuard
 import app.otterling.restrictions.DeviceRestrictionsManager
+import app.otterling.restrictions.EnforcementCoordinator
 import app.otterling.tamper.AccessibilityGuardActivity
 import app.otterling.tamper.TamperEventLogger
 import kotlinx.coroutines.CoroutineScope
@@ -67,9 +68,9 @@ class ProtectionEnforcementService : Service() {
             val rewardLedgerManager = RewardLedgerManager(applicationContext)
             val habitRuleManager = HabitRuleManager(applicationContext)
             loopJob = scope.launch {
-                runCatching { suspensionManager.reapplyAll() }
+                runCatching { EnforcementCoordinator.runExclusive { suspensionManager.reapplyAll() } }
                     .onFailure { Log.w(TAG, "Blocked-app reapply failed", it) }
-                runCatching { uninstallGuard.reapplyAll() }
+                runCatching { EnforcementCoordinator.runExclusive { uninstallGuard.reapplyAll() } }
                     .onFailure { Log.w(TAG, "Uninstall-protection reapply failed", it) }
                 while (isActive) {
                     if (!ProtectionController(applicationContext).isEnabled()) {
@@ -78,7 +79,7 @@ class ProtectionEnforcementService : Service() {
                     }
                     runCatching { AlertReporter(applicationContext).flushOutbox() }
                         .onFailure { Log.w(TAG, "SMS outbox flush failed", it) }
-                    runCatching { restrictionsManager.detectDriftAndReapply(tamperLogger) }
+                    runCatching { EnforcementCoordinator.runExclusive { restrictionsManager.detectDriftAndReapply(tamperLogger) } }
                         .onFailure { Log.w(TAG, "Restriction drift check failed", it) }
                     runCatching { checkAccessibilityGuard(tamperLogger) }
                         .onFailure { Log.w(TAG, "Accessibility guard check failed", it) }

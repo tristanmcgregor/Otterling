@@ -4,6 +4,8 @@ import android.content.Context
 import android.util.Log
 import app.otterling.data.AppDatabase
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /**
@@ -83,38 +85,46 @@ class AlertReporter(context: Context) {
      * without actually sending) rather than left stuck in the outbox forever -- the former is a
      * legacy entry from before the single-recipient Guardian era, the latter a partner removed
      * after the alert was already queued.
+     *
+     * Serialized process-wide via [flushMutex] (a companion-object lock, shared by every
+     * `AlertReporter` instance, not just this one) -- [report] can call this inline and a
+     * background loop (e.g. `ProtectionEnforcementService`) can call it on its own cadence at the
+     * same time; without this, two overlapping flushes could both read the same pending rows
+     * before either updates them, sending the same alert twice and burning the daily SMS cap.
      */
-    suspend fun flushOutbox() = withContext(Dispatchers.IO) {
-        SmsPermissionGranter.grantSendSms(appContext)
-        val pending = outboxDao.pending()
-        val currentNumbers = partnerSettings.partnerNumbers().toSet()
-        for (entry in pending) {
-            val destination = entry.recipientOverride
-            if (destination == null || destination !in currentNumbers) {
-                outboxDao.update(entry.copy(sent = true, lastAttemptMillis = System.currentTimeMillis()))
-                continue
-            }
-            if (!partnerSettings.isEnabled()) continue
+    suspend fun flushOutbox() = flushMutex.withLock {
+        withContext(Dispatchers.IO) {
+            SmsPermissionGranter.grantSendSms(appContext)
+            val pending = outboxDao.pending()
+            val currentNumbers = partnerSettings.partnerNumbers().toSet()
+            for (entry in pending) {
+                val destination = entry.recipientOverride
+                if (destination == null || destination !in currentNumbers) {
+                    outboxDao.update(entry.copy(sent = true, lastAttemptMillis = System.currentTimeMillis()))
+                    continue
+                }
+                if (!partnerSettings.isEnabled()) continue
 
-            if (!underDailyCap(partnerSettings.dailySentCount(destination))) {
-                maybeNotifyPartnerCapReached(destination)
-                continue
-            }
+                if (!underDailyCap(partnerSettings.dailySentCount(destination))) {
+                    maybeNotifyPartnerCapReached(destination)
+                    continue
+                }
 
-            val now = System.currentTimeMillis()
-            // Backoff: wait 2^attempt minutes after a failure (capped).
-            val backoffMs = (1L shl entry.attemptCount.coerceAtMost(6)) * 60_000L
-            if (entry.attemptCount > 0 && now - entry.lastAttemptMillis < backoffMs) continue
+                val now = System.currentTimeMillis()
+                // Backoff: wait 2^attempt minutes after a failure (capped).
+                val backoffMs = (1L shl entry.attemptCount.coerceAtMost(6)) * 60_000L
+                if (entry.attemptCount > 0 && now - entry.lastAttemptMillis < backoffMs) continue
 
-            val ok = sender.send(entry.body, destination)
-            if (ok) {
-                outboxDao.update(entry.copy(sent = true, lastAttemptMillis = now, attemptCount = entry.attemptCount + 1))
-                partnerSettings.incrementDailySentCount(destination)
-            } else {
-                outboxDao.update(entry.copy(lastAttemptMillis = now, attemptCount = entry.attemptCount + 1))
+                val ok = sender.send(entry.body, destination)
+                if (ok) {
+                    outboxDao.update(entry.copy(sent = true, lastAttemptMillis = now, attemptCount = entry.attemptCount + 1))
+                    partnerSettings.incrementDailySentCount(destination)
+                } else {
+                    outboxDao.update(entry.copy(lastAttemptMillis = now, attemptCount = entry.attemptCount + 1))
+                }
             }
+            outboxDao.deleteOldSent(System.currentTimeMillis() - 7L * 86_400_000L)
         }
-        outboxDao.deleteOldSent(System.currentTimeMillis() - 7L * 86_400_000L)
     }
 
     private fun shouldSms(severity: AlertSeverity): Boolean = when (severity) {
@@ -149,5 +159,10 @@ class AlertReporter(context: Context) {
 
     private companion object {
         const val TAG = "AlertReporter"
+
+        // Shared by every AlertReporter instance in the process (companion-object members are
+        // per-class, not per-instance) -- see flushOutbox()'s doc comment for why this needs to be
+        // process-wide, not per-instance.
+        val flushMutex = Mutex()
     }
 }

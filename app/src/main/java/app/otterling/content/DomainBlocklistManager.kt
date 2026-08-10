@@ -1,6 +1,7 @@
 package app.otterling.content
 
 import android.content.Context
+import android.util.Log
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
@@ -48,7 +49,18 @@ class DomainBlocklistManager(private val context: Context) {
         prefs.edit().putStringSet(KEY_SOURCES, urls).apply()
     }
 
-    /** Downloads and parses the configured hosts-format blocklist(s). Blocking -- call off the main thread. */
+    /**
+     * Downloads and parses the configured hosts-format blocklist(s). Blocking -- call off the main thread.
+     *
+     * These sources are third-party lists that legitimately change daily, so (unlike the app's own
+     * signed releases, which pin a fixed SHA-256 -- see `ApprovedUpdateManager`) there's no stable
+     * hash to pin here; the transport is plain system-CA-validated HTTPS. What this *can* still
+     * catch, without needing a fixed hash, is the specific failure mode that actually matters: a
+     * compromised source/proxy quietly serving a much shorter list to narrow this always-on
+     * fail-safe layer. A sudden large drop in domain count relative to the last known-good refresh
+     * is treated the same as the existing "parsed to zero" case below -- rejected, keeping whatever
+     * was already on disk, rather than silently trusted.
+     */
     fun refresh(): Result<Int> = runCatching {
         val domains = HashSet<String>()
         sourceUrls().forEach { url -> downloadHostsFile(url, domains) }
@@ -60,6 +72,19 @@ class DomainBlocklistManager(private val context: Context) {
         // whatever was already on disk.
         check(domains.isNotEmpty()) {
             "Refresh produced 0 domains (source format changed or empty response) -- keeping existing blocklist"
+        }
+        val previousCount = loadedDomains().size
+        if (previousCount >= MIN_BASELINE_FOR_SHRINK_CHECK && domains.size < previousCount * MIN_RETAINED_FRACTION) {
+            Log.w(
+                TAG,
+                "Refresh produced ${domains.size} domains, down from $previousCount " +
+                    "(< ${(MIN_RETAINED_FRACTION * 100).toInt()}% retained) -- " +
+                    "keeping existing blocklist rather than trusting a suspiciously large drop",
+            )
+            error(
+                "Refresh dropped from $previousCount to ${domains.size} domains -- " +
+                    "keeping existing blocklist",
+            )
         }
         blocklistFile.writeText(domains.joinToString("\n"))
         cachedDomains = domains
@@ -100,6 +125,11 @@ class DomainBlocklistManager(private val context: Context) {
     }
 
     companion object {
+        private const val TAG = "DomainBlocklistManager"
+        // Below this many previously-cached domains, a shrink is more likely a source genuinely
+        // having a small list (or a first-ever run) than tampering -- don't reject in that case.
+        private const val MIN_BASELINE_FOR_SHRINK_CHECK = 200
+        private const val MIN_RETAINED_FRACTION = 0.5
         private const val PREFS_NAME = "domain_blocklist_prefs"
         private const val KEY_LAST_UPDATED = "last_updated"
         private const val KEY_SOURCES = "source_urls"

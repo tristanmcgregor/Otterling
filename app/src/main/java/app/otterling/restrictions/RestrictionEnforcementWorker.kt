@@ -29,11 +29,11 @@ class RestrictionEnforcementWorker(context: Context, params: WorkerParameters) :
         if (!ProtectionController(applicationContext).isEnabled()) return Result.success()
         val restrictionsManager = DeviceRestrictionsManager(applicationContext)
         val tamperLogger = TamperEventLogger(applicationContext)
-        runCatching { restrictionsManager.detectDriftAndReapply(tamperLogger) }
+        runCatching { EnforcementCoordinator.runExclusive { restrictionsManager.detectDriftAndReapply(tamperLogger) } }
             .onFailure { Log.w(TAG, "Restriction drift check failed", it) }
-        runCatching { AppSuspensionManager(applicationContext).reapplyAll() }
+        runCatching { EnforcementCoordinator.runExclusive { AppSuspensionManager(applicationContext).reapplyAll() } }
             .onFailure { Log.w(TAG, "Blocked-app reapply failed", it) }
-        runCatching { AppUninstallGuard(applicationContext).reapplyAll() }
+        runCatching { EnforcementCoordinator.runExclusive { AppUninstallGuard(applicationContext).reapplyAll() } }
             .onFailure { Log.w(TAG, "Uninstall-protection reapply failed", it) }
         runCatching {
             AccessibilityGuard.reapplyAllowlist(applicationContext)
