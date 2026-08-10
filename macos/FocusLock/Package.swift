@@ -26,5 +26,14 @@ let package = Package(
             name: "focuslockctl",
             dependencies: ["FocusLockShared"]
         ),
+
+        // Independent LaunchDaemon whose only job is noticing FocusLockHelperd got unloaded (e.g.
+        // `sudo launchctl bootout`) and re-bootstrapping it -- detects and reports, doesn't
+        // prevent; see GUARDIAN_SETUP.md §5. Deliberately tiny: no daemon/enforcement logic of its
+        // own, so killing FocusLockHelperd can't also kill this.
+        .executableTarget(
+            name: "FocusLockWatchdog",
+            dependencies: ["FocusLockShared"]
+        ),
     ]
 )

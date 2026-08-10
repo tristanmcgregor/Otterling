@@ -1,4 +1,5 @@
 import Foundation
+import FocusLockShared
 
 /// Points every active network service's DNS at a cloud content-filter host (a Canopy-style
 /// AdGuard Home deployment -- the primary category filter, mirroring the Android app's
@@ -99,7 +100,7 @@ enum DNSEnforcer {
     /// per line, prefixing disabled services with `*` (which we skip -- nothing to enforce on an
     /// interface that isn't in use).
     private static func activeNetworkServices() -> [String] {
-        let output = run("/usr/sbin/networksetup", ["-listallnetworkservices"])
+        let output = ProcessRunner.runCapturingStdout("/usr/sbin/networksetup", ["-listallnetworkservices"])
         return output.split(separator: "\n")
             .map(String.init)
             .dropFirst()
@@ -107,27 +108,13 @@ enum DNSEnforcer {
     }
 
     private static func currentDNSServers(for service: String) -> [String] {
-        let output = run("/usr/sbin/networksetup", ["-getdnsservers", service])
+        let output = ProcessRunner.runCapturingStdout("/usr/sbin/networksetup", ["-getdnsservers", service])
         let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !trimmed.hasPrefix("There aren't any DNS Servers") else { return [] }
         return trimmed.split(separator: "\n").map(String.init)
     }
 
     private static func setDNSServers(_ servers: [String], for service: String) {
-        _ = run("/usr/sbin/networksetup", ["-setdnsservers", service] + servers)
-    }
-
-    private static func run(_ path: String, _ args: [String]) -> String {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: path)
-        process.arguments = args
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = FileHandle.nullDevice
-        guard (try? process.run()) != nil else { return "" }
-        // Read before waiting -- see CommandLineScanner for why the ordering matters.
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        return String(data: data, encoding: .utf8) ?? ""
+        ProcessRunner.runSilently("/usr/sbin/networksetup", ["-setdnsservers", service] + servers)
     }
 }

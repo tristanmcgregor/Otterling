@@ -45,6 +45,10 @@ final class EnforcementLoop {
     private var lastDNSCheckAt: Date?
     private let dnsCheckInterval: TimeInterval = 15
 
+    // LockProfileGuard also shells out (to `profiles show`); same reasoning, same cadence.
+    private var lastLockProfileCheckAt: Date?
+    private let lockProfileCheckInterval: TimeInterval = 15
+
     func start(stateStore: StateStore, interval: TimeInterval = 3) {
         self.stateStore = stateStore
         reapplyNow()
@@ -83,6 +87,12 @@ final class EnforcementLoop {
                 }
             } else {
                 self.lastDNSCheckAt = nil
+            }
+
+            let lockProfileNow = Date()
+            if self.lastLockProfileCheckAt == nil || lockProfileNow.timeIntervalSince(self.lastLockProfileCheckAt!) >= self.lockProfileCheckInterval {
+                LockProfileGuard.checkAndReportChanges()
+                self.lastLockProfileCheckAt = lockProfileNow
             }
 
             let siteBlockActive = !domainsToBlock.isEmpty

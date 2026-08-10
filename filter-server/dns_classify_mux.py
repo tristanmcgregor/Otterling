@@ -37,12 +37,14 @@ ordinary A-record lookups, but a real, named gap, not silently dropped).
 from __future__ import annotations
 
 import asyncio
+import http.client
+import ipaddress
 import logging
 import os
-import re
 import signal
+import socket
+import ssl
 import time
-import urllib.request
 
 import ai_classifier
 import domain_blocklist
@@ -123,22 +125,62 @@ class _ClassifyCache:
         self._entries[domain] = (verdict, time.time() + CLASSIFY_CACHE_TTL_SECONDS)
 
 
+def _resolve_public_ipv4(domain: str) -> str:
+    """Resolves `domain` and raises if it points at anything other than a public IPv4 address.
+
+    Every DNS query this mux sees comes from a household device -- without this check, a domain
+    an attacker controls (or a DNS-rebinding setup) could simply resolve to an internal Docker-
+    network host or a loopback/link-local address, and this fetch would happily connect to it.
+    Only IPv4 is considered (matching AdultBlocklistManager's own scope elsewhere in this project).
+    """
+    infos = socket.getaddrinfo(domain, 443, family=socket.AF_INET, type=socket.SOCK_STREAM)
+    if not infos:
+        raise ValueError(f"could not resolve {domain}")
+    ip = infos[0][4][0]
+    if not ipaddress.ip_address(ip).is_global:
+        raise ValueError(f"{domain} resolved to non-public address {ip}")
+    return ip
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    """Connects to a single, already-validated IP (never re-resolving `domain`, which would
+    reopen the same SSRF/DNS-rebinding gap `_resolve_public_ipv4` exists to close) while still
+    doing normal TLS hostname verification -- via SNI/`server_hostname` -- against the original
+    domain name, so a mismatched/invalid certificate still fails the connection as usual."""
+
+    def __init__(self, ip: str, domain: str, timeout: float):
+        super().__init__(ip, 443, timeout=timeout)
+        self._verify_hostname = domain
+
+    def connect(self):
+        sock = socket.create_connection((self.host, self.port), self.timeout)
+        context = ssl.create_default_context()
+        self.sock = context.wrap_socket(sock, server_hostname=self._verify_hostname)
+
+
 def _fetch_and_classify(domain: str) -> bool | None:
-    """Fetches the domain's homepage and runs it through the shared AI classifier. Blocking (plain
-    urllib), meant to be run via run_in_executor. Returns None on any failure so the caller fails
-    open -- same title/excerpt extraction mitm_nsfw_addon.py's response() does for HTML bodies."""
-    url = f"https://{domain}/"
+    """Fetches the domain's homepage and runs it through the shared AI classifier. Blocking
+    (plain http.client), meant to be run via run_in_executor. Returns None on any failure so the
+    caller fails open -- same title/excerpt extraction mitm_nsfw_addon.py's response() does for
+    HTML bodies. Redirects are deliberately not followed -- a page could otherwise redirect this
+    fetcher at an unvalidated target, reopening the same SSRF gap the IP pinning above closes."""
     try:
-        req = urllib.request.Request(url, headers={"user-agent": "otterling-dns-classifier"})
-        with urllib.request.urlopen(req, timeout=HOMEPAGE_FETCH_TIMEOUT_SECONDS) as resp:
+        ip = _resolve_public_ipv4(domain)
+        conn = _PinnedHTTPSConnection(ip, domain, timeout=HOMEPAGE_FETCH_TIMEOUT_SECONDS)
+        try:
+            conn.request(
+                "GET", "/",
+                headers={"Host": domain, "user-agent": "otterling-dns-classifier"},
+            )
+            resp = conn.getresponse()
             body = resp.read(200_000).decode("utf-8", errors="replace")
+        finally:
+            conn.close()
     except Exception as error:
         log.info("homepage fetch failed for %s: %s", domain, error)
         return None
-    title_match = re.search(r"<title[^>]*>(.*?)</title>", body, re.IGNORECASE | re.DOTALL)
-    title = title_match.group(1) if title_match else ""
-    excerpt = re.sub(r"<[^>]+>", " ", body)[: ai_classifier.CLASSIFY_EXCERPT_CHARS]
-    return ai_classifier.classify_with_ai(url, title, excerpt)
+    title, excerpt = ai_classifier.extract_title_and_excerpt(body)
+    return ai_classifier.classify_with_ai(f"https://{domain}/", title, excerpt)
 
 
 async def _query_upstream(loop: asyncio.AbstractEventLoop, data: bytes) -> bytes | None:
@@ -187,7 +229,10 @@ class _DnsMuxProtocol(asyncio.DatagramProtocol):
             log.warning("query handler error from %s: %s", addr, error)
 
     async def _handle_query(self, data: bytes, addr):
-        self.domains.refresh_if_stale()
+        loop = asyncio.get_running_loop()
+        # Blocking (up to ~40s on a real refresh, once/day) -- run off the event loop so it can't
+        # stall every other concurrent lookup on this single-threaded mux.
+        await loop.run_in_executor(None, self.domains.refresh_if_stale)
         domain = parse_query_domain(data)
         if not domain:
             await self._forward(data, addr)
@@ -206,7 +251,6 @@ class _DnsMuxProtocol(asyncio.DatagramProtocol):
             await self._forward(data, addr)
             return
 
-        loop = asyncio.get_running_loop()
         try:
             verdict = await asyncio.wait_for(
                 loop.run_in_executor(None, _fetch_and_classify, domain),

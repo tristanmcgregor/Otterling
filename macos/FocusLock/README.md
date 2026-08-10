@@ -28,7 +28,22 @@ focuslockctl (CLI, runs as you)  --XPC-->        |
                                                   +--> pf anchor (blocks DoH/DoT bypass; allowlists the cloud filter host)
                                                   +--> kills blocked processes on sight
                                                   +--> root-owned state file (you can't edit it directly)
+                                                  +--> LockProfileGuard: watches the lock profile,
+                                                  |    reports removal to filter-server /alerts/tamper
+                                                  +--> checked every ~20s by --> FocusLockWatchdog
+                                                       (separate LaunchDaemon; re-bootstraps
+                                                       FocusLockHelperd if it's ever unloaded,
+                                                       reports the recovery)
 ```
+
+A configuration profile (installed via `Scripts/install_lock_profile.command`, see
+[`GUARDIAN_SETUP.md`](GUARDIAN_SETUP.md) §6) adds a tamper *tripwire*, not a removal lock: it moves
+DNS onto a profile-managed encrypted resolver that can't be hand-edited via
+`networksetup`/System Settings without removing the whole profile first, and
+`LockProfileGuard`/`FocusLockWatchdog` report it if that profile or the daemon itself disappears.
+It is **not** effective against a local admin account trying to remove it -- macOS honors an
+admin's own password over the profile's `RemovalPasscode`. Read `GUARDIAN_SETUP.md` §6 before
+assuming otherwise.
 
 - **`FocusLockHelperd`** is a `LaunchDaemon` registered via `SMAppService`, so it starts at boot,
   restarts if killed, and owns the actual block state (`/Library/Application Support/FocusLock/state.json`,
@@ -61,6 +76,11 @@ focuslockctl (CLI, runs as you)  --XPC-->        |
 - There's no session or expiry: whatever's on the blocklist/protected list stays that way until
   the Guardian removes it, and DNS enforcement defaults to **on** for a fresh install (an existing
   install upgrading from an older build keeps whatever it already had).
+- **App updates**: `UpdateManager` checks an update manifest hourly (and on demand via the GUI or
+  `focuslockctl check-update`/`install-update`) and, on a newer version, verifies SHA-256 + a
+  pinned code-signing Team Identifier before installing -- same trust chain as the Android app's
+  `ApprovedUpdateManager`. See [`RELEASE.md`](RELEASE.md) for publishing a release (a manual/local
+  step for now -- no macOS build agent in the existing CI pipeline).
 
 ## Requirements
 
@@ -104,6 +124,12 @@ ps aux | grep FocusLockHelperd
 - `focuslockctl status` gives the same view from the terminal.
 - Adding to the blocklist is always allowed from any account and takes effect immediately and
   permanently; removing an entry requires the Guardian admin account (see `GUARDIAN_SETUP.md`).
+- After completing `GUARDIAN_SETUP.md` steps 1-4, run `Scripts/install_lock_profile.command` once
+  (while logged in as the Guardian) to set up the lock-profile tripwire -- see `GUARDIAN_SETUP.md`
+  §6 for exactly what it does and doesn't protect against before relying on it.
+- `focuslockctl check-update` / `focuslockctl install-update` (or the GUI's "App updates" section)
+  check/install against whatever `RELEASE.md`'s publish process last published -- automatic hourly
+  checks use the exact same path.
 - The downloaded adult-domain hosts list is applied automatically and unconditionally -- there's
   nothing to add for baseline NSFW blocking. Point DNS enforcement at your own cloud filter server
   (see [`filter-server/README.md`](../../filter-server/README.md)) for stronger, always-current
@@ -128,18 +154,29 @@ button fills both in for you from a file picker.
 ```
 Package.swift
 Sources/
-  FocusLockShared/   Models, XPC protocol, constants, admin-group check, XPC client, cloud filter reachability probe
-  FocusLockHelperd/  The daemon: state store, XPC listener, enforcement loop, DNS/pf/hosts enforcers, adult blocklist manager
-  FocusLock/         SwiftUI GUI app
+  FocusLockShared/    Models, XPC protocol, constants, admin-group check, XPC client, cloud filter
+                       reachability probe, TamperReporter (shared by the daemon and the watchdog)
+  FocusLockHelperd/   The daemon: state store, XPC listener, enforcement loop, DNS/pf/hosts
+                       enforcers, adult blocklist manager, LockProfileGuard, UpdateManager,
+                       UpdateCheckLoop
+  FocusLockWatchdog/  Independent LaunchDaemon: re-bootstraps FocusLockHelperd if unloaded
+  FocusLock/          SwiftUI GUI app
   focuslockctl/       CLI, same XPC surface as the GUI
-Scripts/build_app.sh  Build + assemble + codesign
+Scripts/build_app.sh              Build + assemble + codesign (both LaunchDaemons)
+Scripts/install_lock_profile.py   Provisions + hands off the lock profile to System Settings
+Scripts/publish_release.sh        Packages a signed build into a release manifest + zip
 GUARDIAN_SETUP.md      Account-split setup and its limits
+RELEASE.md             Publishing an update -- signing identity, manifest, the CI gap
 ```
 
 ## Known limitations
 
 - Not distributed/notarized -- it's signed with a free development certificate for personal use
   on your own machine(s), not for distribution to others.
+- The lock profile / `LockProfileGuard` / `FocusLockWatchdog` (see above) are a detection layer,
+  not a removal lock -- an admin account can always remove the profile (with their own password,
+  not the `RemovalPasscode`) or unload both LaunchDaemons with `sudo launchctl bootout`. They make
+  that get reported instead of silent; they don't and can't prevent it. See `GUARDIAN_SETUP.md` §6.
 - **No VPN lockdown** (unlike the Android app's always-on, locked-down `VpnFilterService`): macOS
   enforcement here is DNS + `/etc/hosts` + `pf`, all of which a VPN app can route around by sending
   its own DNS/traffic through an encrypted tunnel outside the system resolver entirely. `pf`'s
@@ -157,3 +194,9 @@ GUARDIAN_SETUP.md      Account-split setup and its limits
   user-installed apps in `/Applications`.
 - See `GUARDIAN_SETUP.md` for the deeper caveats (Recovery Mode, SIP, physical access) that no
   software running under an admin-controlled OS can fully close.
+- **App updates have no CI automation** -- see `RELEASE.md`'s "Closing the CI gap": the existing
+  AI-gated release host is Linux-only and can't build/sign a macOS `.app`, so publishing a release
+  is a manual/local step (`Scripts/publish_release.sh` + copying the output to the update host
+  yourself), not push-triggered like the Android app's releases. The on-device trust chain
+  (SHA-256 + pinned code-signing Team ID, refuses to install with no pin configured) is real and
+  independent of that gap -- it's the *publishing* automation that's missing, not the verification.

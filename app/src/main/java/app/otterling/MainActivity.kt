@@ -45,6 +45,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import app.otterling.admin.DeviceOwnerManager
+import app.otterling.alerts.MacTamperPollWorker
 import app.otterling.content.BlocklistRefreshWorker
 import app.otterling.data.ProtectedApp
 import app.otterling.knox.KnoxLicenseManager
@@ -70,6 +71,7 @@ import app.otterling.ui.BlockedWebsitesSettingsSection
 import app.otterling.ui.DashboardScreen
 import app.otterling.ui.HabitShareSettingsScreen
 import app.otterling.ui.InstalledAppInfo
+import app.otterling.ui.MacTamperAlertSection
 import app.otterling.ui.MindfulAppsSection
 import app.otterling.ui.OnboardingWizard
 import app.otterling.ui.PinLockScreen
@@ -216,6 +218,7 @@ class MainActivity : ComponentActivity() {
         RestrictionEnforcementWorker.enqueuePeriodic(applicationContext)
         BlocklistRefreshWorker.enqueuePeriodic(applicationContext)
         UpdateCheckWorker.enqueuePeriodic(applicationContext)
+        MacTamperPollWorker.enqueuePeriodic(applicationContext)
         setContent {
             FamilyGuardTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
@@ -276,6 +279,7 @@ class MainActivity : ComponentActivity() {
                         ) {
                             ProtectionControlSection()
                             AccountabilityPartnerSection(applicationContext)
+                            MacTamperAlertSection(applicationContext)
                             DeviceOwnerSection()
                             RestrictionsSection()
                             UninstallProtectionSection()

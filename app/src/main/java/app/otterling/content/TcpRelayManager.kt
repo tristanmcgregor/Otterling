@@ -66,7 +66,7 @@ class TcpRelayManager(
     private val scope: CoroutineScope,
     private val protect: (Socket) -> Boolean,
     private val writeToTun: suspend (ByteArray) -> Unit,
-    private val isBlockedDestination: (String) -> Boolean,
+    private val isBlockedDestination: (String, Int) -> Boolean,
     private val proxyConfig: ProxyConfig,
     private val resolveHostname: (String) -> String?,
     private val resolveOwnerUid: (String, Int, String, Int) -> Int? = { _, _, _, _ -> null },
@@ -174,7 +174,7 @@ class TcpRelayManager(
     }
 
     private suspend fun establish(connection: Connection, synPacket: IpPacket) {
-        if (isBlockedDestination(connection.key.dstIp)) {
+        if (isBlockedDestination(connection.key.dstIp, connection.key.dstPort)) {
             connections.remove(connection.key)
             writeToTun(rstFor(synPacket))
             return

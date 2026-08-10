@@ -53,9 +53,10 @@ import kotlinx.coroutines.sync.withLock
  * breaking everything else is to also relay everything else back out ourselves --
  * [TcpRelayManager]/[UdpRelayManager] do that: real destinations get a real (protected) socket
  * opened on this device and bytes are bridged transparently in both directions; only DNS (port 53),
- * the hardcoded DoH/DoT IPs, TCP 80/443 (proxied, not relayed directly, when the filter proxy is
- * on), and UDP 443/QUIC (dropped outright when the filter proxy is on, forcing HTTPS onto TCP so
- * it can't bypass the proxy over HTTP/3) get special treatment.
+ * a hardcoded list of known public DoH resolver IPs, DNS-over-TLS (port 853, blocked outright
+ * regardless of destination -- see [DOT_PORT]), TCP 80/443 (proxied, not relayed directly, when
+ * the filter proxy is on), and UDP 443/QUIC (dropped outright when the filter proxy is on, forcing
+ * HTTPS onto TCP so it can't bypass the proxy over HTTP/3) get special treatment.
  *
  * Registered as the device's mandatory VPN via [VpnFilterManager], which uses Device Owner's
  * `DevicePolicyManager.setAlwaysOnVpnPackage(..., lockdownEnabled = true)` -- once set, Android
@@ -250,7 +251,7 @@ class VpnFilterService : VpnService() {
                 Log.w(TAG, "Failed writing to tun", error)
             }
         }
-        val isBlockedDestination: (String) -> Boolean = { ip -> ip in KNOWN_DOH_IPS }
+        val isBlockedDestination: (String, Int) -> Boolean = { ip, port -> ip in KNOWN_DOH_IPS || port == DOT_PORT }
         val proxyEnabled = cloudFilterSettings.isProxyEnabled()
         val proxyConfig = ProxyConfig(
             enabled = proxyEnabled,
@@ -534,14 +535,28 @@ class VpnFilterService : VpnService() {
         // tight loop when the network genuinely isn't ready yet (e.g. right after boot).
         private const val RESTART_BACKOFF_MS = 3_000L
 
-        /** Public DoH/DoT resolver IPs -- refused (RST/dropped) so apps can't dodge filtering by
-         *  hardcoding their own DNS instead of using the (filtered) system resolver set above. */
+        /** Public DoH resolver IPs -- refused (RST/dropped) so apps can't dodge filtering by
+         *  hardcoding their own DNS instead of using the (filtered) system resolver set above.
+         *  Necessarily incomplete (hundreds of DoH endpoints exist beyond these well-known ones) --
+         *  when the filter proxy is on, DoH over 443 to *any* IP is still caught by the existing
+         *  "proxy every TCP 80/443 flow" behavior regardless of this list; this only matters when
+         *  the proxy is off. [DOT_PORT] below is the complete fix for DNS-over-TLS specifically,
+         *  since (unlike DoH sharing port 443 with ordinary HTTPS) blocking that port outright
+         *  carries no such caveat -- nothing else legitimately uses it. */
         private val KNOWN_DOH_IPS = setOf(
             "1.1.1.1", "1.0.0.1", // Cloudflare
             "8.8.8.8", "8.8.4.4", // Google
             "9.9.9.9", "149.112.112.112", // Quad9
             "208.67.222.222", "208.67.220.220", // OpenDNS
         )
+
+        /** Standard DNS-over-TLS port -- blocked outright regardless of destination IP, the same
+         *  way UDP 443/QUIC is blocked outright when the filter proxy is on (see class doc
+         *  comment). Unlike the DoH IP list above, this closes the DoT gap completely: no static
+         *  IP list can keep up with every DoT resolver that exists, but no legitimate non-DoT
+         *  traffic uses this port, so blocking it by port number has no such gap and no
+         *  false-positive risk. */
+        private const val DOT_PORT = 853
 
         private const val EXTRA_REESTABLISH = "reestablish"
 

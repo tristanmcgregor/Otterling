@@ -12,6 +12,11 @@ final class FocusLockViewModel: ObservableObject {
     @Published var cloudFilterHostText: String = ""
     @Published var cloudFilterTestResult: String?
     @Published var cloudFilterTesting = false
+    @Published var updateStatusText: String = ""
+    @Published var updateChecking = false
+    @Published var updateInstalling = false
+    @Published var updateAvailable = false
+    private var pendingUpdateManifest: UpdateManifest?
 
     private let client = FocusLockXPCClient()
     private var pollTask: Task<Void, Never>?
@@ -99,6 +104,44 @@ final class FocusLockViewModel: ObservableObject {
             let reachable = await CloudFilterProbe.testReachable(host: host)
             cloudFilterTestResult = reachable ? "Filter server reachable." : "Filter server unreachable."
             cloudFilterTesting = false
+        }
+    }
+
+    func checkForUpdate() {
+        updateChecking = true
+        updateStatusText = "Checking..."
+        updateAvailable = false
+        pendingUpdateManifest = nil
+        Task {
+            switch await client.checkForUpdate() {
+            case .upToDate:
+                updateStatusText = "Up to date (build \(FocusLockConstants.appVersionCode))."
+            case .updateAvailable(let manifest):
+                pendingUpdateManifest = manifest
+                updateAvailable = true
+                updateStatusText = "Update available: \(manifest.versionName)."
+            case .error(let message):
+                updateStatusText = "Check failed: \(message)"
+            case nil:
+                updateStatusText = "Could not reach FocusLockHelperd."
+            }
+            updateChecking = false
+        }
+    }
+
+    func installAvailableUpdate() {
+        guard pendingUpdateManifest != nil else { return }
+        updateInstalling = true
+        updateStatusText = "Downloading and verifying..."
+        Task {
+            switch await client.installAvailableUpdate() {
+            case .installedPendingRestart(let manifest):
+                updateStatusText = "Installed \(manifest.versionName) -- restarting the filter daemon now."
+                updateAvailable = false
+            case .rejected(let reason):
+                updateStatusText = "Install failed: \(reason)"
+                updateInstalling = false
+            }
         }
     }
 

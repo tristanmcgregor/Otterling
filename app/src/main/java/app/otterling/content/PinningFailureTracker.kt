@@ -2,6 +2,11 @@ package app.otterling.content
 
 import android.content.Context
 import android.util.Log
+import app.otterling.alerts.AlertReporter
+import app.otterling.alerts.AlertSeverity
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 /**
  * Watches for [TcpRelayManager] connections that look like a certificate-pinning rejection (see
@@ -23,10 +28,12 @@ import android.util.Log
  * which is unaffected either way (see [TcpRelayManager]/[MitmExemptManager]'s own docs).
  */
 class PinningFailureTracker(context: Context) {
-    private val exemptManager = MitmExemptManager(context.applicationContext)
-    private val packageManager = context.applicationContext.packageManager
+    private val appContext = context.applicationContext
+    private val exemptManager = MitmExemptManager(appContext)
+    private val packageManager = appContext.packageManager
     private val recentFailures = mutableMapOf<Int, MutableList<Long>>()
     private val lock = Any()
+    private val prefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
     /** Returns true if this call caused a *new* auto-exemption (caller should reestablish the
      *  tunnel so it takes effect on the next connection attempt). */
@@ -53,6 +60,24 @@ class PinningFailureTracker(context: Context) {
             return false
         }
 
+        // Any Play-Store-installable app can deliberately shape a few short HTTPS connections to
+        // match this heuristic and get itself auto-exempted from content filtering -- there's no
+        // stronger corroborating signal available at this layer (no visibility into the actual TLS
+        // alert). A per-install cap bounds how many packages this path can silently exempt before
+        // a Guardian has to look: a genuine broken-pinning case is rare enough that this ceiling
+        // should essentially never bind in practice, while a self-triggered abuse pattern hits it
+        // fast and then requires manual action instead of being able to repeat indefinitely.
+        val autoExemptCount = prefs.getInt(KEY_AUTO_EXEMPT_COUNT, 0)
+        if (autoExemptCount >= MAX_AUTO_EXEMPTIONS) {
+            Log.w(
+                TAG,
+                "Auto-exemption cap ($MAX_AUTO_EXEMPTIONS) reached -- refusing to auto-exempt " +
+                    "uid=$uid (${packages.joinToString()}); a Guardian must add it manually in " +
+                    "Settings if it's a genuine pinning break",
+            )
+            return false
+        }
+
         val alreadyExempt = exemptManager.exemptPackages()
         var addedAny = false
         for (pkg in packages) {
@@ -62,12 +87,37 @@ class PinningFailureTracker(context: Context) {
                 Log.i(TAG, "Auto-exempted $pkg (uid=$uid) from MITM after $FAILURE_THRESHOLD suspected pinning rejections")
             }
         }
+        if (addedAny) {
+            prefs.edit().putInt(KEY_AUTO_EXEMPT_COUNT, autoExemptCount + 1).apply()
+            notifyGuardian(packages)
+        }
         return addedAny
+    }
+
+    /** Best-effort, fire-and-forget -- a silent auto-exemption previously had no human-visible
+     *  signal at all; this at least lets a Guardian notice (and revert, in Settings) one that looks
+     *  like abuse rather than a genuine broken app, instead of only the cap above ever stopping it. */
+    private fun notifyGuardian(packages: Array<String>) {
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                AlertReporter(appContext).report(
+                    type = "mitm_auto_exempt",
+                    details = "Auto-exempted from content-filter MITM after repeated pinning-shaped " +
+                        "connection failures: ${packages.joinToString()}",
+                    severity = AlertSeverity.WARNING,
+                )
+            } catch (error: Exception) {
+                Log.w(TAG, "Failed to notify Guardian of auto-exemption", error)
+            }
+        }
     }
 
     private companion object {
         const val TAG = "PinningFailureTracker"
         const val WINDOW_MS = 120_000L
         const val FAILURE_THRESHOLD = 3
+        const val MAX_AUTO_EXEMPTIONS = 10
+        const val PREFS_NAME = "pinning_failure_tracker_prefs"
+        const val KEY_AUTO_EXEMPT_COUNT = "auto_exempt_count"
     }
 }

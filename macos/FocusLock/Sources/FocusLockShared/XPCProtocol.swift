@@ -43,6 +43,16 @@ import Foundation
     /// the calling account to be in the `admin` group, same asymmetry as disabling DNS enforcement
     /// outright.
     func setCloudFilterEnabled(_ enabled: Bool, reply: @escaping (Data) -> Void)
+
+    /// Always allowed, from any account -- checking/installing an update isn't a way to weaken
+    /// protection (the opposite, if anything), so it doesn't need the admin-group gate. See
+    /// `UpdateManager`. Reply is an encoded `UpdateCheckStatus`.
+    func checkForUpdate(reply: @escaping (Data) -> Void)
+    /// Re-checks (never trusts a manifest the caller might supply) then downloads/verifies/installs
+    /// if newer, and -- only on success -- restarts both LaunchDaemons a couple of seconds after
+    /// replying (enough time for this reply to actually reach the caller first). Reply is an
+    /// encoded `UpdateInstallResult`.
+    func installAvailableUpdate(reply: @escaping (Data) -> Void)
 }
 
 public enum FocusLockCodec {

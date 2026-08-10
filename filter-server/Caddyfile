@@ -33,6 +33,15 @@
 		file_server
 	}
 
+	# Lock-profile provisioning + tamper-report ingestion (see lockprofile_service.py). Its own
+	# container publishes to loopback only (see docker-compose.yml); Caddy is the only path in.
+	handle /lockprofile/* {
+		reverse_proxy 127.0.0.1:8091
+	}
+	handle /alerts/* {
+		reverse_proxy 127.0.0.1:8091
+	}
+
 	# AI review dashboard (filter-server/review-dashboard/) -- read-only view of the server-side
 	# release.sh pipeline's status/history, written to /var/lib/otterling/review/ (see
 	# review-dashboard/README.md for the JSON schema release.sh must write). Basic-auth protected:
@@ -66,6 +75,13 @@ http://192.168.0.254 {
 	handle_path /updates/* {
 		root * /srv/updates
 		file_server
+	}
+
+	handle /lockprofile/* {
+		reverse_proxy 127.0.0.1:8091
+	}
+	handle /alerts/* {
+		reverse_proxy 127.0.0.1:8091
 	}
 
 	@review path /review /review/* /review-data/*

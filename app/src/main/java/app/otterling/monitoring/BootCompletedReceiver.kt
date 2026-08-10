@@ -3,6 +3,7 @@ package app.otterling.monitoring
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import app.otterling.alerts.MacTamperPollWorker
 import app.otterling.content.BlocklistRefreshWorker
 import app.otterling.content.VpnFilterManager
 import app.otterling.restrictions.RestrictionEnforcementWorker
@@ -16,6 +17,7 @@ class BootCompletedReceiver : BroadcastReceiver() {
         RestrictionEnforcementWorker.enqueuePeriodic(context)
         BlocklistRefreshWorker.enqueuePeriodic(context)
         UpdateCheckWorker.enqueuePeriodic(context)
+        MacTamperPollWorker.enqueuePeriodic(context)
         VpnFilterManager(context).reapplyIfEnabled()
     }
 }

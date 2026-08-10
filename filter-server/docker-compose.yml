@@ -5,7 +5,12 @@ services:
     restart: unless-stopped
     ports:
       # Admin UI (AdGuard moves here after setup; keep it on 3000 — host firewall blocks docker→:80).
-      - "${ADMIN_UI_PORT:-3000}:3000/tcp"
+      # ADMIN_UI_BIND defaults to 0.0.0.0 (matches this project's prior behavior -- families reach
+      # this directly, not through Caddy, same "deliberately internet-reachable" reasoning as the
+      # mitmproxy service below) but is here, not hardcoded, specifically so the mitigation
+      # README.md's Firewall section recommends (restrict to the phone's IP / an allowlist) can be
+      # applied without editing this file -- same pattern dns-classifier's DNS_BIND already uses.
+      - "${ADMIN_UI_BIND:-0.0.0.0}:${ADMIN_UI_PORT:-3000}:3000/tcp"
       # No LAN-facing DNS port here anymore -- dns-classifier now holds it (below) and relays
       # here internally over Docker's own network (adguardhome:53). Parental control/Safe Search
       # and the blocklists configured in its own UI still apply to everything relayed through.
@@ -93,6 +98,26 @@ services:
     # fetches (its own domain-list refresh) from a plain Docker container on this same host, so
     # this container behaves the same way for its homepage-fetch/AI-classification calls.
     command: python3 dns_classify_mux.py
+
+  lockprofile:
+    image: python:3.12-slim
+    container_name: otterling-lockprofile
+    restart: unless-stopped
+    ports:
+      # Loopback-only -- reached through Caddy (see Caddyfile), never exposed directly. Same
+      # reasoning as the admin UI note in README.md's Firewall section.
+      - "127.0.0.1:${LOCKPROFILE_PORT:-8091}:8091/tcp"
+    volumes:
+      - ./lockprofile_service.py:/opt/otterling/lockprofile_service.py:ro
+      - ./lockprofile-data:/data
+    environment:
+      - LOCKPROFILE_TOKEN=${LOCKPROFILE_TOKEN:?set LOCKPROFILE_TOKEN in .env}
+      - LOCKPROFILE_LISTEN_PORT=8091
+      # Optional -- blank disables push notification, events still log to lockprofile-data/alerts/.
+      - NTFY_TOPIC=${NTFY_TOPIC:-}
+      - NTFY_SERVER=${NTFY_SERVER:-https://ntfy.sh}
+    working_dir: /opt/otterling
+    command: python3 lockprofile_service.py
 
   updates:
     image: caddy:alpine

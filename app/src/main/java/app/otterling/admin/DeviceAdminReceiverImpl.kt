@@ -8,6 +8,7 @@ import app.otterling.R
 import app.otterling.monitoring.ProtectionEnforcementService
 import app.otterling.restrictions.AccessibilityGuard
 import app.otterling.restrictions.DeviceRestrictionsManager
+import app.otterling.alerts.MacTamperPollWorker
 import app.otterling.restrictions.RestrictionEnforcementWorker
 import app.otterling.tamper.TamperEventLogger
 import app.otterling.updates.UpdateCheckWorker
@@ -25,6 +26,7 @@ class DeviceAdminReceiverImpl : DeviceAdminReceiver() {
         ProtectionEnforcementService.start(context)
         RestrictionEnforcementWorker.enqueuePeriodic(context)
         UpdateCheckWorker.enqueuePeriodic(context)
+        MacTamperPollWorker.enqueuePeriodic(context)
     }
 
     override fun onDisabled(context: Context, intent: Intent) {

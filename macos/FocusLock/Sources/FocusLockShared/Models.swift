@@ -55,6 +55,11 @@ public struct FocusLockState: Codable, Sendable {
     public var dnsEnforcementEnabled: Bool
     public var cloudFilterHost: String
     public var cloudFilterEnabled: Bool
+    /// Live status, not persisted config: whether `LockProfileGuard` last saw the lock profile
+    /// (see GUARDIAN_SETUP.md §5) installed. `XPCService.getStatus` overlays this from
+    /// `LockProfileGuard.lastKnownState` on every reply rather than trusting whatever value was
+    /// last written to state.json, since it can go stale the moment the profile is removed.
+    public var lockProfileInstalled: Bool
 
     public init(
         blockedApps: [BlockedApp] = [],
@@ -68,7 +73,8 @@ public struct FocusLockState: Codable, Sendable {
         // "off" is never silently flipped on by this change.
         dnsEnforcementEnabled: Bool = true,
         cloudFilterHost: String = FocusLockConstants.defaultCloudFilterHost,
-        cloudFilterEnabled: Bool = true
+        cloudFilterEnabled: Bool = true,
+        lockProfileInstalled: Bool = false
     ) {
         self.blockedApps = blockedApps
         self.blockedDomains = blockedDomains
@@ -76,6 +82,7 @@ public struct FocusLockState: Codable, Sendable {
         self.dnsEnforcementEnabled = dnsEnforcementEnabled
         self.cloudFilterHost = cloudFilterHost
         self.cloudFilterEnabled = cloudFilterEnabled
+        self.lockProfileInstalled = lockProfileInstalled
     }
 
     // Custom decode so a state.json written before `dnsEnforcementEnabled` (or these newer cloud
@@ -93,6 +100,7 @@ public struct FocusLockState: Codable, Sendable {
         dnsEnforcementEnabled = try container.decodeIfPresent(Bool.self, forKey: .dnsEnforcementEnabled) ?? false
         cloudFilterHost = try container.decodeIfPresent(String.self, forKey: .cloudFilterHost) ?? FocusLockConstants.defaultCloudFilterHost
         cloudFilterEnabled = try container.decodeIfPresent(Bool.self, forKey: .cloudFilterEnabled) ?? true
+        lockProfileInstalled = try container.decodeIfPresent(Bool.self, forKey: .lockProfileInstalled) ?? false
     }
 }
 

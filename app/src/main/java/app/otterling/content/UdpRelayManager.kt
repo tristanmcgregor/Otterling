@@ -25,7 +25,7 @@ class UdpRelayManager(
     private val scope: CoroutineScope,
     private val protect: (DatagramSocket) -> Boolean,
     private val writeToTun: suspend (ByteArray) -> Unit,
-    private val isBlockedDestination: (String) -> Boolean,
+    private val isBlockedDestination: (String, Int) -> Boolean,
 ) {
     private data class FlowKey(val srcIp: String, val srcPort: Int, val dstIp: String, val dstPort: Int)
 
@@ -46,7 +46,7 @@ class UdpRelayManager(
             scope.launch { send(existing, packet.payload) }
             return
         }
-        if (isBlockedDestination(key.dstIp)) return // silent drop -- same as the old known-DoH-IP behaviour
+        if (isBlockedDestination(key.dstIp, key.dstPort)) return // silent drop -- same as the old known-DoH-IP behaviour
 
         val socket = try {
             DatagramSocket().apply { soTimeout = IDLE_TIMEOUT_MS.toInt() }

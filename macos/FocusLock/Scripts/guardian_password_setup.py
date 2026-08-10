@@ -44,6 +44,7 @@ import pty
 import secrets
 import select
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -182,6 +183,20 @@ def delete_guardian() -> None:
 
 # --- Password reset (PTY-driven so the password never hits argv/logs) ---------
 
+def _wait_for_exit(pid: int, timeout_seconds: float) -> bool:
+    """Non-blocking wait for `pid` to exit, polled up to `timeout_seconds`. True if it exited."""
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        try:
+            done_pid, _ = os.waitpid(pid, os.WNOHANG)
+        except ChildProcessError:
+            return True  # already reaped
+        if done_pid == pid:
+            return True
+        time.sleep(0.2)
+    return False
+
+
 def password_authenticates(password: str) -> bool:
     """Ground truth for 'did the password actually change': can we log in with it?"""
     return subprocess.run(
@@ -252,10 +267,20 @@ def set_admin_password(new_password: str) -> tuple[bool, str]:
             os.close(fd)
         except OSError:
             pass
-    try:
-        os.waitpid(pid, 0)
-    except ChildProcessError:
-        pass
+    # Closing the PTY usually delivers EOF/SIGHUP and the child exits on its own, but a
+    # sysadminctl wedged on something else must never be allowed to hang this tool (and its
+    # one-time HTTP listener) forever -- escalate to SIGTERM, then SIGKILL, each bounded.
+    if not _wait_for_exit(pid, timeout_seconds=5):
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        if not _wait_for_exit(pid, timeout_seconds=3):
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            _wait_for_exit(pid, timeout_seconds=3)
 
     detail = bytes(captured).decode("utf-8", "replace")
     detail = detail.replace(new_password, "********").replace(current, "********")

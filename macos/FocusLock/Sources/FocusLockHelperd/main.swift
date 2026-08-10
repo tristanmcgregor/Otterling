@@ -12,6 +12,7 @@ listener.delegate = delegate
 listener.resume()
 
 EnforcementLoop.shared.start(stateStore: stateStore)
+UpdateCheckLoop.shared.start(stateStore: stateStore)
 
 FileHandle.standardError.write("FocusLockHelperd started, listening on \(FocusLockConstants.machServiceName)\n".data(using: .utf8)!)
 
