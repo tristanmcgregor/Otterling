@@ -5,7 +5,12 @@ services:
     restart: unless-stopped
     ports:
       # Admin UI (AdGuard moves here after setup; keep it on 3000 — host firewall blocks docker→:80).
-      - "${ADMIN_UI_PORT:-3000}:3000/tcp"
+      # ADMIN_UI_BIND defaults to 0.0.0.0 (matches this project's prior behavior -- families reach
+      # this directly, not through Caddy, same "deliberately internet-reachable" reasoning as the
+      # mitmproxy service below) but is here, not hardcoded, specifically so the mitigation
+      # README.md's Firewall section recommends (restrict to the phone's IP / an allowlist) can be
+      # applied without editing this file -- same pattern dns-classifier's DNS_BIND already uses.
+      - "${ADMIN_UI_BIND:-0.0.0.0}:${ADMIN_UI_PORT:-3000}:3000/tcp"
       # No LAN-facing DNS port here anymore -- dns-classifier now holds it (below) and relays
       # here internally over Docker's own network (adguardhome:53). Parental control/Safe Search
       # and the blocklists configured in its own UI still apply to everything relayed through.

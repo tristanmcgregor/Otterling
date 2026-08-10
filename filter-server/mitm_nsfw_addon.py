@@ -26,6 +26,7 @@ judgment a fixed keyword list can't. This only runs for pages that reach this th
 pages never do), and both outcomes are cached by exact host+path for a day, so repeat visits to
 the same page never re-pay the classification cost.
 """
+import asyncio
 import re
 import threading
 import time
@@ -98,6 +99,13 @@ BORDERLINE_PATTERNS = [
 
 ALLOW_CACHE_TTL_SECONDS = 24 * 60 * 60
 
+# Caps how much of a response body every regex below (title/og:description/keyword/borderline-
+# pattern matching) actually scans -- without this, an arbitrarily large HTML response gets
+# decoded and regex-matched in full on every request, an easy memory/CPU cost for a malicious or
+# just very large page. Real pages' <title>/<meta og:description> tags are always near the top;
+# this is generous enough that legitimate matching is unaffected.
+MAX_RESPONSE_BODY_CHARS = 300_000
+
 
 class _DenyCache:
     """Generic string-keyed deny cache -- callers decide the key's scope (whole host vs.
@@ -159,8 +167,12 @@ class NsfwFilter:
         )
         flow.metadata["otterling_blocked_reason"] = reason
 
-    def request(self, flow: http.HTTPFlow):
-        self.domains.refresh_if_stale()
+    async def request(self, flow: http.HTTPFlow):
+        # Blocking (up to ~40s on a real refresh, once/day) -- mitmproxy's hooks run on its own
+        # single-threaded event loop, same as every other flow, so this must not block inline the
+        # way a plain synchronous `def request` would (mitmproxy also supports async hooks, which
+        # is what makes this off-load possible without changing the calling convention).
+        await asyncio.get_running_loop().run_in_executor(None, self.domains.refresh_if_stale)
         host = flow.request.pretty_host.lower().rstrip(".")
         path_key = self._path_key(flow)
 
@@ -186,7 +198,7 @@ class NsfwFilter:
                 self._respond_blocked(flow, f"path-pattern:{pattern.pattern}")
                 return
 
-    def response(self, flow: http.HTTPFlow):
+    async def response(self, flow: http.HTTPFlow):
         if flow.response is None or flow.response.status_code == 403:
             return
         content_type = flow.response.headers.get("content-type", "")
@@ -196,20 +208,16 @@ class NsfwFilter:
             body = flow.response.get_text(strict=False) or ""
         except Exception:
             return
+        body = body[:MAX_RESPONSE_BODY_CHARS]
 
-        title_match = re.search(r"<title[^>]*>(.*?)</title>", body, re.IGNORECASE | re.DOTALL)
+        title, excerpt = ai_classifier.extract_title_and_excerpt(body)
         og_match = re.search(
             r'<meta[^>]+property=["\']og:description["\'][^>]+content=["\'](.*?)["\']',
             body,
             re.IGNORECASE,
         )
         haystack = " ".join(
-            part
-            for part in (
-                title_match.group(1) if title_match else "",
-                og_match.group(1) if og_match else "",
-            )
-            if part
+            part for part in (title, og_match.group(1) if og_match else "") if part
         ).lower()
         if not haystack:
             return
@@ -231,10 +239,12 @@ class NsfwFilter:
         if not any(pattern.search(body) for pattern in BORDERLINE_PATTERNS):
             return
 
-        title_text = title_match.group(1) if title_match else ""
-        excerpt = re.sub(r"<[^>]+>", " ", body)[: ai_classifier.CLASSIFY_EXCERPT_CHARS]
-        ctx.log.info(f"AI classifier: escalating {flow.request.pretty_url} (title={title_text!r})")
-        verdict = ai_classifier.classify_with_ai(flow.request.pretty_url, title_text, excerpt)
+        ctx.log.info(f"AI classifier: escalating {flow.request.pretty_url} (title={title!r})")
+        # Blocking (up to ANTHROPIC_TIMEOUT_SECONDS) -- same reasoning as the refresh_if_stale()
+        # off-load in request() above.
+        verdict = await asyncio.get_running_loop().run_in_executor(
+            None, ai_classifier.classify_with_ai, flow.request.pretty_url, title, excerpt
+        )
         if verdict is True:
             self.deny_cache.deny(path_key)
             self._respond_blocked(flow, "ai-classifier")

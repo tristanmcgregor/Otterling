@@ -86,6 +86,10 @@ FAMILY_DOH_URL = "https://family.cloudflare-dns.com/dns-query"
 
 MAX_BODY_BYTES = 16 * 1024
 
+# Keeps ALERTS_PATH from growing without bound -- see _rotate_alerts_if_needed().
+ALERTS_ROTATE_BYTES = 5 * 1024 * 1024
+ALERTS_ROTATE_KEEP_LINES = 2000
+
 _state_lock = threading.Lock()
 _alerts_lock = threading.Lock()
 
@@ -162,18 +166,72 @@ def build_mobileconfig(device_id: str) -> bytes:
     return plistlib.dumps(profile, fmt=plistlib.FMT_XML)
 
 
+def _max_existing_alert_id() -> int:
+    """O(n) scan of ALERTS_PATH -- only ever called once, the first time `_next_alert_id_locked`
+    runs after this service starts, to seed its counter. Every call after that is O(1)."""
+    if not os.path.exists(ALERTS_PATH):
+        return 0
+    max_id = 0
+    with open(ALERTS_PATH, "r", encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            max_id = max(max_id, event.get("id", 0))
+    return max_id
+
+
+def _next_alert_id_locked(state: dict) -> int:
+    """Returns the next alert id, persisting the counter in state.json (under `_state_lock`,
+    already held by the caller) instead of re-reading and counting every line of ALERTS_PATH on
+    every single tamper report -- that approach got slower as the log grew, this one doesn't.
+    Seeds itself from the log's existing max id exactly once so ids stay monotonic across the
+    upgrade from the old scheme (a phone mid-poll relies on ids never going backwards or repeating)."""
+    meta = state.setdefault("_meta", {})
+    next_id = meta.get("next_alert_id")
+    if next_id is None:
+        next_id = _max_existing_alert_id() + 1
+    meta["next_alert_id"] = next_id + 1
+    return next_id
+
+
+def _rotate_alerts_if_needed() -> None:
+    """Keeps ALERTS_PATH from growing without bound -- called (already under `_alerts_lock`) after
+    every append. `os.path.getsize` is O(1), so this is nearly free in the common case; the actual
+    rewrite only happens the rare times the size threshold is crossed."""
+    try:
+        size = os.path.getsize(ALERTS_PATH)
+    except OSError:
+        return
+    if size < ALERTS_ROTATE_BYTES:
+        return
+    with open(ALERTS_PATH, "r", encoding="utf-8") as fh:
+        lines = fh.readlines()
+    if len(lines) <= ALERTS_ROTATE_KEEP_LINES:
+        return
+    tmp_path = ALERTS_PATH + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as fh:
+        fh.writelines(lines[-ALERTS_ROTATE_KEEP_LINES:])
+    os.replace(tmp_path, ALERTS_PATH)
+
+
 def _append_alert(event: dict) -> dict:
-    """Assigns `id` (1-based, this event's position in the file) and appends. Returns the event
-    including that id -- callers that need it (the poll endpoint, ntfy) get it without a re-read."""
+    """Assigns `id` and appends. Returns the event including that id -- callers that need it (the
+    poll endpoint, ntfy) get it without a re-read."""
     os.makedirs(os.path.dirname(ALERTS_PATH), exist_ok=True)
+    with _state_lock:
+        state = _load_state()
+        event_id = _next_alert_id_locked(state)
+        _save_state(state)
+    event = {**event, "id": event_id}
     with _alerts_lock:
-        existing_count = 0
-        if os.path.exists(ALERTS_PATH):
-            with open(ALERTS_PATH, "r", encoding="utf-8") as fh:
-                existing_count = sum(1 for _ in fh)
-        event = {**event, "id": existing_count + 1}
         with open(ALERTS_PATH, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(event, sort_keys=True) + "\n")
+        _rotate_alerts_if_needed()
     return event
 
 
@@ -241,7 +299,12 @@ class Handler(BaseHTTPRequestHandler):
         return secrets.compare_digest(header[len(prefix):], TOKEN)
 
     def _read_json_body(self) -> dict | None:
-        length = int(self.headers.get("Content-Length", "0") or "0")
+        try:
+            length = int(self.headers.get("Content-Length", "0") or "0")
+        except ValueError:
+            # A non-numeric Content-Length used to raise here uncaught, killing this connection's
+            # handler thread instead of returning the 400 every other malformed-request path gets.
+            return None
         if length <= 0 or length > MAX_BODY_BYTES:
             return None
         try:
