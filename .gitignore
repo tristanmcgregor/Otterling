@@ -24,7 +24,7 @@ macos/FocusLock/.swiftpm/
 phone-apps.txt
 
 # Nested sibling checkouts / production mirrors — never tracked by this repo.
-TrittyBlocker-Playstore/
+Otterling-Playstore/
 Otterling - Production (DO NOT TOUCH)/
 
 # filter-server runtime data -- generated per-deployment, never committed (the mitmproxy CA in

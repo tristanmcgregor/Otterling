@@ -11,7 +11,7 @@ import android.content.Context
 class UpdateSettings(context: Context) {
     private val prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
-    /** e.g. "https://github.com/your-username/TrittyBlocker/issues/new" -- set once per family
+    /** e.g. "https://github.com/your-username/Otterling/issues/new" -- set once per family
      *  deployment, same idea as [app.otterling.content.CloudFilterSettings]'s host. */
     fun githubIssuesUrl(): String = prefs.getString(KEY_ISSUES_URL, "").orEmpty()
 
