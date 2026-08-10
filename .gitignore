@@ -3,6 +3,7 @@
 .idea/
 .kotlin/
 .claude/
+__pycache__/
 .cursor/*
 !.cursor/rules/
 !.cursor/rules/**

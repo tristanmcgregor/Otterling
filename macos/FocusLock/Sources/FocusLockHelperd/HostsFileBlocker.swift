@@ -53,17 +53,7 @@ enum HostsFileBlocker {
     }
 
     private static func flushDNSCache() {
-        run("/usr/bin/dscacheutil", ["-flushcache"])
-        run("/usr/bin/killall", ["-HUP", "mDNSResponder"])
-    }
-
-    private static func run(_ path: String, _ args: [String]) {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: path)
-        process.arguments = args
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        try? process.run()
-        process.waitUntilExit()
+        ProcessRunner.runSilently("/usr/bin/dscacheutil", ["-flushcache"])
+        ProcessRunner.runSilently("/usr/bin/killall", ["-HUP", "mDNSResponder"])
     }
 }

@@ -47,9 +47,20 @@ final class StateStore {
         save()
     }
 
+    /// Writes via a 0600 temp file + atomic replace, rather than `Data.write(.atomic)` followed by
+    /// a separate chmod -- the latter briefly creates the file under the process's default umask
+    /// (more permissive than intended) before the chmod call catches up.
     private func save() {
         let data = FocusLockCodec.encode(state)
-        try? data.write(to: fileURL, options: .atomic)
-        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
+        let fm = FileManager.default
+        let tmpURL = fileURL.appendingPathExtension("tmp-\(UUID().uuidString)")
+        guard fm.createFile(atPath: tmpURL.path, contents: data, attributes: [.posixPermissions: 0o600]) else { return }
+        do {
+            _ = try fm.replaceItemAt(fileURL, withItemAt: tmpURL, options: .usingNewMetadataOnly)
+        } catch {
+            // First-ever save, when fileURL doesn't exist yet for replaceItemAt to replace.
+            try? fm.moveItem(at: tmpURL, to: fileURL)
+            try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
+        }
     }
 }

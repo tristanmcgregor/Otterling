@@ -57,7 +57,11 @@ enum LockProfileGuard {
         guard (try? process.run()) != nil else { return lastKnownInstalled ?? false }
         process.waitUntilExit()
 
-        guard let data = FileManager.default.contents(atPath: tempPath) else { return false }
+        // A transient failure of `/usr/bin/profiles` itself (not the profile actually being
+        // removed) must not read as "profile absent" -- that would fire a false tamper alert and
+        // flap lastKnownInstalled. Only trust the output when the tool actually succeeded.
+        guard process.terminationStatus == 0 else { return lastKnownInstalled ?? false }
+        guard let data = FileManager.default.contents(atPath: tempPath) else { return lastKnownInstalled ?? false }
         // Substring search deliberately over raw bytes, not a parsed plist -- see doc comment.
         return data.range(of: Data(FocusLockConstants.lockProfileIdentifier.utf8)) != nil
     }

@@ -90,7 +90,7 @@ enum UpdateManager {
     /// `KeepAlive=true` in this daemon's own plist relaunches it immediately, this time running the
     /// new `FocusLockHelperd` binary that was just swapped into place. Never returns.
     static func restartAfterInstall() -> Never {
-        _ = run("/bin/launchctl", ["kickstart", "-k", "system/\(FocusLockConstants.watchdogBundleIdentifier)"])
+        ProcessRunner.runSilently("/bin/launchctl", ["kickstart", "-k", "system/\(FocusLockConstants.watchdogBundleIdentifier)"])
         exit(0)
     }
 
@@ -105,7 +105,13 @@ enum UpdateManager {
             semaphore.signal()
         }
         task.resume()
-        _ = semaphore.wait(timeout: .now() + 15)
+        if semaphore.wait(timeout: .now() + 15) == .timedOut {
+            // Cancel rather than let the task keep running and its completion handler fire (and
+            // write into `body`) after this function has already returned -- an unbounded-lifetime
+            // connection otherwise leaks on every hung update host, checked hourly.
+            task.cancel()
+            return nil
+        }
         guard let body else { return nil }
         return try? JSONDecoder().decode(UpdateManifest.self, from: body)
     }
@@ -128,7 +134,10 @@ enum UpdateManager {
             }
         }
         task.resume()
-        _ = semaphore.wait(timeout: .now() + 120)
+        if semaphore.wait(timeout: .now() + 120) == .timedOut {
+            task.cancel()
+            return false
+        }
         return succeeded
     }
 
@@ -141,8 +150,7 @@ enum UpdateManager {
     }
 
     private static func unzip(zipPath: String, into destinationDir: String) -> Bool {
-        let (status, _) = runCapturingOutput("/usr/bin/unzip", ["-q", zipPath, "-d", destinationDir])
-        return status == 0
+        ProcessRunner.run("/usr/bin/unzip", ["-q", zipPath, "-d", destinationDir]).status == 0
     }
 
     /// Two checks, both required: a structural signature-validity check (`codesign --verify`,
@@ -150,10 +158,11 @@ enum UpdateManager {
     /// Team Identifier equals the pinned one -- catches a validly-signed bundle signed by the
     /// *wrong* party, which `--verify` alone would happily accept).
     private static func verifyCodeSignature(appPath: String, pinnedTeamID: String) -> Bool {
-        let (verifyStatus, _) = runCapturingOutput("/usr/bin/codesign", ["--verify", "--deep", "--strict", appPath])
-        guard verifyStatus == 0 else { return false }
+        guard ProcessRunner.run("/usr/bin/codesign", ["--verify", "--deep", "--strict", appPath]).status == 0 else {
+            return false
+        }
 
-        let (_, detailsOutput) = runCapturingOutput("/usr/bin/codesign", ["-dv", "--verbose=4", appPath])
+        let detailsOutput = ProcessRunner.run("/usr/bin/codesign", ["-dv", "--verbose=4", appPath]).output
         for line in detailsOutput.split(separator: "\n") where line.hasPrefix("TeamIdentifier=") {
             let teamID = line.dropFirst("TeamIdentifier=".count).trimmingCharacters(in: .whitespaces)
             return teamID == pinnedTeamID
@@ -188,25 +197,5 @@ enum UpdateManager {
         }
         try? fm.removeItem(atPath: backupPath)
         return true
-    }
-
-    // MARK: - Process helpers
-
-    @discardableResult
-    private static func run(_ path: String, _ args: [String]) -> Int32 {
-        runCapturingOutput(path, args).status
-    }
-
-    private static func runCapturingOutput(_ path: String, _ args: [String]) -> (status: Int32, output: String) {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: path)
-        process.arguments = args
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
-        guard (try? process.run()) != nil else { return (-1, "failed to launch \(path)") }
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        return (process.terminationStatus, String(data: data, encoding: .utf8) ?? "")
     }
 }

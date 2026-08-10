@@ -47,6 +47,13 @@ final class XPCService: NSObject, FocusLockXPCProtocol {
             reply(FocusLockCodec.encode(FocusLockResult.denied("Empty domain")))
             return
         }
+        // Trimming only strips leading/trailing whitespace -- an embedded newline (e.g.
+        // "x\n1.2.3.4 icloud.com") would otherwise become extra, attacker-chosen lines once this
+        // value is written into root-owned /etc/hosts. Require plain hostname characters only.
+        guard HostnameValidator.isValidHostname(normalized) else {
+            reply(FocusLockCodec.encode(FocusLockResult.denied("Invalid domain")))
+            return
+        }
         stateStore.mutate { state in
             if !state.blockedDomains.contains(normalized) {
                 state.blockedDomains.append(normalized)
@@ -140,6 +147,13 @@ final class XPCService: NSObject, FocusLockXPCProtocol {
     }
 
     func setCloudFilterHost(_ host: String, reply: @escaping (Data) -> Void) {
+        // Repointing the cloud filter host is equivalent to defeating it (an unfiltered or
+        // malicious host is one edit away) -- gated the same as disabling it outright, not left
+        // open the way *adding* a block is.
+        guard isCallerAdmin() else {
+            reply(FocusLockCodec.encode(FocusLockResult.denied("Only the Guardian admin account can change the cloud filter host.")))
+            return
+        }
         let normalized = host.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalized.isEmpty else {
             reply(FocusLockCodec.encode(FocusLockResult.denied("Empty host")))
@@ -186,6 +200,12 @@ final class XPCService: NSObject, FocusLockXPCProtocol {
     }
 
     func installAvailableUpdate(reply: @escaping (Data) -> Void) {
+        // Installing (as opposed to just checking) restarts the daemon/watchdog and swaps the
+        // running app bundle -- gated the same as the other state-changing "remove/disable" calls.
+        guard isCallerAdmin() else {
+            reply(FocusLockCodec.encode(UpdateInstallResult.rejected("Only the Guardian admin account can install an update.")))
+            return
+        }
         DispatchQueue.global().async {
             let host = self.stateStore.snapshot().cloudFilterHost
             // Never trusts a manifest the caller might supply -- re-checks against the real host.

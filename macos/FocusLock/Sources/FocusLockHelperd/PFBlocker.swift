@@ -105,14 +105,7 @@ enum PFBlocker {
         try? pfConfContent.write(toFile: tempPath, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(atPath: tempPath) }
 
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/sbin/pfctl")
-        process.arguments = ["-n", "-f", tempPath]
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        try? process.run()
-        process.waitUntilExit()
-        return process.terminationStatus == 0
+        return ProcessRunner.runSilently("/sbin/pfctl", ["-n", "-f", tempPath]) == 0
     }
 
     private static func reload() {
@@ -120,17 +113,7 @@ enum PFBlocker {
             FileHandle.standardError.write("[pf] current /etc/pf.conf fails validation, not reloading\n".data(using: .utf8)!)
             return
         }
-        run("/sbin/pfctl", ["-f", pfConfPath])
-        run("/sbin/pfctl", ["-E"])
-    }
-
-    private static func run(_ path: String, _ args: [String]) {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: path)
-        process.arguments = args
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        try? process.run()
-        process.waitUntilExit()
+        ProcessRunner.runSilently("/sbin/pfctl", ["-f", pfConfPath])
+        ProcessRunner.runSilently("/sbin/pfctl", ["-E"])
     }
 }
