@@ -54,17 +54,19 @@ class CustomBlocklistManager(context: Context) {
     }
 
     /**
-     * Blocks YouTube Shorts out of the box on a fresh install by seeding it as a normal (removable)
-     * custom blocklist entry. Runs at most once per install -- [KEY_DEFAULTS_SEEDED] guards it so a
-     * parent removing the rule later doesn't have it silently reappear.
+     * Blocks YouTube Shorts out of the box by merging it into whatever custom blocklist entries
+     * already exist -- not just on a bare-empty install, since most installs already have at least
+     * one entry by the time this ships. Runs at most once ever -- [KEY_DEFAULTS_SEEDED] guards it so
+     * a parent removing the rule later doesn't have it silently reappear.
      */
     private fun seedDefaultsIfNeeded() {
         if (prefs.getBoolean(KEY_DEFAULTS_SEEDED, false)) return
-        val editor = prefs.edit().putBoolean(KEY_DEFAULTS_SEEDED, true)
-        if (!prefs.contains(KEY_ENTRIES) && !prefs.contains(KEY_DOMAINS)) {
-            editor.putStringSet(KEY_ENTRIES, DEFAULT_ENTRIES)
-        }
-        editor.apply()
+        val merged = entries().map { it.display() }.toSet() + DEFAULT_ENTRIES
+        prefs.edit()
+            .putBoolean(KEY_DEFAULTS_SEEDED, true)
+            .putStringSet(KEY_ENTRIES, merged)
+            .remove(KEY_DOMAINS)
+            .apply()
     }
 
     fun entries(): List<BlocklistEntry> =
