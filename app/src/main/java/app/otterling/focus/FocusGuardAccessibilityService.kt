@@ -14,7 +14,6 @@ import app.otterling.content.CustomBlocklistManager
 import app.otterling.content.UrlPathBlockEnforcer
 import app.otterling.tamper.TamperEventLogger
 import app.otterling.monitoring.ProtectionController
-import app.otterling.ui.appLabel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -302,7 +301,7 @@ class FocusGuardAccessibilityService : AccessibilityService() {
         runCatching {
             AlertReporter(applicationContext).report(
                 type = "WATCHED_APP",
-                details = "Opened ${appLabel(applicationContext, packageName)}",
+                details = "Opened $packageName",
                 severity = AlertSeverity.WARNING,
                 debounceKey = "WATCHED_APP|$packageName",
             )
@@ -345,7 +344,7 @@ class FocusGuardAccessibilityService : AccessibilityService() {
             runCatching {
                 AlertReporter(applicationContext).report(
                     type = "TRIGGER_WORD",
-                    details = "\"$hit\" seen in ${appLabel(applicationContext, packageName)}",
+                    details = "\"$hit\" seen in $packageName",
                     severity = AlertSeverity.WARNING,
                     debounceKey = "TRIGGER_WORD|$hit|$packageName",
                 )

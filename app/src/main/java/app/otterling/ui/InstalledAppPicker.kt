@@ -40,20 +40,6 @@ data class InstalledAppInfo(
  * updated) are excluded to keep the list manageable; pre-installed apps that have since been
  * updated (Chrome, Play Store, etc.) are kept.
  */
-/**
- * Resolves a single package's display name (e.g. "YouTube") without the cost of listing every
- * installed app -- used for alert text, where we have one package name in hand and want it
- * human-readable rather than raw (e.g. "app.morphe.android.youtube"). Falls back to the package
- * name itself if it can't be resolved (uninstalled since, or a component/package Android hides).
- */
-fun appLabel(context: Context, packageName: String): String = try {
-    val packageManager = context.packageManager
-    val info = packageManager.getApplicationInfo(packageName, 0)
-    info.loadLabel(packageManager).toString()
-} catch (_: PackageManager.NameNotFoundException) {
-    packageName
-}
-
 fun loadInstalledApps(context: Context): List<InstalledAppInfo> {
     val packageManager = context.packageManager
     val ownPackage = context.packageName
