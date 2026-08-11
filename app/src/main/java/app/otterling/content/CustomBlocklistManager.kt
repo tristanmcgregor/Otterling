@@ -49,6 +49,24 @@ data class BlocklistEntry(
 class CustomBlocklistManager(context: Context) {
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
+    init {
+        seedDefaultsIfNeeded()
+    }
+
+    /**
+     * Blocks YouTube Shorts out of the box on a fresh install by seeding it as a normal (removable)
+     * custom blocklist entry. Runs at most once per install -- [KEY_DEFAULTS_SEEDED] guards it so a
+     * parent removing the rule later doesn't have it silently reappear.
+     */
+    private fun seedDefaultsIfNeeded() {
+        if (prefs.getBoolean(KEY_DEFAULTS_SEEDED, false)) return
+        val editor = prefs.edit().putBoolean(KEY_DEFAULTS_SEEDED, true)
+        if (!prefs.contains(KEY_ENTRIES) && !prefs.contains(KEY_DOMAINS)) {
+            editor.putStringSet(KEY_ENTRIES, DEFAULT_ENTRIES)
+        }
+        editor.apply()
+    }
+
     fun entries(): List<BlocklistEntry> =
         prefs.getStringSet(KEY_ENTRIES, null)
             ?.mapNotNull { parseStored(it) }
@@ -100,6 +118,8 @@ class CustomBlocklistManager(context: Context) {
         private const val PREFS_NAME = "custom_blocklist_prefs"
         private const val KEY_DOMAINS = "domains" // legacy domain-only set
         private const val KEY_ENTRIES = "entries"
+        private const val KEY_DEFAULTS_SEEDED = "defaults_seeded"
+        private val DEFAULT_ENTRIES = setOf("youtube.com/shorts")
 
         /**
          * Accepts a bare domain, a domain+path (`youtube.com/shorts`), or a full URL. Path+query
