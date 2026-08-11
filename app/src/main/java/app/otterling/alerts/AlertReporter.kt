@@ -3,6 +3,9 @@ package app.otterling.alerts
 import android.content.Context
 import android.util.Log
 import app.otterling.data.AppDatabase
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -66,16 +69,20 @@ class AlertReporter(context: Context) {
 
     /** Sends a test SMS to every configured partner number; returns how many succeeded. */
     suspend fun sendTestSmsToPartner(): Int = withContext(Dispatchers.IO) {
-        SmsPermissionGranter.grantSendSms(appContext)
         var successCount = 0
         for (number in partnerSettings.partnerNumbers()) {
-            val ok = sender.send("Otterling: test alert — SMS reporting is working.", number)
-            if (ok) {
-                partnerSettings.incrementDailySentCount(number)
-                successCount++
-            }
+            if (sendTestSms(number)) successCount++
         }
         successCount
+    }
+
+    /** Sends a test SMS to a single partner number; returns whether it was confirmed sent. */
+    suspend fun sendTestSms(number: String): Boolean = withContext(Dispatchers.IO) {
+        SmsPermissionGranter.grantSendSms(appContext)
+        val body = "Otterling Report — Test Alert: SMS reporting is working (${timestamp()})."
+        val ok = sender.send(body, number)
+        if (ok) partnerSettings.incrementDailySentCount(number)
+        ok
     }
 
     /**
@@ -143,7 +150,8 @@ class AlertReporter(context: Context) {
         if (partnerSettings.wasCapNotifiedToday(number)) return
         if (number.isBlank()) return
         val ok = sender.send(
-            "Otterling: daily SMS cap (${AccountabilityPartnerSettings.DAILY_SMS_CAP}) reached; further alerts logged only.",
+            "Otterling Report — Daily Limit Reached: ${AccountabilityPartnerSettings.DAILY_SMS_CAP} " +
+                "alerts sent today; further activity is still logged (${timestamp()}).",
             number,
         )
         if (ok) {
@@ -152,13 +160,30 @@ class AlertReporter(context: Context) {
         }
     }
 
+    /**
+     * Builds the SMS body in the style of a standalone accountability-app report: a plain-English
+     * event label (not the internal `type` code), the detail, and a timestamp -- e.g.
+     * `Otterling Report — Trigger Word Alert: "sex" seen in YouTube (3:45 PM)`. Raw package names
+     * never reach this text; callers pass a human-readable app label in [details] already.
+     */
     private fun formatBody(type: String, details: String): String {
-        val raw = "Otterling: $type — $details"
+        val label = EVENT_LABELS[type] ?: type.lowercase().replace('_', ' ')
+            .replaceFirstChar { it.uppercase() }
+        val raw = "Otterling Report — $label: $details (${timestamp()})"
         return if (raw.length <= 300) raw else raw.take(297) + "..."
     }
 
+    private fun timestamp(): String = TIME_FORMAT.format(Date())
+
     private companion object {
         const val TAG = "AlertReporter"
+
+        val TIME_FORMAT = SimpleDateFormat("h:mm a", Locale.getDefault())
+
+        val EVENT_LABELS = mapOf(
+            "TRIGGER_WORD" to "Trigger Word Alert",
+            "WATCHED_APP" to "Watched App Alert",
+        )
 
         // Shared by every AlertReporter instance in the process (companion-object members are
         // per-class, not per-instance) -- see flushOutbox()'s doc comment for why this needs to be

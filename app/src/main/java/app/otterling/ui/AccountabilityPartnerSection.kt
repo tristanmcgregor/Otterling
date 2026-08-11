@@ -8,7 +8,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -106,7 +105,8 @@ fun AccountabilityPartnerSection(context: Context) {
                                 val sender = GuardianSmsSender(context)
                                 goingSilentNumbers.forEach { number ->
                                     sender.send(
-                                        "Otterling: accountability partner alerts were just turned off on this device.",
+                                        "Otterling Report — Alerts Disabled: accountability partner " +
+                                            "alerts were just turned off on this device.",
                                         number,
                                     )
                                 }
@@ -159,12 +159,25 @@ fun AccountabilityPartnerSection(context: Context) {
                     style = MaterialTheme.typography.bodySmall,
                 )
                 TextButton(onClick = {
+                    scope.launch {
+                        val ok = withContext(Dispatchers.IO) {
+                            SmsPermissionGranter.grantSendSms(context)
+                            reporter.sendTestSms(num)
+                        }
+                        status = if (ok) "Test SMS sent to $num" else "Test SMS to $num failed (check SIM / permission)"
+                        refresh++
+                    }
+                }) {
+                    Text("Test")
+                }
+                TextButton(onClick = {
                     // Same reasoning as disabling the master switch -- notify this specific
                     // number before it's removed, since it's the last chance to reach it.
                     scope.launch {
                         withContext(Dispatchers.IO) {
                             GuardianSmsSender(context).send(
-                                "Otterling: you've been removed from accountability alerts on this device.",
+                                "Otterling Report — Removed: you've been removed from accountability " +
+                                    "alerts on this device.",
                                 num,
                             )
                         }
@@ -247,25 +260,6 @@ fun AccountabilityPartnerSection(context: Context) {
                     Text("Remove")
                 }
             }
-        }
-
-        OutlinedButton(
-            onClick = {
-                scope.launch {
-                    SmsPermissionGranter.grantSendSms(context)
-                    val count = reporter.sendTestSmsToPartner()
-                    status = if (count > 0) {
-                        "Test SMS sent to $count partner(s)"
-                    } else {
-                        "Test SMS failed (check numbers / SIM / permission)"
-                    }
-                    refresh++
-                }
-            },
-            modifier = Modifier.fillMaxWidth(),
-            enabled = numbers.isNotEmpty(),
-        ) {
-            Text("Send test SMS")
         }
 
         if (status.isNotBlank()) {
