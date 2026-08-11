@@ -56,17 +56,18 @@ class CustomBlocklistManager(context: Context) {
     /**
      * Blocks YouTube Shorts out of the box by merging it into whatever custom blocklist entries
      * already exist -- not just on a bare-empty install, since most installs already have at least
-     * one entry by the time this ships. Runs at most once ever -- [KEY_DEFAULTS_SEEDED] guards it so
-     * a parent removing the rule later doesn't have it silently reappear.
+     * one entry by the time this ships. Re-checked on every construction (cheap, idempotent) rather
+     * than gated by a single one-time flag: an earlier version of this method set a "seeded" flag
+     * unconditionally even when it skipped adding the entry, which left already-updated installs
+     * permanently un-seeded. [KEY_REMOVED_DEFAULTS] is what actually makes removal stick -- a
+     * default that's in there is never re-added.
      */
     private fun seedDefaultsIfNeeded() {
-        if (prefs.getBoolean(KEY_DEFAULTS_SEEDED, false)) return
-        val merged = entries().map { it.display() }.toSet() + DEFAULT_ENTRIES
-        prefs.edit()
-            .putBoolean(KEY_DEFAULTS_SEEDED, true)
-            .putStringSet(KEY_ENTRIES, merged)
-            .remove(KEY_DOMAINS)
-            .apply()
+        val removedDefaults = prefs.getStringSet(KEY_REMOVED_DEFAULTS, emptySet()).orEmpty()
+        val current = entries().map { it.display() }.toSet()
+        val missing = DEFAULT_ENTRIES - current - removedDefaults
+        if (missing.isEmpty()) return
+        prefs.edit().putStringSet(KEY_ENTRIES, current + missing).remove(KEY_DOMAINS).apply()
     }
 
     fun entries(): List<BlocklistEntry> =
@@ -101,7 +102,12 @@ class CustomBlocklistManager(context: Context) {
             ?: displayOrInput.trim().lowercase(Locale.US)
         val current = entries().map { it.display() }.toSet()
         if (key !in current) return false
-        prefs.edit().putStringSet(KEY_ENTRIES, current - key).remove(KEY_DOMAINS).apply()
+        val editor = prefs.edit().putStringSet(KEY_ENTRIES, current - key).remove(KEY_DOMAINS)
+        if (key in DEFAULT_ENTRIES) {
+            val removedDefaults = prefs.getStringSet(KEY_REMOVED_DEFAULTS, emptySet()).orEmpty()
+            editor.putStringSet(KEY_REMOVED_DEFAULTS, removedDefaults + key)
+        }
+        editor.apply()
         return true
     }
 
@@ -120,7 +126,7 @@ class CustomBlocklistManager(context: Context) {
         private const val PREFS_NAME = "custom_blocklist_prefs"
         private const val KEY_DOMAINS = "domains" // legacy domain-only set
         private const val KEY_ENTRIES = "entries"
-        private const val KEY_DEFAULTS_SEEDED = "defaults_seeded"
+        private const val KEY_REMOVED_DEFAULTS = "removed_defaults" // defaults a parent has explicitly removed
         private val DEFAULT_ENTRIES = setOf("youtube.com/shorts")
 
         /**
