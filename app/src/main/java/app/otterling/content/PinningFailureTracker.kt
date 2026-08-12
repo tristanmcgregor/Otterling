@@ -2,11 +2,6 @@ package app.otterling.content
 
 import android.content.Context
 import android.util.Log
-import app.otterling.alerts.AlertReporter
-import app.otterling.alerts.AlertSeverity
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 
 /**
  * Watches for [TcpRelayManager] connections that look like a certificate-pinning rejection (see
@@ -89,27 +84,8 @@ class PinningFailureTracker(context: Context) {
         }
         if (addedAny) {
             prefs.edit().putInt(KEY_AUTO_EXEMPT_COUNT, autoExemptCount + 1).apply()
-            notifyGuardian(packages)
         }
         return addedAny
-    }
-
-    /** Best-effort, fire-and-forget -- a silent auto-exemption previously had no human-visible
-     *  signal at all; this at least lets a Guardian notice (and revert, in Settings) one that looks
-     *  like abuse rather than a genuine broken app, instead of only the cap above ever stopping it. */
-    private fun notifyGuardian(packages: Array<String>) {
-        CoroutineScope(Dispatchers.IO).launch {
-            try {
-                AlertReporter(appContext).report(
-                    type = "mitm_auto_exempt",
-                    details = "Auto-exempted from content-filter MITM after repeated pinning-shaped " +
-                        "connection failures: ${packages.joinToString()}",
-                    severity = AlertSeverity.WARNING,
-                )
-            } catch (error: Exception) {
-                Log.w(TAG, "Failed to notify Guardian of auto-exemption", error)
-            }
-        }
     }
 
     private companion object {
