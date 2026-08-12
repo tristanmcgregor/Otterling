@@ -28,7 +28,15 @@ class MitmExemptManager(context: Context) {
 
     fun exemptPackages(): Set<String> = prefs.getStringSet(KEY_PACKAGES, emptySet())?.toSet() ?: emptySet()
 
+    /**
+     * No-ops for [NEVER_EXEMPT_PACKAGES] -- unlike YouTube/banking, which only ever talk to their
+     * own pinned endpoints, a general browser can be pointed at literally any site, so exempting
+     * one from HTTPS interception would exempt all web browsing done through it, defeating content
+     * filtering entirely. Enforced here (not just hidden from the app picker in
+     * [app.otterling.ui.VpnFilterSection]) so nothing that calls this directly can add it either.
+     */
     fun add(packageName: String) {
+        if (packageName in NEVER_EXEMPT_PACKAGES) return
         prefs.edit().putStringSet(KEY_PACKAGES, exemptPackages() + packageName).apply()
     }
 
@@ -68,6 +76,14 @@ class MitmExemptManager(context: Context) {
             "org.westpac.bank", // Westpac
             "au.com.up.money", // Up (neobank)
             "au.com.suncorp.rsa.suncorpsecured", // Suncorp secure banking app
+        )
+
+        /** Chrome (all channels) can never be added to [exemptPackages] -- see [add]. */
+        val NEVER_EXEMPT_PACKAGES = setOf(
+            "com.android.chrome",
+            "com.chrome.beta",
+            "com.chrome.dev",
+            "com.chrome.canary",
         )
 
         private const val PREFS_NAME = "vpn_bypass_prefs"

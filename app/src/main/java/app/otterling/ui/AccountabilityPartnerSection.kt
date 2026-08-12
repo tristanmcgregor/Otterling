@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Groups
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -56,6 +57,7 @@ fun AccountabilityPartnerSection(context: Context) {
     var watched by remember { mutableStateOf<Set<String>>(emptySet()) }
     var status by remember { mutableStateOf("") }
     var showPicker by remember { mutableStateOf(false) }
+    var showTriggerWordsDialog by remember { mutableStateOf(false) }
     var installedApps by remember { mutableStateOf<List<InstalledAppInfo>>(emptyList()) }
 
     LaunchedEffect(refresh) {
@@ -75,6 +77,38 @@ fun AccountabilityPartnerSection(context: Context) {
                 detectionSettings.addWatchedPackage(app.packageName)
                 showPicker = false
                 refresh++
+            },
+        )
+    }
+
+    // Kept behind an explicit dialog, not inline in the main list, so the trigger-word list isn't
+    // sitting in plain sight the moment someone opens Settings.
+    if (showTriggerWordsDialog) {
+        var draft by remember { mutableStateOf(triggers) }
+        AlertDialog(
+            onDismissRequest = { showTriggerWordsDialog = false },
+            title = { Text("Trigger words") },
+            text = {
+                OutlinedTextField(
+                    value = draft,
+                    onValueChange = { draft = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("One per line") },
+                    minLines = 5,
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    detectionSettings.setTriggerWords(draft)
+                    triggers = draft
+                    status = "Trigger words saved"
+                    showTriggerWordsDialog = false
+                }) {
+                    Text("Save")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showTriggerWordsDialog = false }) { Text("Cancel") }
             },
         )
     }
@@ -184,21 +218,18 @@ fun AccountabilityPartnerSection(context: Context) {
             }
         }
 
-        OutlinedTextField(
-            value = triggers,
-            onValueChange = { triggers = it },
-            modifier = Modifier.fillMaxWidth(),
-            label = { Text("Trigger words (one per line)") },
-            minLines = 3,
-        )
-        Button(
-            onClick = {
-                detectionSettings.setTriggerWords(triggers)
-                status = "Trigger words saved"
-            },
+        val triggerWordCount = triggers.lines().count { it.isNotBlank() }
+        OutlinedButton(
+            onClick = { showTriggerWordsDialog = true },
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text("Save trigger words")
+            Text(
+                if (triggerWordCount > 0) {
+                    "Trigger words ($triggerWordCount configured)"
+                } else {
+                    "Trigger words (none configured)"
+                },
+            )
         }
 
         Row(

@@ -216,17 +216,32 @@ class VpnFilterService : VpnService() {
     }
 
     /**
-     * Only Otterling's own package is excluded from the tunnel entirely -- so its own update
-     * checks/settings probes don't hairpin through the filter proxy (and so `protect()` isn't
-     * required for UI HTTPS). Certificate-pinned apps ([MitmExemptManager]) are handled
-     * differently: they stay *inside* the tunnel (see [runPacketLoop]/[TcpRelayManager]) so their
-     * DNS is still filtered, rather than being fully excluded here.
+     * Otterling's own package, plus [FULLY_VPN_EXEMPT_PACKAGES], are excluded from the tunnel
+     * entirely. Own package: so its own update checks/settings probes don't hairpin through the
+     * filter proxy (and so `protect()` isn't required for UI HTTPS). Certificate-pinned apps
+     * ([MitmExemptManager]) are handled differently from both of these: they stay *inside* the
+     * tunnel (see [runPacketLoop]/[TcpRelayManager]) so their DNS is still filtered, just not
+     * MITM-proxied -- that's sufficient for apps that only make normal internet HTTPS requests.
+     * [FULLY_VPN_EXEMPT_PACKAGES] is for apps that also need traffic types a MITM exemption can't
+     * fix: Android Auto's wireless projection depends on local-network discovery (mDNS/multicast)
+     * and a raw peer-to-peer socket to the head unit, neither of which is a filtered internet
+     * flow -- capturing it into the tun device via the blanket 0.0.0.0/0 route breaks the
+     * connection outright, regardless of any per-flow MITM exemption. There's no content-filtering
+     * loss worth preserving here (a car head unit isn't a place a kid browses to porn), so a full
+     * bypass is the right tradeoff, unlike Chrome (see [MitmExemptManager]).
      */
     private fun applyBypassApps(builder: Builder) {
         try {
             builder.addDisallowedApplication(packageName)
         } catch (error: PackageManager.NameNotFoundException) {
             Log.w(TAG, "Failed to exclude own package from VPN", error)
+        }
+        FULLY_VPN_EXEMPT_PACKAGES.forEach { pkg ->
+            try {
+                builder.addDisallowedApplication(pkg)
+            } catch (error: PackageManager.NameNotFoundException) {
+                // Not installed on this device -- fine, nothing to exempt.
+            }
         }
     }
 
@@ -506,6 +521,11 @@ class VpnFilterService : VpnService() {
         private const val TAG = "VpnFilterService"
         private const val CHANNEL_ID = "vpn_content_filter_v2"
         private const val NOTIFICATION_ID = 1002
+        // See applyBypassApps: apps whose traffic can't be fixed by a per-flow MITM exemption
+        // (local-network discovery, peer-to-peer sockets) get excluded from the tunnel entirely.
+        private val FULLY_VPN_EXEMPT_PACKAGES = setOf(
+            "com.google.android.projection.gearhead", // Android Auto
+        )
         private const val VIRTUAL_IP = "10.111.222.1"
         private const val DNS_SERVER_IP = "10.111.222.2"
         private const val DNS_PORT = 53

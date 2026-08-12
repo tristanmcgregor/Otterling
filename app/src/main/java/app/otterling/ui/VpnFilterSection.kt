@@ -90,7 +90,7 @@ fun VpnFilterSection(context: Context) {
 
     if (showExemptPicker) {
         AppPickerDialog(
-            apps = installedApps,
+            apps = installedApps.filter { it.packageName !in MitmExemptManager.NEVER_EXEMPT_PACKAGES },
             onDismiss = { showExemptPicker = false },
             onSelect = { app ->
                 exemptManager.add(app.packageName)
@@ -357,7 +357,9 @@ fun VpnFilterSection(context: Context) {
                 "to them -- but their HTTPS traffic skips content inspection, so pages/paths within " +
                 "these apps aren't keyword-filtered. YouTube and common AU banking apps are " +
                 "exempted by default; YouTube Shorts and other path-based rules still apply " +
-                "separately via accessibility, since those don't need HTTPS interception at all.",
+                "separately via accessibility, since those don't need HTTPS interception at all. " +
+                "Chrome can't be added here -- exempting a general browser would exempt all web " +
+                "browsing through it.",
             style = MaterialTheme.typography.bodySmall,
         )
         Button(

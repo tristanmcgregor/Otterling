@@ -221,7 +221,7 @@ fun DashboardScreen(context: Context, onOpenSettings: () -> Unit) {
                 }
                 data != null -> {
                     val snapshot = data!!
-                    ProtectionStatus(snapshot)
+                    ProtectionStatus(context, snapshot) { refresh++ }
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         Button(onClick = { showRuleWizard = true }, modifier = Modifier.weight(1f)) {
                             Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -270,8 +270,11 @@ fun DashboardScreen(context: Context, onOpenSettings: () -> Unit) {
 }
 
 @Composable
-private fun ProtectionStatus(data: DashboardData) {
+private fun ProtectionStatus(context: Context, data: DashboardData, onRestored: () -> Unit) {
     val good = data.isDeviceOwner
+    val someOff = data.isDeviceOwner && data.activeRestrictions < data.totalRestrictions
+    val scope = rememberCoroutineScope()
+    var restoring by remember { mutableStateOf(false) }
     val container = if (good) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.errorContainer
     val onContainer = if (good) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onErrorContainer
     val badge = if (good) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.error
@@ -283,34 +286,59 @@ private fun ProtectionStatus(data: DashboardData) {
         contentColor = onContainer,
         shadowElevation = 2.dp,
     ) {
-        Row(
-            modifier = Modifier.padding(20.dp),
-            horizontalArrangement = Arrangement.spacedBy(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(48.dp)
-                    .clip(CircleShape)
-                    .background(badge),
-                contentAlignment = Alignment.Center,
+        Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Icon(Icons.Default.Shield, contentDescription = null, tint = onBadge)
+                Box(
+                    modifier = Modifier
+                        .size(48.dp)
+                        .clip(CircleShape)
+                        .background(badge),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(Icons.Default.Shield, contentDescription = null, tint = onBadge)
+                }
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        if (good) "Protected" else "Setup required",
+                        style = MaterialTheme.typography.titleLarge,
+                    )
+                    Text(
+                        if (good) {
+                            "${data.activeRestrictions} of ${data.totalRestrictions} tamper protections active"
+                        } else {
+                            "Device Owner isn't active. Open Settings to finish setup."
+                        },
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = onContainer.copy(alpha = 0.8f),
+                    )
+                }
             }
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(
-                    if (good) "Protected" else "Setup required",
-                    style = MaterialTheme.typography.titleLarge,
-                )
-                Text(
-                    if (good) {
-                        "${data.activeRestrictions} of ${data.totalRestrictions} tamper protections active"
-                    } else {
-                        "Device Owner isn't active. Open Settings to finish setup."
+            // No-PIN escape hatch: only ever restores what's already configured (via
+            // DeviceRestrictionsManager.detectDriftAndReapply, which reapplies the parent's saved
+            // desired state) -- it can turn a drifted-off protection back on but has no path to turn
+            // anything off, so it's safe to expose without the Settings PIN.
+            if (someOff) {
+                Button(
+                    onClick = {
+                        restoring = true
+                        scope.launch {
+                            withContext(Dispatchers.IO) {
+                                runCatching {
+                                    DeviceRestrictionsManager(context)
+                                        .detectDriftAndReapply(TamperEventLogger(context))
+                                }
+                            }
+                            restoring = false
+                            onRestored()
+                        }
                     },
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = onContainer.copy(alpha = 0.8f),
-                )
+                    enabled = !restoring,
+                ) {
+                    Text(if (restoring) "Restoring…" else "Turn protection back on")
+                }
             }
         }
     }
