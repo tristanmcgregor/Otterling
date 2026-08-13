@@ -88,12 +88,25 @@ class PinningFailureTracker(context: Context) {
         return addedAny
     }
 
-    private companion object {
-        const val TAG = "PinningFailureTracker"
-        const val WINDOW_MS = 120_000L
-        const val FAILURE_THRESHOLD = 3
+    /** How many auto-exemptions have been used, out of [MAX_AUTO_EXEMPTIONS] -- surfaced in
+     *  Settings so a Guardian can tell *why* a new pinned app stopped getting auto-exempted
+     *  (previously this cap had no visibility at all: it just silently stopped working, logging
+     *  only to logcat). */
+    fun autoExemptCount(): Int = prefs.getInt(KEY_AUTO_EXEMPT_COUNT, 0)
+
+    /** Frees up the cap again, e.g. once a Guardian has reviewed the apps it already auto-exempted
+     *  (still visible/removable individually in Settings' exempt list either way). Doesn't touch
+     *  [exemptManager]'s list itself -- this only resets how many *more* auto-exemptions can happen. */
+    fun resetAutoExemptCount() {
+        prefs.edit().putInt(KEY_AUTO_EXEMPT_COUNT, 0).apply()
+    }
+
+    companion object {
         const val MAX_AUTO_EXEMPTIONS = 10
-        const val PREFS_NAME = "pinning_failure_tracker_prefs"
-        const val KEY_AUTO_EXEMPT_COUNT = "auto_exempt_count"
+        private const val TAG = "PinningFailureTracker"
+        private const val WINDOW_MS = 120_000L
+        private const val FAILURE_THRESHOLD = 3
+        private const val PREFS_NAME = "pinning_failure_tracker_prefs"
+        private const val KEY_AUTO_EXEMPT_COUNT = "auto_exempt_count"
     }
 }

@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.dp
 import app.otterling.content.CloudFilterSettings
 import app.otterling.content.DomainBlocklistManager
 import app.otterling.content.MitmExemptManager
+import app.otterling.content.PinningFailureTracker
 import app.otterling.content.VpnFilterManager
 import app.otterling.content.VpnFilterService
 import java.text.DateFormat
@@ -41,6 +42,7 @@ fun VpnFilterSection(context: Context) {
     val vpnManager = remember { VpnFilterManager(context) }
     val blocklistManager = remember { DomainBlocklistManager(context) }
     val exemptManager = remember { MitmExemptManager(context) }
+    val pinningFailureTracker = remember { PinningFailureTracker(context) }
     val cloudFilterSettings = remember { CloudFilterSettings(context) }
 
     var refreshTrigger by remember { mutableIntStateOf(0) }
@@ -51,6 +53,7 @@ fun VpnFilterSection(context: Context) {
     var busy by remember { mutableStateOf(false) }
     var statusMessage by remember { mutableStateOf("") }
     var exemptPackages by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var autoExemptCount by remember { mutableIntStateOf(0) }
     var installedApps by remember { mutableStateOf<List<InstalledAppInfo>>(emptyList()) }
     var showExemptPicker by remember { mutableStateOf(false) }
     var cloudHost by remember { mutableStateOf("") }
@@ -72,6 +75,7 @@ fun VpnFilterSection(context: Context) {
         domainCount = blocklistManager.domainCount()
         lastUpdated = blocklistManager.lastUpdatedMillis().takeIf { it > 0 }
         exemptPackages = exemptManager.exemptPackages()
+        autoExemptCount = pinningFailureTracker.autoExemptCount()
         cloudHost = cloudFilterSettings.host()
         cloudPort = cloudFilterSettings.port().toString()
         cloudEnabled = cloudFilterSettings.isEnabled()
@@ -374,6 +378,26 @@ fun VpnFilterSection(context: Context) {
             },
         ) {
             Text("Add exempt app")
+        }
+        Text(
+            "Automatic exemptions used: $autoExemptCount/${PinningFailureTracker.MAX_AUTO_EXEMPTIONS}" +
+                if (autoExemptCount >= PinningFailureTracker.MAX_AUTO_EXEMPTIONS) {
+                    " -- cap reached, a newly pinned app won't be auto-added until this is reset " +
+                        "(you can still add one manually above)"
+                } else {
+                    ""
+                },
+            style = MaterialTheme.typography.bodySmall,
+        )
+        if (autoExemptCount > 0) {
+            OutlinedButton(
+                onClick = {
+                    pinningFailureTracker.resetAutoExemptCount()
+                    autoExemptCount = 0
+                },
+            ) {
+                Text("Reset automatic-exemption count")
+            }
         }
         if (exemptPackages.isEmpty()) {
             Text("No apps exempted.", style = MaterialTheme.typography.bodySmall)

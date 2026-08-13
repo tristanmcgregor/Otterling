@@ -3,6 +3,7 @@ package app.otterling.content
 import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Context
+import android.os.Build
 import android.util.Log
 import app.otterling.monitoring.ProtectionController
 import app.otterling.admin.DeviceAdminReceiverImpl
@@ -87,7 +88,7 @@ class VpnFilterManager(private val context: Context) {
         // receiver on Android 12+), we must NOT let that abort the always-on registration, or the
         // VPN silently never comes back after a restart.
         val registered = try {
-            dpm.setAlwaysOnVpnPackage(adminComponent, context.packageName, true)
+            registerAlwaysOnVpn(dpm)
             suppressConflictingPrivateDns()
             true
         } catch (error: SecurityException) {
@@ -153,6 +154,30 @@ class VpnFilterManager(private val context: Context) {
         return cleared
     }
 
+    /**
+     * Under Device Owner lockdown, [VpnFilterService]'s own `Builder.addDisallowedApplication`
+     * exclusions (see its `applyBypassApps`) are NOT honored for network access -- Android
+     * deliberately ignores a locked-down VPN app's own opinion of who it lets bypass itself
+     * (otherwise a compromised VPN app could punch holes in the lockdown). An app excluded that
+     * way ends up with no network path at all instead of a real bypass -- exactly why Android Auto
+     * stayed broken even after being added to [VpnFilterService.FULLY_VPN_EXEMPT_PACKAGES]. The
+     * only way to actually bypass a locked-down always-on VPN is
+     * [DevicePolicyManager]'s own `lockdownAllowlist` parameter (API 29+); on API 28 there's no
+     * such mechanism, so lockdown exclusions genuinely can't be granted there.
+     */
+    private fun registerAlwaysOnVpn(dpm: DevicePolicyManager) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            dpm.setAlwaysOnVpnPackage(
+                adminComponent,
+                context.packageName,
+                true,
+                VpnFilterService.FULLY_VPN_EXEMPT_PACKAGES,
+            )
+        } else {
+            dpm.setAlwaysOnVpnPackage(adminComponent, context.packageName, true)
+        }
+    }
+
     private fun suppressConflictingPrivateDns() {
         val currentHost = privateDnsFilterManager.currentHost() ?: return
         prefs.edit().putString(KEY_SAVED_PRIVATE_DNS_HOST, currentHost).apply()
@@ -189,7 +214,7 @@ class VpnFilterManager(private val context: Context) {
             val current = dpm.getAlwaysOnVpnPackage(adminComponent)
             if (current != context.packageName || !isLockdownEnabled()) {
                 Log.w(TAG, "Always-on VPN drifted (was $current, lockdown=${isLockdownEnabled()}) -- re-registering")
-                dpm.setAlwaysOnVpnPackage(adminComponent, context.packageName, true)
+                registerAlwaysOnVpn(dpm)
                 suppressConflictingPrivateDns()
                 // Same reasoning as DeviceRestrictionsManager.detectDriftAndReapply -- this used
                 // to silently fix always-on VPN drift with only a Log.w, unlike the equivalent

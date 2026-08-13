@@ -523,7 +523,9 @@ class VpnFilterService : VpnService() {
         private const val NOTIFICATION_ID = 1002
         // See applyBypassApps: apps whose traffic can't be fixed by a per-flow MITM exemption
         // (local-network discovery, peer-to-peer sockets) get excluded from the tunnel entirely.
-        private val FULLY_VPN_EXEMPT_PACKAGES = setOf(
+        // Not private: [VpnFilterManager] also needs this set, as the DPM lockdown allowlist --
+        // see that class for why Builder.addDisallowedApplication alone isn't sufficient here.
+        val FULLY_VPN_EXEMPT_PACKAGES = setOf(
             "com.google.android.projection.gearhead", // Android Auto
         )
         private const val VIRTUAL_IP = "10.111.222.1"
