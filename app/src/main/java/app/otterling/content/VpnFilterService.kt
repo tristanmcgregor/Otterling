@@ -284,10 +284,12 @@ class VpnFilterService : VpnService() {
             runCatching { packageManager.getPackageUid(pkg, 0) }.getOrNull()
         }
         val ownerUidResolver = AppUidResolver(applicationContext)
-        // Auto-exempts an app the first time it shows a suspected pinning rejection, closing the
-        // gap a static seeded list can't: an app nobody thought to add in advance (see the Morphe
-        // YouTube/HotDoc gaps) still ends up working without a Guardian having to notice and add it
-        // manually. See PinningFailureTracker/PinningFailureHeuristic for the actual signal.
+        // Auto-exempts an app after a few suspected pinning rejections within a short window,
+        // closing the gap a static seeded list can't: an app nobody thought to add in advance (see
+        // the Morphe YouTube/HotDoc gaps) still ends up working without a Guardian having to notice
+        // and add it manually. See PinningFailureTracker/PinningFailureHeuristic for the actual
+        // signal, and PinningFailureTracker's own doc for the persistence bug that used to stop
+        // this from ever firing in practice.
         val pinningFailureTracker = PinningFailureTracker(applicationContext)
 
         val tcpRelay = TcpRelayManager(

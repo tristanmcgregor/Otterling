@@ -5,28 +5,27 @@ import android.util.Log
 
 /**
  * Watches for [TcpRelayManager] connections that look like a certificate-pinning rejection (see
- * [PinningFailureHeuristic]) and adds the app to [MitmExemptManager] automatically the moment one
- * is seen -- no Guardian has to notice an app is broken and go find the exempt-list setting
- * themselves, and no waiting on repeated failures either: a single pinned app that shows a user
- * "can't connect to server" once has already failed for real (see [PinningFailureHeuristic] for
- * why that one connection's shape is trusted). This is the whole point: the static seeded list
- * only covers apps someone thought to add in advance (see the Morphe YouTube fork gap found via
- * live-device testing, and the HotDoc gap found the same way); this closes that gap for every app,
- * seeded or not, on first occurrence.
+ * [PinningFailureHeuristic]) and, once the same app has shown several of them inside a short
+ * window, adds it to [MitmExemptManager] automatically -- no Guardian has to notice an app is
+ * broken and go find the exempt-list setting themselves. This closes the gap a static seeded list
+ * can't: an app nobody thought to add in advance (see the Morphe YouTube fork gap and the HotDoc
+ * gap, both found via live-device testing) still ends up working, without lowering the bar enough
+ * that a single short-but-legitimate request could trip it (see [PinningFailureHeuristic]'s doc
+ * for why one match alone isn't trusted).
  *
- * Acting on the very first match (previously this required 3 occurrences inside a rolling 2-minute
- * window) also sidesteps a real bug that window had: the count lived only in this class's
- * in-memory map, which is thrown away and rebuilt fresh every time [VpnFilterService] reestablishes
- * the tunnel (a new [PinningFailureTracker] is constructed each generation) -- something that
- * happens on far more than just pinning-driven rebuilds (any Settings change, network handover,
- * etc.). In practice a real pinned app's failures were often spread across several tunnel
- * generations and never accumulated to 3 within any single one, so the auto-exempt path silently
- * never fired for it.
+ * The root-cause bug this class used to have: the per-uid failure count lived only in an
+ * in-memory map, which was thrown away and rebuilt empty every time [VpnFilterService]
+ * reestablished the tunnel (a new [PinningFailureTracker] is constructed each generation) --
+ * something that happens on far more than just pinning-driven rebuilds (any Settings change,
+ * network handover, etc.). In practice a real pinned app's failures were often spread across
+ * several tunnel generations and never accumulated to [FAILURE_THRESHOLD] within any single one,
+ * so the auto-exempt path silently never fired for it. Fixed by persisting each uid's recent
+ * failure timestamps in [prefs] instead of an in-memory field, so they survive across tracker
+ * instances and only expire via [WINDOW_MS] itself.
  *
  * A false positive here silently reduces content filtering for that one app -- undesirable, but
  * not a fail-open of the tunnel/DNS layer, which is unaffected either way (see
- * [TcpRelayManager]/[MitmExemptManager]'s own docs); see [PinningFailureHeuristic]'s doc for why a
- * single match is trusted rather than requiring corroboration.
+ * [TcpRelayManager]/[MitmExemptManager]'s own docs).
  */
 class PinningFailureTracker(context: Context) {
     private val appContext = context.applicationContext
@@ -66,13 +65,24 @@ class PinningFailureTracker(context: Context) {
             return false
         }
 
+        val recentFailures = recordAndPruneFailureTimes(uid)
+        if (recentFailures.size < FAILURE_THRESHOLD) {
+            Log.d(
+                TAG,
+                "Suspected pinning failure ${recentFailures.size}/$FAILURE_THRESHOLD within " +
+                    "${WINDOW_MS}ms for uid=$uid (${packages.joinToString()}); not exempting yet",
+            )
+            return false
+        }
+        prefs.edit().remove(failureTimesKey(uid)).apply()
+
         val alreadyExempt = exemptManager.exemptPackages()
         var addedAny = false
         for (pkg in packages) {
             if (pkg !in alreadyExempt) {
                 exemptManager.add(pkg)
                 addedAny = true
-                Log.i(TAG, "Auto-exempted $pkg (uid=$uid) from MITM after a suspected pinning rejection")
+                Log.i(TAG, "Auto-exempted $pkg (uid=$uid) from MITM after ${recentFailures.size} suspected pinning rejections")
             }
         }
         if (addedAny) {
@@ -80,6 +90,22 @@ class PinningFailureTracker(context: Context) {
         }
         return addedAny
     }
+
+    /** Appends `now` to uid's persisted failure-timestamp list, drops anything older than
+     *  [WINDOW_MS], persists the pruned list back, and returns it. */
+    private fun recordAndPruneFailureTimes(uid: Int): List<Long> {
+        val now = System.currentTimeMillis()
+        val key = failureTimesKey(uid)
+        val existing = prefs.getString(key, "")
+            .orEmpty()
+            .split(",")
+            .mapNotNull { it.toLongOrNull() }
+        val pruned = (existing + now).filter { now - it <= WINDOW_MS }
+        prefs.edit().putString(key, pruned.joinToString(",")).apply()
+        return pruned
+    }
+
+    private fun failureTimesKey(uid: Int) = "$KEY_FAILURE_TIMES_PREFIX$uid"
 
     /** How many auto-exemptions have been used, out of [MAX_AUTO_EXEMPTIONS] -- surfaced in
      *  Settings so a Guardian can tell *why* a new pinned app stopped getting auto-exempted
@@ -99,5 +125,8 @@ class PinningFailureTracker(context: Context) {
         private const val TAG = "PinningFailureTracker"
         private const val PREFS_NAME = "pinning_failure_tracker_prefs"
         private const val KEY_AUTO_EXEMPT_COUNT = "auto_exempt_count"
+        private const val KEY_FAILURE_TIMES_PREFIX = "failure_times_uid_"
+        private const val WINDOW_MS = 120_000L
+        private const val FAILURE_THRESHOLD = 3
     }
 }
