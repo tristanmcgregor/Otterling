@@ -24,6 +24,7 @@ class MitmExemptManager(context: Context) {
 
     init {
         seedDefaultsIfNeeded()
+        seedV2DefaultsIfNeeded()
     }
 
     fun exemptPackages(): Set<String> = prefs.getStringSet(KEY_PACKAGES, emptySet())?.toSet() ?: emptySet()
@@ -59,6 +60,21 @@ class MitmExemptManager(context: Context) {
             .apply()
     }
 
+    /**
+     * Same one-time-merge pattern as [seedDefaultsIfNeeded], but on its own flag ([KEY_SEEDED_V2])
+     * so [DEFAULT_EXEMPT_PACKAGES_V2] (apps identified as needing this after the original list
+     * shipped) still gets merged into an *already-provisioned* device the first time it runs this
+     * updated build -- not just fresh installs -- without re-adding anything from the v1 list a
+     * Guardian may have since deliberately removed.
+     */
+    private fun seedV2DefaultsIfNeeded() {
+        if (prefs.getBoolean(KEY_SEEDED_V2, false)) return
+        prefs.edit()
+            .putStringSet(KEY_PACKAGES, exemptPackages() + DEFAULT_EXEMPT_PACKAGES_V2)
+            .putBoolean(KEY_SEEDED_V2, true)
+            .apply()
+    }
+
     companion object {
         /**
          * Apps that certificate-pin and so break under any MITM proxy (not just ours) -- exempting
@@ -78,6 +94,11 @@ class MitmExemptManager(context: Context) {
             "au.com.suncorp.rsa.suncorpsecured", // Suncorp secure banking app
         )
 
+        /** Added after the original list shipped -- see [seedV2DefaultsIfNeeded]. */
+        val DEFAULT_EXEMPT_PACKAGES_V2 = setOf(
+            "au.com.hotdoc.android.hotdoc", // HotDoc (medical appointment booking)
+        )
+
         /** Chrome (all channels) can never be added to [exemptPackages] -- see [add]. */
         val NEVER_EXEMPT_PACKAGES = setOf(
             "com.android.chrome",
@@ -89,5 +110,6 @@ class MitmExemptManager(context: Context) {
         private const val PREFS_NAME = "vpn_bypass_prefs"
         private const val KEY_PACKAGES = "bypass_packages"
         private const val KEY_SEEDED_DEFAULTS = "seeded_defaults_v1"
+        private const val KEY_SEEDED_V2 = "seeded_defaults_v2"
     }
 }
