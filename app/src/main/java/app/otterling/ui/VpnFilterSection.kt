@@ -30,6 +30,7 @@ import app.otterling.content.MitmExemptManager
 import app.otterling.content.PinningFailureTracker
 import app.otterling.content.VpnFilterManager
 import app.otterling.content.VpnFilterService
+import app.otterling.monitoring.DeviceLogUploader
 import java.text.DateFormat
 import java.util.Date
 import kotlinx.coroutines.Dispatchers
@@ -68,6 +69,8 @@ fun VpnFilterSection(context: Context) {
     var proxyStatusMessage by remember { mutableStateOf("") }
     var proxyTestBusy by remember { mutableStateOf(false) }
     var caInstalled by remember { mutableStateOf(false) }
+    var logUploadBusy by remember { mutableStateOf(false) }
+    var logUploadStatusMessage by remember { mutableStateOf("") }
 
     LaunchedEffect(refreshTrigger) {
         enabled = vpnManager.wasEnabledByUser()
@@ -398,6 +401,26 @@ fun VpnFilterSection(context: Context) {
             ) {
                 Text("Reset automatic-exemption count")
             }
+        }
+        OutlinedButton(
+            enabled = !logUploadBusy,
+            onClick = {
+                logUploadBusy = true
+                logUploadStatusMessage = "Uploading..."
+                coroutineScope.launch {
+                    val result = DeviceLogUploader.upload(context)
+                    logUploadStatusMessage = result.fold(
+                        onSuccess = { "Logs uploaded -- ask whoever runs your server to check the /review dashboard." },
+                        onFailure = { "Upload failed: ${it.message}" },
+                    )
+                    logUploadBusy = false
+                }
+            },
+        ) {
+            Text("Send diagnostic logs to server")
+        }
+        if (logUploadStatusMessage.isNotEmpty()) {
+            Text(logUploadStatusMessage, style = MaterialTheme.typography.bodySmall)
         }
         if (exemptPackages.isEmpty()) {
             Text("No apps exempted.", style = MaterialTheme.typography.bodySmall)

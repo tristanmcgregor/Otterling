@@ -42,6 +42,16 @@ single-operator deployment, not an oversight; see the token's own comment in `.e
 is assigned as each event is appended (its 1-based position in `ALERTS_PATH`), under `_alerts_lock`
 so concurrent reporters (the daemon and the watchdog can both be POSTing around the same moment)
 never race onto the same id.
+
+Device log upload: `POST /device-logs/upload` (see `DeviceLogUploader.kt` / the "Send diagnostic
+logs" button in the app's filter settings) accepts a device's own recent logcat output plus a
+snapshot of its MITM-exemption state, so a Guardian debugging "this app still doesn't work" can see
+what actually happened on-device without ADB access to the phone. Written to
+`LOGS_DIR/<device_id>/<timestamp>.log`, pruned to the newest `MAX_LOG_FILES_PER_DEVICE` per device.
+Reuses `LOCKPROFILE_TOKEN` for auth, same as the tamper-poll endpoints above. `GET
+/device-logs/view/list` and `GET /device-logs/view/<device_id>/<filename>` serve them back out --
+Caddy puts these behind the `/review` dashboard's Basic Auth and injects the bearer token itself
+(see Caddyfile), so a browser never needs to know `LOCKPROFILE_TOKEN` directly.
 """
 
 from __future__ import annotations
@@ -49,6 +59,7 @@ from __future__ import annotations
 import json
 import os
 import plistlib
+import re
 import secrets
 import threading
 import time
@@ -61,6 +72,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 DATA_DIR = os.environ.get("LOCKPROFILE_DATA_DIR", "/data")
 STATE_PATH = os.path.join(DATA_DIR, "state.json")
 ALERTS_PATH = os.path.join(DATA_DIR, "alerts", "events.jsonl")
+LOGS_DIR = os.path.join(DATA_DIR, "logs")
 
 LISTEN_HOST = os.environ.get("LOCKPROFILE_LISTEN_HOST", "0.0.0.0")
 LISTEN_PORT = int(os.environ.get("LOCKPROFILE_LISTEN_PORT", "8091"))
@@ -85,6 +97,16 @@ DNS_PAYLOAD_IDENTIFIER = f"{PROFILE_IDENTIFIER}.dns"
 FAMILY_DOH_URL = "https://family.cloudflare-dns.com/dns-query"
 
 MAX_BODY_BYTES = 16 * 1024
+
+# Phone-uploaded diagnostic logs (see DeviceLogUploader.kt / VpnFilterSection's "Send diagnostic
+# logs" button) are much bigger than any other request this service handles -- a few thousand
+# logcat lines -- so they get their own, much larger cap, plus a per-device file-count limit so a
+# device stuck retrying uploads can't fill the disk.
+MAX_LOG_BODY_BYTES = 2 * 1024 * 1024
+MAX_LOG_FILES_PER_DEVICE = 20
+# Device ids come from Settings.Secure.ANDROID_ID on the phone -- always a 16-char lowercase hex
+# string in practice, but validated here anyway since it becomes part of a filesystem path below.
+DEVICE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 
 # Keeps ALERTS_PATH from growing without bound -- see _rotate_alerts_if_needed().
 ALERTS_ROTATE_BYTES = 5 * 1024 * 1024
@@ -253,6 +275,55 @@ def _read_alerts_since(since_id: int) -> list[dict]:
     return events
 
 
+def _safe_device_id(raw: str) -> str | None:
+    return raw if DEVICE_ID_RE.match(raw or "") else None
+
+
+def _store_device_log(device_id: str, logs: str) -> str:
+    """Writes `logs` to a new timestamped file under LOGS_DIR/<device_id>/, then prunes to the
+    newest MAX_LOG_FILES_PER_DEVICE files for that device so a device stuck retrying uploads can't
+    fill the disk. Returns the filename written."""
+    device_dir = os.path.join(LOGS_DIR, device_id)
+    os.makedirs(device_dir, exist_ok=True)
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    filename = f"{stamp}.log"
+    path = os.path.join(device_dir, filename)
+    counter = 1
+    while os.path.exists(path):
+        filename = f"{stamp}-{counter}.log"
+        path = os.path.join(device_dir, filename)
+        counter += 1
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(logs)
+    existing = sorted(os.listdir(device_dir))
+    for stale in existing[: max(0, len(existing) - MAX_LOG_FILES_PER_DEVICE)]:
+        try:
+            os.remove(os.path.join(device_dir, stale))
+        except OSError:
+            pass
+    return filename
+
+
+def _list_device_logs() -> dict:
+    if not os.path.isdir(LOGS_DIR):
+        return {}
+    result = {}
+    for device_id in sorted(os.listdir(LOGS_DIR)):
+        device_dir = os.path.join(LOGS_DIR, device_id)
+        if not os.path.isdir(device_dir):
+            continue
+        files = []
+        for filename in sorted(os.listdir(device_dir)):
+            path = os.path.join(device_dir, filename)
+            try:
+                stat = os.stat(path)
+            except OSError:
+                continue
+            files.append({"filename": filename, "size": stat.st_size, "mtime": stat.st_mtime})
+        result[device_id] = files
+    return result
+
+
 def _send_ntfy_notification(event: dict) -> None:
     """Best-effort push via ntfy.sh -- see module docstring. Never raises: a down/unreachable ntfy
     server must not turn an accepted tamper report into a failed request."""
@@ -298,14 +369,14 @@ class Handler(BaseHTTPRequestHandler):
             return False
         return secrets.compare_digest(header[len(prefix):], TOKEN)
 
-    def _read_json_body(self) -> dict | None:
+    def _read_json_body(self, max_bytes: int = MAX_BODY_BYTES) -> dict | None:
         try:
             length = int(self.headers.get("Content-Length", "0") or "0")
         except ValueError:
             # A non-numeric Content-Length used to raise here uncaught, killing this connection's
             # handler thread instead of returning the 400 every other malformed-request path gets.
             return None
-        if length <= 0 or length > MAX_BODY_BYTES:
+        if length <= 0 or length > max_bytes:
             return None
         try:
             return json.loads(self.rfile.read(length).decode("utf-8"))
@@ -347,6 +418,15 @@ class Handler(BaseHTTPRequestHandler):
             threading.Thread(target=_send_ntfy_notification, args=(event,), daemon=True).start()
             return self._send_json(200, {"status": "ok"})
 
+        if self.path == "/device-logs/upload":
+            body = self._read_json_body(MAX_LOG_BODY_BYTES)
+            device_id = _safe_device_id((body or {}).get("device_id", "").strip())
+            logs = (body or {}).get("logs", "") if body else ""
+            if not device_id or not logs:
+                return self._send_json(400, {"error": "device_id and logs required"})
+            filename = _store_device_log(device_id, logs)
+            return self._send_json(200, {"status": "ok", "filename": filename})
+
         return self._send_json(404, {"error": "not found"})
 
     def do_GET(self):  # noqa: N802
@@ -363,6 +443,29 @@ class Handler(BaseHTTPRequestHandler):
             events = _read_alerts_since(since_id)
             max_id = events[-1]["id"] if events else since_id
             return self._send_json(200, {"events": events, "max_id": max_id})
+
+        if parsed.path == "/device-logs/view/list":
+            return self._send_json(200, {"devices": _list_device_logs()})
+
+        if parsed.path.startswith("/device-logs/view/"):
+            remainder = parsed.path[len("/device-logs/view/"):]
+            parts = remainder.split("/", 1)
+            if len(parts) != 2:
+                return self._send_json(404, {"error": "not found"})
+            device_id, filename = parts
+            if not DEVICE_ID_RE.match(device_id) or "/" in filename or ".." in filename:
+                return self._send_json(400, {"error": "invalid path"})
+            path = os.path.join(LOGS_DIR, device_id, filename)
+            if not os.path.isfile(path):
+                return self._send_json(404, {"error": "not found"})
+            with open(path, "rb") as fh:
+                content = fh.read()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(content)))
+            self.end_headers()
+            self.wfile.write(content)
+            return
 
         return self._send_json(404, {"error": "not found"})
 

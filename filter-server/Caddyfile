@@ -41,6 +41,12 @@
 	handle /alerts/* {
 		reverse_proxy 127.0.0.1:8091
 	}
+	# Phone-uploaded diagnostic logs (see lockprofile_service.py's module doc, DeviceLogUploader.kt).
+	# Not behind @review's basic_auth below -- the phone authenticates itself with its own
+	# LOCKPROFILE_TOKEN bearer, same as /alerts/* above.
+	handle /device-logs/upload {
+		reverse_proxy 127.0.0.1:8091
+	}
 
 	# AI review dashboard (filter-server/review-dashboard/) -- read-only view of the server-side
 	# release.sh pipeline's status/history, written to /var/lib/otterling/review/ (see
@@ -48,13 +54,23 @@
 	# this exposes commit messages and the AI's raw review reasoning, not something to leave open
 	# to the internet like /updates is. Generate the password hash with:
 	#   docker run --rm caddy:alpine caddy hash-password --plaintext 'your-password-here'
-	@review path /review /review/* /review-data/*
+	# Also covers /device-logs/view/* (uploaded phone diagnostics, see lockprofile_service.py) --
+	# same "not for the open internet" reasoning as the review data itself.
+	@review path /review /review/* /review-data/* /device-logs/view /device-logs/view/*
 	basic_auth @review {
 		{$REVIEW_DASHBOARD_USER} {$REVIEW_DASHBOARD_PASSWORD_HASH}
 	}
 	handle_path /review-data/* {
 		root * /srv/review-data
 		file_server
+	}
+	# A browser only proves it knows the /review Basic Auth credentials -- lockprofile_service.py
+	# separately requires its own bearer token, which a browser has no way to supply, so Caddy
+	# injects it here rather than exposing LOCKPROFILE_TOKEN to the dashboard's static JS.
+	handle /device-logs/view/* {
+		reverse_proxy 127.0.0.1:8091 {
+			header_up Authorization "Bearer {$LOCKPROFILE_TOKEN}"
+		}
 	}
 	handle_path /review* {
 		root * /srv/review-dashboard
@@ -83,14 +99,22 @@ http://192.168.0.254 {
 	handle /alerts/* {
 		reverse_proxy 127.0.0.1:8091
 	}
+	handle /device-logs/upload {
+		reverse_proxy 127.0.0.1:8091
+	}
 
-	@review path /review /review/* /review-data/*
+	@review path /review /review/* /review-data/* /device-logs/view /device-logs/view/*
 	basic_auth @review {
 		{$REVIEW_DASHBOARD_USER} {$REVIEW_DASHBOARD_PASSWORD_HASH}
 	}
 	handle_path /review-data/* {
 		root * /srv/review-data
 		file_server
+	}
+	handle /device-logs/view/* {
+		reverse_proxy 127.0.0.1:8091 {
+			header_up Authorization "Bearer {$LOCKPROFILE_TOKEN}"
+		}
 	}
 	handle_path /review* {
 		root * /srv/review-dashboard

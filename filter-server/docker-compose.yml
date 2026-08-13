@@ -131,6 +131,11 @@ services:
       - UPDATE_HOST=${UPDATE_HOST:-vpn.bartholomew.help}
       - REVIEW_DASHBOARD_USER=${REVIEW_DASHBOARD_USER:-guardian}
       - REVIEW_DASHBOARD_PASSWORD_HASH=${REVIEW_DASHBOARD_PASSWORD_HASH:?set REVIEW_DASHBOARD_PASSWORD_HASH in .env, see review-dashboard/README.md}
+      # Injected onto outbound requests to lockprofile for the /device-logs/view/* routes below --
+      # same token as the lockprofile service itself (LOCKPROFILE_TOKEN in .env), so a browser
+      # authenticated only by the /review Basic Auth can view uploaded device logs without ever
+      # learning this token directly.
+      - LOCKPROFILE_TOKEN=${LOCKPROFILE_TOKEN:?set LOCKPROFILE_TOKEN in .env}
       # Host CBLOCK blocks direct outbound 443; ACME renewals need the local forward proxy.
       - HTTP_PROXY=http://127.0.0.1:3128
       - HTTPS_PROXY=http://127.0.0.1:3128
