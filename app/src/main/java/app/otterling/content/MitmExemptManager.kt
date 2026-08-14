@@ -13,9 +13,11 @@ import android.content.Context
  * (not the whole tunnel) keeps these apps working *and* still DNS-filtered, rather than fully
  * unfiltered the way a `VpnService`-level bypass would leave them.
  *
- * [DEFAULT_EXEMPT_PACKAGES] (plus the later [DEFAULT_EXEMPT_PACKAGES_V2]/[DEFAULT_EXEMPT_PACKAGES_V3])
- * seeds the common ones (YouTube, AU banking apps, HotDoc, Google Authenticator) so this works out
- * of the box instead of the Guardian needing to know to add them.
+ * [DEFAULT_EXEMPT_PACKAGES] (plus the later [DEFAULT_EXEMPT_PACKAGES_V2]/[DEFAULT_EXEMPT_PACKAGES_V3]/
+ * [DEFAULT_EXEMPT_PACKAGES_V4]) seeds the common ones (YouTube, AU banking apps, HotDoc, Google
+ * Authenticator, Google Play Services, WhatsApp) so this works out of the box instead of the
+ * Guardian needing to know to add them. Not every entry is here because of certificate pinning --
+ * see [DEFAULT_EXEMPT_PACKAGES_V4]'s doc for WhatsApp's different (performance, not breakage) reason.
  *
  * Applied via [AppUidResolver]-based flow attribution when the tunnel is (re)established --
  * see [VpnFilterService.runPacketLoop].
@@ -27,6 +29,7 @@ class MitmExemptManager(context: Context) {
         seedDefaultsIfNeeded()
         seedV2DefaultsIfNeeded()
         seedV3DefaultsIfNeeded()
+        seedV4DefaultsIfNeeded()
     }
 
     fun exemptPackages(): Set<String> = prefs.getStringSet(KEY_PACKAGES, emptySet())?.toSet() ?: emptySet()
@@ -87,6 +90,15 @@ class MitmExemptManager(context: Context) {
             .apply()
     }
 
+    /** Same one-time-merge pattern as the earlier seed* methods, for [DEFAULT_EXEMPT_PACKAGES_V4]. */
+    private fun seedV4DefaultsIfNeeded() {
+        if (prefs.getBoolean(KEY_SEEDED_V4, false)) return
+        prefs.edit()
+            .putStringSet(KEY_PACKAGES, exemptPackages() + DEFAULT_EXEMPT_PACKAGES_V4)
+            .putBoolean(KEY_SEEDED_V4, true)
+            .apply()
+    }
+
     companion object {
         /**
          * Apps that certificate-pin and so break under any MITM proxy (not just ours) -- exempting
@@ -120,6 +132,30 @@ class MitmExemptManager(context: Context) {
             "com.google.android.apps.authenticator2", // Google Authenticator
         )
 
+        /**
+         * Added after the v3 list shipped -- see [seedV4DefaultsIfNeeded]. Two different
+         * problems, same fix:
+         *
+         * - Google Play Services/Services Framework own the device's "add a Google account" flow,
+         *   which hits cert-pinned endpoints (`android.clients.google.com` and others) -- same
+         *   pinning-breakage reasoning as every other entry above, just system-level packages
+         *   instead of a regular app. Without this, adding a new Google account on the device fails
+         *   outright.
+         * - WhatsApp is a different problem entirely, not pinning: its media (photos/videos sent or
+         *   received) is end-to-end encrypted, so the bytes mitmproxy would inspect are ciphertext
+         *   it can never classify -- `mitm_nsfw_addon.py` already bails out on any non-`text/html`
+         *   response, so MITM-ing this traffic was providing zero filtering benefit while still
+         *   paying the full per-connection CONNECT/cert-generation cost on every single image,
+         *   which compounds badly since WhatsApp opens many short-lived connections rather than one
+         *   persistent stream. Exempting it removes pure overhead, not filtering coverage.
+         */
+        val DEFAULT_EXEMPT_PACKAGES_V4 = setOf(
+            "com.google.android.gms", // Google Play Services (owns account setup)
+            "com.google.android.gsf", // Google Services Framework
+            "com.whatsapp", // WhatsApp
+            "com.whatsapp.w4b", // WhatsApp Business
+        )
+
         /** Chrome (all channels) can never be added to [exemptPackages] -- see [add]. */
         val NEVER_EXEMPT_PACKAGES = setOf(
             "com.android.chrome",
@@ -133,5 +169,6 @@ class MitmExemptManager(context: Context) {
         private const val KEY_SEEDED_DEFAULTS = "seeded_defaults_v1"
         private const val KEY_SEEDED_V2 = "seeded_defaults_v2"
         private const val KEY_SEEDED_V3 = "seeded_defaults_v3"
+        private const val KEY_SEEDED_V4 = "seeded_defaults_v4"
     }
 }
