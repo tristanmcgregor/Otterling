@@ -13,8 +13,9 @@ import android.content.Context
  * (not the whole tunnel) keeps these apps working *and* still DNS-filtered, rather than fully
  * unfiltered the way a `VpnService`-level bypass would leave them.
  *
- * [DEFAULT_EXEMPT_PACKAGES] seeds the common ones (YouTube, AU banking apps) so this works out of
- * the box instead of the Guardian needing to know to add them.
+ * [DEFAULT_EXEMPT_PACKAGES] (plus the later [DEFAULT_EXEMPT_PACKAGES_V2]/[DEFAULT_EXEMPT_PACKAGES_V3])
+ * seeds the common ones (YouTube, AU banking apps, HotDoc, Google Authenticator) so this works out
+ * of the box instead of the Guardian needing to know to add them.
  *
  * Applied via [AppUidResolver]-based flow attribution when the tunnel is (re)established --
  * see [VpnFilterService.runPacketLoop].
@@ -25,6 +26,7 @@ class MitmExemptManager(context: Context) {
     init {
         seedDefaultsIfNeeded()
         seedV2DefaultsIfNeeded()
+        seedV3DefaultsIfNeeded()
     }
 
     fun exemptPackages(): Set<String> = prefs.getStringSet(KEY_PACKAGES, emptySet())?.toSet() ?: emptySet()
@@ -75,6 +77,16 @@ class MitmExemptManager(context: Context) {
             .apply()
     }
 
+    /** Same one-time-merge pattern as [seedDefaultsIfNeeded]/[seedV2DefaultsIfNeeded], for
+     *  [DEFAULT_EXEMPT_PACKAGES_V3]. */
+    private fun seedV3DefaultsIfNeeded() {
+        if (prefs.getBoolean(KEY_SEEDED_V3, false)) return
+        prefs.edit()
+            .putStringSet(KEY_PACKAGES, exemptPackages() + DEFAULT_EXEMPT_PACKAGES_V3)
+            .putBoolean(KEY_SEEDED_V3, true)
+            .apply()
+    }
+
     companion object {
         /**
          * Apps that certificate-pin and so break under any MITM proxy (not just ours) -- exempting
@@ -99,6 +111,15 @@ class MitmExemptManager(context: Context) {
             "au.com.hotdoc.android.hotdoc", // HotDoc (medical appointment booking)
         )
 
+        /** Added after the v2 list shipped -- see [seedV3DefaultsIfNeeded]. Google Authenticator's
+         *  own cert-pinned Google-account backup/sync check only runs occasionally (not promptly
+         *  retried like YouTube's), so [PinningFailureTracker]'s auto-exempt path would otherwise
+         *  need up to a day to gather 3 corroborating failures -- seeded here for immediate relief
+         *  in the meantime, same reasoning as HotDoc above. */
+        val DEFAULT_EXEMPT_PACKAGES_V3 = setOf(
+            "com.google.android.apps.authenticator2", // Google Authenticator
+        )
+
         /** Chrome (all channels) can never be added to [exemptPackages] -- see [add]. */
         val NEVER_EXEMPT_PACKAGES = setOf(
             "com.android.chrome",
@@ -111,5 +132,6 @@ class MitmExemptManager(context: Context) {
         private const val KEY_PACKAGES = "bypass_packages"
         private const val KEY_SEEDED_DEFAULTS = "seeded_defaults_v1"
         private const val KEY_SEEDED_V2 = "seeded_defaults_v2"
+        private const val KEY_SEEDED_V3 = "seeded_defaults_v3"
     }
 }

@@ -5,8 +5,8 @@ import android.util.Log
 
 /**
  * Watches for [TcpRelayManager] connections that look like a certificate-pinning rejection (see
- * [PinningFailureHeuristic]) and, once the same app has shown several of them inside a short
- * window, adds it to [MitmExemptManager] automatically -- no Guardian has to notice an app is
+ * [PinningFailureHeuristic]) and, once the same app has shown several of them inside [WINDOW_MS],
+ * adds it to [MitmExemptManager] automatically -- no Guardian has to notice an app is
  * broken and go find the exempt-list setting themselves. This closes the gap a static seeded list
  * can't: an app nobody thought to add in advance (see the Morphe YouTube fork gap and the HotDoc
  * gap, both found via live-device testing) still ends up working, without lowering the bar enough
@@ -126,7 +126,16 @@ class PinningFailureTracker(context: Context) {
         private const val PREFS_NAME = "pinning_failure_tracker_prefs"
         private const val KEY_AUTO_EXEMPT_COUNT = "auto_exempt_count"
         private const val KEY_FAILURE_TIMES_PREFIX = "failure_times_uid_"
-        private const val WINDOW_MS = 120_000L
+
+        // 2 minutes (the original value) assumed an app retries promptly after a pinning
+        // rejection -- true for some (YouTube), but not for e.g. Google Authenticator, which only
+        // attempts its cert-pinned backup/sync check occasionally (once per app open, sometimes
+        // less), so its 3 failures were realistically hours apart and never landed inside a
+        // 2-minute window -- the auto-exempt path silently never fired for it either, same
+        // underlying symptom as the HotDoc/persistence bug this class already fixes once. A full
+        // day comfortably covers "opened the app a few times today" while still requiring 3
+        // separate rejections, not lowering the bar to a single one.
+        private const val WINDOW_MS = 86_400_000L
         private const val FAILURE_THRESHOLD = 3
     }
 }
