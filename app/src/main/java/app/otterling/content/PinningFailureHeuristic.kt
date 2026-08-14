@@ -19,6 +19,17 @@ package app.otterling.content
  * A single match is not proof by itself (a legitimately short, successful request could
  * occasionally look similar) -- callers should require several matches for the same app before
  * acting; see [PinningFailureTracker].
+ *
+ * The original bounds came from exactly one real capture (Morphe/YouTube). Several other apps
+ * since (HotDoc, Google Authenticator) needed a one-off seeded exemption instead of ever being
+ * auto-detected -- consistent with this heuristic having real false negatives across the wider
+ * variety of TLS client behavior actual families run into, not just a slow/absent auto-exempt
+ * mechanism. Widened elapsed-time and read-count bounds (not the byte bounds, which are governed
+ * by *our own* proxy's cert size, not the app's -- see the module doc above) to also catch: a
+ * TrustManager that validates the pin slightly later, after an extra read or two, rather than the
+ * instant the Certificate message arrives; and genuinely slower handshakes on higher-latency
+ * mobile connections, which could otherwise blow past a tight elapsed-time cutoff even for the
+ * exact same kind of rejection.
  */
 object PinningFailureHeuristic {
     fun looksLikeRejection(elapsedMs: Long, bytesFromPeer: Long, readCount: Int): Boolean =
@@ -26,8 +37,8 @@ object PinningFailureHeuristic {
             bytesFromPeer in MIN_BYTES..MAX_BYTES &&
             readCount in 1..MAX_READS
 
-    private const val MAX_ELAPSED_MS = 3_000L
+    private const val MAX_ELAPSED_MS = 5_000L
     private const val MIN_BYTES = 500L
     private const val MAX_BYTES = 20_000L
-    private const val MAX_READS = 4
+    private const val MAX_READS = 6
 }
