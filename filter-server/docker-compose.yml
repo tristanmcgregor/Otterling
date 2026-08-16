@@ -116,8 +116,15 @@ services:
       # Optional -- blank disables push notification, events still log to lockprofile-data/alerts/.
       - NTFY_TOPIC=${NTFY_TOPIC:-}
       - NTFY_SERVER=${NTFY_SERVER:-https://ntfy.sh}
+      # Optional FCM push (instant phone wake). Point this at a Firebase service-account JSON dropped
+      # into the mounted data dir; absent = FCM inert, ntfy + polling unaffected. See the
+      # FCM_CREDENTIALS_PATH note in lockprofile_service.py.
+      - FCM_CREDENTIALS_PATH=${FCM_CREDENTIALS_PATH:-/data/fcm-service-account.json}
     working_dir: /opt/otterling
-    command: python3 lockprofile_service.py
+    # google-auth is only needed for the optional FCM push; installed at start rather than via a
+    # Dockerfile to keep this a mounted-script service. If the install fails (offline boot), FCM
+    # stays inert and ntfy + polling still work.
+    command: sh -c "pip install --no-cache-dir --quiet google-auth requests || true; python3 lockprofile_service.py"
 
   updates:
     image: caddy:alpine

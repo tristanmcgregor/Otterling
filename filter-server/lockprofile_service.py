@@ -87,6 +87,22 @@ FLEET_WEBHOOK_SECRET = os.environ.get("FLEET_WEBHOOK_SECRET", "")
 NTFY_SERVER = os.environ.get("NTFY_SERVER", "https://ntfy.sh").rstrip("/")
 NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "")
 
+# FCM (Firebase Cloud Messaging) push: lets this server wake the phone the instant a tamper event
+# lands, so the accountability partner is alerted in seconds instead of on MacTamperPollWorker's
+# 15-minute poll floor. The push carries no trusted payload -- it's a "poll now" wake; the phone
+# then pulls from /alerts/poll through its existing durable SMS pipeline, so a dropped push loses
+# nothing (the periodic poll still delivers). Entirely optional: with no credentials file present,
+# FCM is inert and ntfy + polling are unaffected.
+#
+# FCM_CREDENTIALS_PATH is a Firebase *service-account* JSON (Firebase console -> Project settings ->
+# Service accounts -> Generate new private key) -- NOT the app's google-services.json. Drop it into
+# the mounted data dir on the server (default /data/fcm-service-account.json). The project id is
+# read from that file.
+FCM_CREDENTIALS_PATH = os.environ.get(
+    "FCM_CREDENTIALS_PATH", os.path.join(DATA_DIR, "fcm-service-account.json")
+)
+FCM_SCOPE = "https://www.googleapis.com/auth/firebase.messaging"
+
 # (title, priority, tag) per tamper event type -- see TamperReporter.swift / LockProfileGuard.swift
 # / FocusLockWatchdog for the `type` values these correspond to. Falls back to a generic
 # medium-priority notification for any type not listed here, so a future new event type still
@@ -411,6 +427,134 @@ def _send_ntfy_notification(event: dict) -> None:
         print(f"[lockprofile] ntfy push failed for {event['type']}: {error}", flush=True)
 
 
+# --- FCM push (optional) ---------------------------------------------------------------------
+
+# Registered phone tokens live in state.json under this key: {token: {device_model, ...}}.
+_FCM_TOKENS_KEY = "fcm_tokens"
+# Lazily-built google-auth Credentials + resolved project id, guarded by this lock. `False` means
+# "already tried and it's unavailable" (missing file or google-auth not installed) so we don't retry
+# the import/load on every event.
+_fcm_lock = threading.Lock()
+_fcm_creds = None
+_fcm_project_id = None
+_fcm_unavailable = False
+
+
+def _register_fcm_token(token: str, device_model: str) -> None:
+    """Upsert a phone's FCM token. Idempotent -- the phone re-registers on every launch."""
+    with _state_lock:
+        state = _load_state()
+        tokens = state.get(_FCM_TOKENS_KEY) or {}
+        tokens[token] = {
+            "device_model": device_model,
+            "registered_at": tokens.get(token, {}).get("registered_at", time.time()),
+            "last_seen": time.time(),
+        }
+        state[_FCM_TOKENS_KEY] = tokens
+        _save_state(state)
+
+
+def _all_fcm_tokens() -> list[str]:
+    with _state_lock:
+        return list((_load_state().get(_FCM_TOKENS_KEY) or {}).keys())
+
+
+def _forget_fcm_token(token: str) -> None:
+    """Drop a token FCM told us is dead (UNREGISTERED / not found), so the list doesn't rot."""
+    with _state_lock:
+        state = _load_state()
+        tokens = state.get(_FCM_TOKENS_KEY) or {}
+        if tokens.pop(token, None) is not None:
+            state[_FCM_TOKENS_KEY] = tokens
+            _save_state(state)
+
+
+def _fcm_credentials():
+    """Return (credentials, project_id) or (None, None) if FCM isn't configured/available. Loads the
+    service-account file once and caches it; the google-auth Credentials object refreshes its own
+    access token as needed, so callers just call creds.token after a refresh."""
+    global _fcm_creds, _fcm_project_id, _fcm_unavailable
+    with _fcm_lock:
+        if _fcm_creds is not None:
+            return _fcm_creds, _fcm_project_id
+        if _fcm_unavailable:
+            return None, None
+        if not os.path.exists(FCM_CREDENTIALS_PATH):
+            _fcm_unavailable = True
+            return None, None
+        try:
+            from google.oauth2 import service_account  # lazy: FCM is optional
+            creds = service_account.Credentials.from_service_account_file(
+                FCM_CREDENTIALS_PATH, scopes=[FCM_SCOPE]
+            )
+            with open(FCM_CREDENTIALS_PATH, "r", encoding="utf-8") as fh:
+                project_id = json.load(fh).get("project_id")
+            if not project_id:
+                raise ValueError("service-account file has no project_id")
+            _fcm_creds, _fcm_project_id = creds, project_id
+            print(f"[lockprofile] FCM push enabled for project {project_id}", flush=True)
+            return creds, project_id
+        except Exception as error:  # noqa: BLE001 -- any failure just disables push
+            print(f"[lockprofile] FCM disabled ({type(error).__name__}: {error})", flush=True)
+            _fcm_unavailable = True
+            return None, None
+
+
+def _send_fcm_wake(event: dict) -> None:
+    """Best-effort FCM 'poll now' wake to every registered phone. Never raises. The data payload is
+    advisory only -- the phone re-pulls from /alerts/poll, which is the source of truth."""
+    creds, project_id = _fcm_credentials()
+    if creds is None:
+        return
+    tokens = _all_fcm_tokens()
+    if not tokens:
+        return
+    try:
+        from google.auth.transport.requests import Request as GoogleAuthRequest
+        if not creds.valid:
+            creds.refresh(GoogleAuthRequest())
+        access_token = creds.token
+    except Exception as error:  # noqa: BLE001
+        print(f"[lockprofile] FCM token refresh failed: {error}", flush=True)
+        return
+
+    url = f"https://fcm.googleapis.com/v1/projects/{project_id}/messages:send"
+    for token in tokens:
+        message = {
+            "message": {
+                "token": token,
+                # Data-only (no "notification" block) so the app's onMessageReceived always runs and
+                # can wake the poller, rather than the system silently tray-ing a notification.
+                "data": {"type": str(event.get("type", "")), "reason": "tamper"},
+                "android": {"priority": "high"},
+            }
+        }
+        request = urllib.request.Request(
+            url,
+            data=json.dumps(message).encode("utf-8"),
+            method="POST",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json",
+            },
+        )
+        try:
+            urllib.request.urlopen(request, timeout=10).close()
+        except urllib.error.HTTPError as error:
+            # 404 (or UNREGISTERED) means the token is dead -- prune it so we stop trying.
+            if error.code in (404, 400):
+                _forget_fcm_token(token)
+            print(f"[lockprofile] FCM send failed for {event.get('type')}: HTTP {error.code}", flush=True)
+        except (urllib.error.URLError, OSError) as error:
+            print(f"[lockprofile] FCM send failed for {event.get('type')}: {error}", flush=True)
+
+
+def _push_event(event: dict) -> None:
+    """Fan an accepted event out to both push channels, each best-effort and non-blocking."""
+    threading.Thread(target=_send_ntfy_notification, args=(event,), daemon=True).start()
+    threading.Thread(target=_send_fcm_wake, args=(event,), daemon=True).start()
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "OtterlingLockProfile/1.0"
 
@@ -475,7 +619,7 @@ class Handler(BaseHTTPRequestHandler):
                 "reported_at": time.time(),
                 "received_at": time.time(),
             })
-            threading.Thread(target=_send_ntfy_notification, args=(event,), daemon=True).start()
+            _push_event(event)
             count += 1
         return self._send_json(200, {"status": "ok", "events": count})
 
@@ -514,10 +658,21 @@ class Handler(BaseHTTPRequestHandler):
                 "received_at": time.time(),
             }
             event = _append_alert(event)
-            # Backgrounded so a slow/unreachable ntfy.sh can't delay this response -- the daemon's
-            # own TamperReporter has just a 10s timeout and one retry, and the JSONL append above
-            # (the actual source of truth) is already durable before this fires.
-            threading.Thread(target=_send_ntfy_notification, args=(event,), daemon=True).start()
+            # Backgrounded so a slow/unreachable push channel can't delay this response -- the
+            # daemon's own TamperReporter has just a 10s timeout and one retry, and the JSONL append
+            # above (the actual source of truth) is already durable before this fires. Pushes to both
+            # ntfy and FCM (the phone's instant "poll now" wake).
+            _push_event(event)
+            return self._send_json(200, {"status": "ok"})
+
+        if self.path == "/alerts/register-token":
+            # The phone hands us its FCM token so _send_fcm_wake can reach it (see FcmTokenRegistrar
+            # / MacTamperMessagingService on the Android side). Bearer-gated like every route here.
+            body = self._read_json_body()
+            token = (body or {}).get("token", "").strip()
+            if not token:
+                return self._send_json(400, {"error": "token required"})
+            _register_fcm_token(token, (body or {}).get("device_model", "").strip() or "unknown")
             return self._send_json(200, {"status": "ok"})
 
         if self.path == "/device-logs/upload":
