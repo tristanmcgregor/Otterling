@@ -81,6 +81,8 @@ class MacTamperPollWorker(context: Context, params: WorkerParameters) : Coroutin
      *  a future new event type still reaches the partner instead of silently not alerting. */
     private fun severityAndLabel(macType: String): Pair<AlertSeverity, String> = when (macType) {
         "lock_profile_removed" -> AlertSeverity.CRITICAL to "MAC_LOCK_PROFILE_REMOVED"
+        "vpn_active" -> AlertSeverity.CRITICAL to "MAC_VPN_ACTIVE"
+        "vpn_cleared" -> AlertSeverity.INFO to "MAC_VPN_CLEARED"
         "daemon_unloaded_recovered" -> AlertSeverity.WARNING to "MAC_DAEMON_RECOVERED"
         "watchdog_or_daemon_reregistered" -> AlertSeverity.WARNING to "MAC_DAEMON_REREGISTERED"
         "lock_profile_installed" -> AlertSeverity.INFO to "MAC_LOCK_PROFILE_INSTALLED"
