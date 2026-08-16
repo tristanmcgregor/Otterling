@@ -46,6 +46,24 @@ public enum FocusLockConstants {
     /// filter-server/README.md at the repo root), mirroring the Android app's `CloudFilterSettings`.
     public static let defaultCloudFilterHost = "vpn.bartholomew.help"
 
+    // MARK: - mitmproxy content-filter proxy (optional, opt-in)
+
+    /// The filter-server's mitmproxy HTTP CONNECT proxy (see filter-server/docker-compose.yml's
+    /// `mitmproxy` service). When `ProxyEnforcer` is enabled, the daemon points every network
+    /// service's system HTTP/HTTPS proxy here so the Mac's browser traffic is content-filtered the
+    /// same way the phone's is -- and reports trigger words seen on blocked pages. Defaults share the
+    /// cloud-filter host (one family server). Port matches `PROXY_PORT` (8090) in the compose file.
+    public static let defaultProxyPort = 8090
+    /// Proxy auth username, matching `PROXY_USER` in filter-server/.env (mitmproxy runs with
+    /// `--proxyauth`). The password is NOT baked in -- it's read from `proxyPasswordPath`, written
+    /// by `Scripts/setup_mac_proxy.command`. If that file is missing/empty, `ProxyEnforcer` refuses
+    /// to set the proxy at all (fail OPEN -- an authenticated proxy set with no/wrong password would
+    /// 407 every request and take the machine offline, exactly what we must never do).
+    public static let defaultProxyUser = "otterling"
+    /// Root-only (0600) file holding the proxy password, written next to state.json by
+    /// `Scripts/setup_mac_proxy.command`. Absent by default -> proxy enforcement stays inert.
+    public static let proxyPasswordPath = "\(stateDirectory)/proxy_password"
+
     /// How long an authorized protection-reducing action waits before `EnforcementLoop` applies it.
     /// 24h is chosen to outlast an impulse rather than to be merely annoying -- the cooldown is the
     /// part of the design that still works when the person it's slowing down holds admin, so it has
@@ -94,6 +112,39 @@ public enum FocusLockConstants {
     public static let watchdogBundleIdentifier = "app.otterling.watchdog"
     public static let watchdogLaunchDaemonPlistPath =
         "\(installedAppBundlePath)/Contents/Library/LaunchDaemons/\(watchdogBundleIdentifier).plist"
+
+    /// FocusLockScanner: a per-user LaunchAgent (not a daemon -- the Accessibility API only works
+    /// inside a GUI login session, and TCC Accessibility trust is granted per-user) that walks the
+    /// frontmost browser's accessibility tree and reports on-screen trigger words via
+    /// `TamperReporter` -- the macOS equivalent of the phone's `FocusGuardAccessibilityService`.
+    /// Registered with `SMAppService.agent`, so its plist lives under Contents/Library/LaunchAgents.
+    public static let scannerBundleIdentifier = "app.otterling.scanner"
+    public static let scannerLaunchAgentPlistPath =
+        "\(installedAppBundlePath)/Contents/Library/LaunchAgents/\(scannerBundleIdentifier).plist"
+
+    /// How often `FocusLockScanner` re-walks the frontmost window. Matches the phone's
+    /// `TRIGGER_SCAN_DEBOUNCE_MS` (2s) -- fast enough to catch a page before it's scrolled away,
+    /// cheap enough not to churn CPU on a mostly-static screen.
+    public static let scannerScanInterval: Double = 2
+
+    /// Bundle identifiers `FocusLockScanner` treats as browsers -- the only apps it scans, matching
+    /// the phone's browser/YouTube-only gating (`FocusGuardAccessibilityService`). Scanning every
+    /// app would both cost more and misfire on a listed word appearing in an editor/doc/chat.
+    public static let browserBundleIdentifiers: Set<String> = [
+        "com.apple.Safari",
+        "com.apple.SafariTechnologyPreview",
+        "com.google.Chrome",
+        "com.google.Chrome.canary",
+        "org.chromium.Chromium",
+        "org.mozilla.firefox",
+        "org.mozilla.firefoxdeveloperedition",
+        "com.microsoft.edgemac",
+        "com.brave.Browser",
+        "com.operasoftware.Opera",
+        "com.vivaldi.Vivaldi",
+        "company.thebrowser.Browser",   // Arc
+        "com.apple.WebKit.WebContent",  // Safari renderer process, seen as frontmost in some setups
+    ]
 
     /// This build's version -- bump by hand each release, matching `CFBundleShortVersionString`
     /// in `Scripts/build_app.sh` (kept in sync manually, not code-generated -- there's no

@@ -31,9 +31,27 @@ enum PFBlocker {
     /// `DNSEnforcer.lastResolvedIPs`) -- explicitly passed on :53 ahead of the block rules below so
     /// the cloud filter itself is never at risk of being self-blocked, even if a future rule change
     /// makes the block list broader or its IP happens to coincide with one already blocked.
-    static func apply(active: Bool, allowedResolverIPs: [String] = []) {
+    /// [forceProxyActive]/[proxyIPs]/[proxyPort]: when the proxy force-through is on AND the proxy is
+    /// confirmed reachable this tick (the caller only ever passes `true` in that case -- see
+    /// `EnforcementLoop`/`ProxyEnforcer`), add rules that drop direct outbound :80/:443 to everything
+    /// except the proxy, forcing even non-proxy-aware apps through the content filter. This is the one
+    /// broad rule in here; it's kept strictly fail-open by that reachability gate, so a down proxy
+    /// lifts it within one tick rather than taking web access offline.
+    static func apply(
+        active: Bool,
+        allowedResolverIPs: [String] = [],
+        forceProxyActive: Bool = false,
+        proxyIPs: [String] = [],
+        proxyPort: Int = 0
+    ) {
         ensureAnchorReferenced()
-        writeAnchorRules(active: active, allowedResolverIPs: allowedResolverIPs)
+        writeAnchorRules(
+            active: active,
+            allowedResolverIPs: allowedResolverIPs,
+            forceProxyActive: forceProxyActive,
+            proxyIPs: proxyIPs,
+            proxyPort: proxyPort
+        )
         reload()
     }
 
@@ -61,7 +79,13 @@ enum PFBlocker {
         try? candidate.write(toFile: pfConfPath, atomically: true, encoding: .utf8)
     }
 
-    private static func writeAnchorRules(active: Bool, allowedResolverIPs: [String]) {
+    private static func writeAnchorRules(
+        active: Bool,
+        allowedResolverIPs: [String],
+        forceProxyActive: Bool,
+        proxyIPs: [String],
+        proxyPort: Int
+    ) {
         try? FileManager.default.createDirectory(
             atPath: (FocusLockConstants.pfAnchorFilePath as NSString).deletingLastPathComponent,
             withIntermediateDirectories: true
@@ -94,6 +118,28 @@ enum PFBlocker {
             lines.append("block drop quick proto udp from any to \(ip) port 53")
             lines.append("block drop quick proto tcp from any to \(ip) port 53")
         }
+
+        // Force-through: drop direct :80/:443 to everything except the proxy, so all web traffic has
+        // to go through the content filter. `quick` = first match wins, so the pass rules for the
+        // proxy itself (and loopback, so a local server on :443 still works) MUST precede the block
+        // drops below. Only emitted when the caller confirmed the proxy is reachable this tick.
+        if forceProxyActive, !proxyIPs.isEmpty {
+            lines.append("# Force all web traffic through the mitmproxy content filter")
+            lines.append("pass quick proto tcp from any to 127.0.0.1")
+            lines.append("pass quick proto tcp from any to ::1")
+            for ip in proxyIPs {
+                if proxyPort > 0 {
+                    lines.append("pass quick proto tcp from any to \(ip) port \(proxyPort)")
+                }
+                // Also let the proxy host itself stay reachable on the normal web ports (its own
+                // ACME/renewals, the updates endpoint, etc. share the box).
+                lines.append("pass quick proto tcp from any to \(ip) port 80")
+                lines.append("pass quick proto tcp from any to \(ip) port 443")
+            }
+            lines.append("block drop quick proto tcp from any to any port 80")
+            lines.append("block drop quick proto tcp from any to any port 443")
+        }
+
         let content = lines.joined(separator: "\n") + "\n"
         try? content.write(toFile: FocusLockConstants.pfAnchorFilePath, atomically: true, encoding: .utf8)
     }

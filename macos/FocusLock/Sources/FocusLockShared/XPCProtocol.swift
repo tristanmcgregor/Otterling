@@ -46,6 +46,17 @@ import Foundation
     /// Passcode-gated, then queued for the cooldown.
     func disableDNSEnforcement(passcode: String, reply: @escaping (Data) -> Void)
 
+    /// Routes the Mac's web traffic through the filter-server's mitmproxy (content filtering +
+    /// trigger-word reporting on blocked pages), like the phone. `forceViaFirewall` additionally
+    /// drops direct :80/:443 so non-proxy-aware apps can't sidestep it. Always allowed / immediate
+    /// (protection-increasing). Fail-open: the daemon only actually sets the proxy when it's
+    /// reachable and the proxy password is provisioned (Scripts/setup_mac_proxy.command); otherwise
+    /// it stays off so web access never breaks.
+    func enableProxyEnforcement(forceViaFirewall: Bool, reply: @escaping (Data) -> Void)
+    /// Passcode-gated, then queued for the cooldown. Clears both proxy toggles and removes the
+    /// system proxy when it matures.
+    func disableProxyEnforcement(passcode: String, reply: @escaping (Data) -> Void)
+
     /// Passcode-gated, then queued for the cooldown -- repointing the host at an unfiltered
     /// resolver is equivalent to turning the filter off, so it's gated like a removal rather than
     /// left open the way *adding* a block is.

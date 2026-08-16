@@ -28,6 +28,10 @@ func printUsage() {
       focuslockctl disable-dns                            (passcode + cooldown)
       focuslockctl set-filter-host <host>                 (passcode + cooldown)
 
+      focuslockctl enable-proxy [--force]                 (route web through mitmproxy; --force also
+                                                           firewall-blocks direct :80/:443)
+      focuslockctl disable-proxy                          (passcode + cooldown)
+
       focuslockctl set-passcode                           (prompts; no passcode set = no prompt)
       focuslockctl clear-passcode                         (passcode + cooldown)
       focuslockctl set-cooldown <hours>                   (raising is free; lowering is gated)
@@ -109,6 +113,12 @@ func formatState(_ state: FocusLockState) -> String {
     }
     lines.append("DNS enforcement: \(state.dnsEnforcementEnabled ? "ON" : "off")")
     lines.append("Cloud filter host: \(state.cloudFilterHost) (\(state.cloudFilterEnabled ? "enabled" : "disabled, Cloudflare Family fallback only"))")
+    if state.proxyEnforcementEnabled {
+        let force = state.forceProxyViaFirewall ? " + firewall force-through (:80/:443 locked to proxy)" : ""
+        lines.append("Proxy enforcement: ON\(force) — \(state.proxyHost):\(state.proxyPort)")
+    } else {
+        lines.append("Proxy enforcement: off")
+    }
 
     if state.passcodeConfigured {
         lines.append("Guardian passcode: set")
@@ -209,6 +219,12 @@ Task {
     case "set-filter-host":
         guard arguments.count >= 3 else { printUsage(); finished = true; exit(1) }
         printResult(await client.setCloudFilterHost(arguments[2], passcode: passcodeIfConfigured(await client.getStatus())))
+
+    case "enable-proxy":
+        printResult(await client.enableProxyEnforcement(forceViaFirewall: arguments.contains("--force")))
+
+    case "disable-proxy":
+        printResult(await client.disableProxyEnforcement(passcode: passcodeIfConfigured(await client.getStatus())))
 
     case "set-passcode":
         let state = await client.getStatus()

@@ -21,6 +21,15 @@ let package = Package(
             dependencies: ["FocusLockShared"]
         ),
 
+        // Per-user LaunchAgent that scans the frontmost browser's accessibility tree for on-screen
+        // trigger words and reports them -- the macOS equivalent of the phone's
+        // FocusGuardAccessibilityService. Separate process from the GUI app so it keeps scanning
+        // even when no Otterling window is open. See Sources/FocusLockScanner/main.swift.
+        .executableTarget(
+            name: "FocusLockScanner",
+            dependencies: ["FocusLockShared"]
+        ),
+
         // Command-line override tool, meant to be run from the Guardian admin account.
         .executableTarget(
             name: "focuslockctl",

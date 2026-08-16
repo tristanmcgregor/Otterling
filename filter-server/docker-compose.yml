@@ -40,6 +40,11 @@ services:
       # so both containers check the exact same blocklist/classifier logic without sharing a process.
       - ./ai_classifier.py:/home/mitmproxy/ai_classifier.py:ro
       - ./domain_blocklist.py:/home/mitmproxy/domain_blocklist.py:ro
+      # Trigger-word reporting: block_reporter.py POSTs a `trigger_word_detected` alert to the phone
+      # when trigger_words.py finds a listed word on a blocked page. Same volume-mount-not-import
+      # pattern as the two files above.
+      - ./trigger_words.py:/home/mitmproxy/trigger_words.py:ro
+      - ./block_reporter.py:/home/mitmproxy/block_reporter.py:ro
     environment:
       - PROXY_USER=${PROXY_USER:-otterling}
       - PROXY_PASSWORD=${PROXY_PASSWORD:?set PROXY_PASSWORD in .env}
@@ -47,6 +52,11 @@ services:
       # the release-review pipeline (/var/lib/otterling/ci/secrets.env), reused here rather than
       # provisioning a second one. Addon fails open (no block) if this is unset.
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      # block_reporter.py POSTs trigger-word alerts here. This container's DNS is overridden to
+      # public resolvers (see `dns:` above), so it can't resolve the internal `lockprofile` service
+      # name -- it reports to the PUBLIC /alerts/tamper the same way phones do, back through Caddy.
+      - ALERTS_URL=${ALERTS_URL:-https://vpn.bartholomew.help/alerts/tamper}
+      - LOCKPROFILE_TOKEN=${LOCKPROFILE_TOKEN:?set LOCKPROFILE_TOKEN in .env}
     # Regular (non-transparent) HTTP CONNECT proxy mode: the Android app tunnels each TCP 80/443
     # flow here via CONNECT, mitmproxy dials the real destination itself, and auto-detects TLS vs
     # plain HTTP inside the tunnel so both get inspected by mitm_nsfw_addon.py -- no in-page

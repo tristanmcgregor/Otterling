@@ -262,6 +262,45 @@ final class XPCService: NSObject, FocusLockXPCProtocol {
         reply(FocusLockCodec.encode(schedule(.disableDNSEnforcement)))
     }
 
+    func enableProxyEnforcement(forceViaFirewall: Bool, reply: @escaping (Data) -> Void) {
+        stateStore.mutate { state in
+            state.proxyEnforcementEnabled = true
+            state.forceProxyViaFirewall = forceViaFirewall
+        }
+        // Apply immediately rather than waiting for the enforcement loop's proxy cadence. The result
+        // is advisory here (ProxyEnforcer is fail-open); the loop re-asserts it every tick regardless.
+        let state = stateStore.snapshot()
+        let active = ProxyEnforcer.apply(host: state.proxyHost, port: state.proxyPort, enabled: true)
+        onStateChanged()
+        if active {
+            reply(FocusLockCodec.encode(FocusLockResult(
+                success: true,
+                message: forceViaFirewall
+                    ? "Proxy enforcement on, with firewall force-through. All web traffic now goes through the filter."
+                    : "Proxy enforcement on. Browser traffic now goes through the filter."
+            )))
+        } else {
+            // Not an error -- the toggle is saved and the loop will pick it up once the proxy is
+            // reachable/provisioned -- but tell the caller why nothing changed yet.
+            reply(FocusLockCodec.encode(FocusLockResult(
+                success: true,
+                message: "Proxy enforcement is enabled but not active yet: the mitmproxy wasn't reachable, or no proxy password is provisioned. Run Scripts/setup_mac_proxy.command, then it activates automatically. (Web access is unaffected until then.)"
+            )))
+        }
+    }
+
+    func disableProxyEnforcement(passcode: String, reply: @escaping (Data) -> Void) {
+        if let denial = authorize(passcode: passcode, action: "disable proxy enforcement") {
+            reply(FocusLockCodec.encode(FocusLockResult.denied(denial)))
+            return
+        }
+        guard stateStore.snapshot().proxyEnforcementEnabled else {
+            reply(FocusLockCodec.encode(FocusLockResult.denied("Proxy enforcement is already off.")))
+            return
+        }
+        reply(FocusLockCodec.encode(schedule(.disableProxyEnforcement)))
+    }
+
     func setCloudFilterHost(_ host: String, passcode: String, reply: @escaping (Data) -> Void) {
         // Repointing the cloud filter host is equivalent to defeating it (an unfiltered or
         // malicious host is one edit away) -- gated the same as disabling it outright, not left

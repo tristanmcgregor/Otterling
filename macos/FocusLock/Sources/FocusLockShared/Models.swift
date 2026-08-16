@@ -47,6 +47,7 @@ public enum PendingActionKind: String, Codable, Sendable {
     case removeBlockedDomain
     case removeProtectedApp
     case disableDNSEnforcement
+    case disableProxyEnforcement
     case setCloudFilterHost
     case disableCloudFilter
     case lowerCooldownHours
@@ -59,6 +60,7 @@ public enum PendingActionKind: String, Codable, Sendable {
         case .removeBlockedDomain: return "Unblock site"
         case .removeProtectedApp: return "Stop protecting app"
         case .disableDNSEnforcement: return "Turn off DNS enforcement"
+        case .disableProxyEnforcement: return "Turn off proxy enforcement"
         case .setCloudFilterHost: return "Repoint cloud filter to"
         case .disableCloudFilter: return "Turn off the cloud filter"
         case .lowerCooldownHours: return "Lower the cooldown to (hours)"
@@ -125,6 +127,23 @@ public struct FocusLockState: Codable, Sendable {
     public var dnsEnforcementEnabled: Bool
     public var cloudFilterHost: String
     public var cloudFilterEnabled: Bool
+
+    /// When on, the daemon points every network service's system HTTP/HTTPS proxy at the
+    /// filter-server's mitmproxy (`proxyHost:proxyPort`) and re-asserts it every tick, so the Mac's
+    /// browser traffic is content-filtered the same way the phone's is. Protection-increasing to
+    /// turn on (immediate); turning off is passcode+cooldown gated (`disableProxyEnforcement`).
+    /// Fail-open: `ProxyEnforcer` only sets the proxy when it's reachable AND the proxy password is
+    /// provisioned -- otherwise it removes the proxy so browsing never breaks. Off by default.
+    public var proxyEnforcementEnabled: Bool
+    /// Additionally installs a pf rule blocking direct outbound :80/:443 to everything except the
+    /// proxy, so even non-proxy-aware apps are forced through the filter (and the proxy can't be
+    /// sidestepped by just turning the system proxy off). MUCH more aggressive -- it also blocks
+    /// cert-pinned apps that can't be MITM'd -- so it's off by default and, critically, `PFBlocker`
+    /// only applies it while the proxy is confirmed reachable this tick; if the proxy goes down the
+    /// rule is lifted within one tick, so it can never take the machine offline.
+    public var forceProxyViaFirewall: Bool
+    public var proxyHost: String
+    public var proxyPort: Int
     /// Live status, not persisted config: whether `LockProfileGuard` last saw the lock profile
     /// (see GUARDIAN_SETUP.md §5) installed. `XPCService.getStatus` overlays this from
     /// `LockProfileGuard.lastKnownState` on every reply rather than trusting whatever value was
@@ -166,6 +185,13 @@ public struct FocusLockState: Codable, Sendable {
         dnsEnforcementEnabled: Bool = true,
         cloudFilterHost: String = FocusLockConstants.defaultCloudFilterHost,
         cloudFilterEnabled: Bool = true,
+        // Off by default even on a fresh install: routing the Mac through the MITM proxy requires
+        // provisioning the proxy password + trusting the mitm CA first (Scripts/setup_mac_proxy),
+        // so it can't be silently on out of the box.
+        proxyEnforcementEnabled: Bool = false,
+        forceProxyViaFirewall: Bool = false,
+        proxyHost: String = FocusLockConstants.defaultCloudFilterHost,
+        proxyPort: Int = FocusLockConstants.defaultProxyPort,
         lockProfileInstalled: Bool = false,
         vpnActive: Bool = false,
         guardianPasscode: PasscodeRecord? = nil,
@@ -179,6 +205,10 @@ public struct FocusLockState: Codable, Sendable {
         self.dnsEnforcementEnabled = dnsEnforcementEnabled
         self.cloudFilterHost = cloudFilterHost
         self.cloudFilterEnabled = cloudFilterEnabled
+        self.proxyEnforcementEnabled = proxyEnforcementEnabled
+        self.forceProxyViaFirewall = forceProxyViaFirewall
+        self.proxyHost = proxyHost
+        self.proxyPort = proxyPort
         self.lockProfileInstalled = lockProfileInstalled
         self.vpnActive = vpnActive
         self.guardianPasscode = guardianPasscode
@@ -202,6 +232,13 @@ public struct FocusLockState: Codable, Sendable {
         dnsEnforcementEnabled = try container.decodeIfPresent(Bool.self, forKey: .dnsEnforcementEnabled) ?? false
         cloudFilterHost = try container.decodeIfPresent(String.self, forKey: .cloudFilterHost) ?? FocusLockConstants.defaultCloudFilterHost
         cloudFilterEnabled = try container.decodeIfPresent(Bool.self, forKey: .cloudFilterEnabled) ?? true
+        // Both proxy toggles default OFF for an existing install that predates them -- turning the
+        // Mac's whole traffic through a MITM proxy is never something an upgrade should switch on
+        // without the Guardian's explicit say-so (and CA/password provisioning).
+        proxyEnforcementEnabled = try container.decodeIfPresent(Bool.self, forKey: .proxyEnforcementEnabled) ?? false
+        forceProxyViaFirewall = try container.decodeIfPresent(Bool.self, forKey: .forceProxyViaFirewall) ?? false
+        proxyHost = try container.decodeIfPresent(String.self, forKey: .proxyHost) ?? FocusLockConstants.defaultCloudFilterHost
+        proxyPort = try container.decodeIfPresent(Int.self, forKey: .proxyPort) ?? FocusLockConstants.defaultProxyPort
         lockProfileInstalled = try container.decodeIfPresent(Bool.self, forKey: .lockProfileInstalled) ?? false
         vpnActive = try container.decodeIfPresent(Bool.self, forKey: .vpnActive) ?? false
         guardianPasscode = try container.decodeIfPresent(PasscodeRecord.self, forKey: .guardianPasscode)
@@ -220,6 +257,7 @@ public struct FocusLockState: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case blockedApps, blockedDomains, protectedApps, dnsEnforcementEnabled
         case cloudFilterHost, cloudFilterEnabled, lockProfileInstalled, vpnActive
+        case proxyEnforcementEnabled, forceProxyViaFirewall, proxyHost, proxyPort
         case guardianPasscode, passcodeConfigured, cooldownHours, pendingActions
     }
 

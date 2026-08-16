@@ -114,6 +114,11 @@ NTFY_EVENT_STYLE = {
     # (not just the alerting) -- urgent. `vpn_cleared` is the all-clear once it's down again.
     "vpn_active": ("Otterling: VPN up — content filter bypassed", "urgent", "warning"),
     "vpn_cleared": ("Otterling: VPN down — filter back in effect", "default", "white_check_mark"),
+    # A trigger word (the shared trigger_words list) was seen on a page the content filter blocked
+    # (server-side, from mitm_nsfw_addon.py) or on-screen on the Mac (FocusLockScanner's
+    # accessibility scan). Report-only, like the phone's TRIGGER_WORD alerts -- the content was
+    # already blocked/visible; this is the accountability heads-up, not an emergency.
+    "trigger_word_detected": ("Otterling: trigger word seen", "high", "eyes"),
     "daemon_unloaded_recovered": ("Otterling: daemon was down, watchdog recovered it", "high", "robot"),
     "watchdog_or_daemon_reregistered": ("Otterling: needed re-registration on GUI launch", "high", "warning"),
     # Mac-side tamper signals from Fleet (see fleet/ + tamper-alerts/). A failing policy means the

@@ -24,6 +24,16 @@ final class EnforcementLoop {
     private var didStripHostsBlock = false
     private var lastAppliedPFActive = false
     private var lastAppliedAllowedResolverIPs: [String] = []
+    // pf force-through-proxy state, tracked so the anchor is only rewritten when it actually changes.
+    private var lastAppliedForceProxyActive = false
+    private var lastAppliedProxyIPs: [String] = []
+
+    // Whether the mitmproxy system-proxy is currently set AND reachable (ProxyEnforcer's last verdict).
+    // The pf force-through only runs while this is true, so a down proxy can't take web access offline.
+    private var proxyActive = false
+    // One-shot reconcile: if a previous run left the system proxy set but enforcement is now off,
+    // clear it once at startup (the normal disable path goes through PendingActionApplier instead).
+    private var didReconcileProxyDisabled = false
 
     // Debounces relaunch attempts per app so a slow-starting process (which won't show up in a
     // process scan for a second or two) doesn't get `open`'d again on every tick before it's had
@@ -55,6 +65,11 @@ final class EnforcementLoop {
     // seconds before it's noticed is fine, and this keeps the tick cheap.
     private var lastVPNCheckAt: Date?
     private let vpnCheckInterval: TimeInterval = 20
+
+    // ProxyEnforcer shells out to networksetup + does a TCP reachability probe; same "own slower
+    // cadence" reasoning as DNS. Re-asserts the system proxy (or removes it when unreachable).
+    private var lastProxyCheckAt: Date?
+    private let proxyCheckInterval: TimeInterval = 15
 
     func start(stateStore: StateStore, interval: TimeInterval = 3) {
         self.stateStore = stateStore
@@ -123,14 +138,52 @@ final class EnforcementLoop {
                 self.lastVPNCheckAt = vpnNow
             }
 
-            // pf's only job now is to stop DoH/DoT from bypassing the server's DNS filter -- there is
-            // no local site-blocking layer anymore -- so it's active whenever DNS enforcement is on.
-            let pfActive = state.dnsEnforcementEnabled
+            // Proxy enforcement: point the system HTTP/HTTPS proxy at the filter-server's mitmproxy
+            // and keep re-asserting it (own slower cadence). ProxyEnforcer is fail-open -- it returns
+            // false and removes the proxy whenever the proxy is unreachable or unprovisioned -- and
+            // that verdict (proxyActive) is what gates the pf force-through below, so a down proxy can
+            // never wedge web access.
+            if state.proxyEnforcementEnabled {
+                let proxyNow = Date()
+                if self.lastProxyCheckAt == nil || proxyNow.timeIntervalSince(self.lastProxyCheckAt!) >= self.proxyCheckInterval {
+                    self.proxyActive = ProxyEnforcer.apply(
+                        host: state.proxyHost, port: state.proxyPort, enabled: true
+                    )
+                    self.lastProxyCheckAt = proxyNow
+                }
+                self.didReconcileProxyDisabled = false
+            } else {
+                // Enforcement off: clear any system proxy a previous run left behind, once.
+                if !self.didReconcileProxyDisabled {
+                    ProxyEnforcer.apply(host: state.proxyHost, port: state.proxyPort, enabled: false)
+                    self.didReconcileProxyDisabled = true
+                }
+                self.proxyActive = false
+                self.lastProxyCheckAt = nil
+            }
+
+            // pf's jobs: stop DoH/DoT from bypassing the DNS filter (whenever DNS enforcement is on),
+            // and -- only when force-through is enabled AND the proxy is confirmed up this tick --
+            // drop direct :80/:443 so all web traffic must go through the proxy.
+            let forceProxyActive = state.forceProxyViaFirewall && self.proxyActive
+            let pfActive = state.dnsEnforcementEnabled || forceProxyActive
             let allowedResolverIPs = DNSEnforcer.lastResolvedIPs
-            if pfActive != self.lastAppliedPFActive || allowedResolverIPs != self.lastAppliedAllowedResolverIPs {
-                PFBlocker.apply(active: pfActive, allowedResolverIPs: allowedResolverIPs)
+            let proxyIPs = ProxyEnforcer.lastResolvedProxyIPs
+            if pfActive != self.lastAppliedPFActive
+                || allowedResolverIPs != self.lastAppliedAllowedResolverIPs
+                || forceProxyActive != self.lastAppliedForceProxyActive
+                || proxyIPs != self.lastAppliedProxyIPs {
+                PFBlocker.apply(
+                    active: pfActive,
+                    allowedResolverIPs: allowedResolverIPs,
+                    forceProxyActive: forceProxyActive,
+                    proxyIPs: proxyIPs,
+                    proxyPort: state.proxyPort
+                )
                 self.lastAppliedPFActive = pfActive
                 self.lastAppliedAllowedResolverIPs = allowedResolverIPs
+                self.lastAppliedForceProxyActive = forceProxyActive
+                self.lastAppliedProxyIPs = proxyIPs
             }
 
             let killed = AppBlockEnforcer.enforce(blockedApps: state.blockedApps)

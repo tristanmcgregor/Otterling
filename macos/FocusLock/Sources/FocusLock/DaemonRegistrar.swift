@@ -19,6 +19,24 @@ enum DaemonRegistrar {
             isReachable: { launchdJobLoaded(label: FocusLockConstants.watchdogBundleIdentifier) },
             reportLabel: "FocusLockWatchdog"
         )
+        registerScannerAgentIfNeeded()
+    }
+
+    /// The trigger-word scanner is a per-user LaunchAgent, not a root daemon -- registered with
+    /// `SMAppService.agent` (its plist lives in Contents/Library/LaunchAgents). Like the daemons it
+    /// sits in `.requiresApproval` until the user allows it under Login Items & Extensions; on top
+    /// of that it needs Accessibility permission, which the scanner itself prompts for on first run.
+    /// No reachability re-check/re-register dance here: the scanner is report-only, so a stale
+    /// registration is a missed alert, not a lifted protection -- not worth the extra launchctl
+    /// probing the daemons justify.
+    private static func registerScannerAgentIfNeeded() {
+        let service = SMAppService.agent(plistName: "\(FocusLockConstants.scannerBundleIdentifier).plist")
+        guard service.status != .enabled else { return }
+        do {
+            try service.register()
+        } catch {
+            NSLog("FocusLock: FocusLockScanner agent registration failed (status=\(service.status)): \(error)")
+        }
     }
 
     /// SMAppService's cached `.status` can go stale relative to what launchd actually has loaded

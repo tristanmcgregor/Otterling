@@ -43,6 +43,16 @@ enum PendingActionApplier {
             }
             DNSEnforcer.remove()
 
+        case .disableProxyEnforcement:
+            stateStore.mutate { state in
+                state.proxyEnforcementEnabled = false
+                // The firewall force-through only makes sense while the proxy is enforced, so tearing
+                // down the proxy takes it down too -- otherwise pf would keep dropping direct :443
+                // with no proxy to route through, i.e. take web offline (the exact failure we forbid).
+                state.forceProxyViaFirewall = false
+            }
+            ProxyEnforcer.remove()
+
         case .setCloudFilterHost:
             stateStore.mutate { state in
                 state.cloudFilterHost = action.target

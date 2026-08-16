@@ -118,6 +118,22 @@ public final class FocusLockXPCClient {
         }, onError: .denied("Could not reach FocusLockHelperd"))
     }
 
+    public func enableProxyEnforcement(forceViaFirewall: Bool) async -> FocusLockResult {
+        await withXPCContinuation({ resume, onError in
+            proxy(errorHandler: onError).enableProxyEnforcement(forceViaFirewall: forceViaFirewall) { data in
+                resume(FocusLockCodec.decode(FocusLockResult.self, from: data) ?? .denied("Malformed reply"))
+            }
+        }, onError: .denied("Could not reach FocusLockHelperd"))
+    }
+
+    public func disableProxyEnforcement(passcode: String) async -> FocusLockResult {
+        await withXPCContinuation({ resume, onError in
+            proxy(errorHandler: onError).disableProxyEnforcement(passcode: passcode) { data in
+                resume(FocusLockCodec.decode(FocusLockResult.self, from: data) ?? .denied("Malformed reply"))
+            }
+        }, onError: .denied("Could not reach FocusLockHelperd"))
+    }
+
     public func setCloudFilterHost(_ host: String, passcode: String) async -> FocusLockResult {
         await withXPCContinuation({ resume, onError in
             proxy(errorHandler: onError).setCloudFilterHost(host, passcode: passcode) { data in

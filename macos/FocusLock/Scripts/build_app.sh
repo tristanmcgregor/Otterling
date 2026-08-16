@@ -30,6 +30,7 @@ DISPLAY_NAME="Otterling"
 BUNDLE_ID="app.otterling"
 HELPER_LABEL="app.otterling.helperd"
 WATCHDOG_LABEL="app.otterling.watchdog"
+SCANNER_LABEL="app.otterling.scanner"
 INSTALL_PATH="/Applications/${APP_NAME}.app"
 # Must match FocusLockConstants.appVersionCode in Sources/FocusLockShared/Constants.swift -- kept
 # in sync by hand (see that constant's doc comment); UpdateManager compares against the Swift
@@ -43,11 +44,13 @@ echo "==> Assembling ${APP_NAME}.app at ${INSTALL_PATH}"
 rm -rf "$INSTALL_PATH"
 mkdir -p "$INSTALL_PATH/Contents/MacOS"
 mkdir -p "$INSTALL_PATH/Contents/Library/LaunchDaemons"
+mkdir -p "$INSTALL_PATH/Contents/Library/LaunchAgents"
 mkdir -p "$INSTALL_PATH/Contents/Resources"
 
 cp "$BUILD_DIR/${EXECUTABLE_NAME}" "$INSTALL_PATH/Contents/MacOS/${EXECUTABLE_NAME}"
 cp "$BUILD_DIR/FocusLockHelperd" "$INSTALL_PATH/Contents/MacOS/FocusLockHelperd"
 cp "$BUILD_DIR/FocusLockWatchdog" "$INSTALL_PATH/Contents/MacOS/FocusLockWatchdog"
+cp "$BUILD_DIR/FocusLockScanner" "$INSTALL_PATH/Contents/MacOS/FocusLockScanner"
 if [ -f "$PROJECT_DIR/Resources/AppIcon.icns" ]; then
   cp "$PROJECT_DIR/Resources/AppIcon.icns" "$INSTALL_PATH/Contents/Resources/AppIcon.icns"
 fi
@@ -127,9 +130,35 @@ tee "$INSTALL_PATH/Contents/Library/LaunchDaemons/${WATCHDOG_LABEL}.plist" > /de
 </plist>
 PLIST
 
-echo "==> Code-signing (daemons first, then app bundle)"
+# Per-user LaunchAgent for the trigger-word accessibility scanner. Unlike the two daemons above
+# this is a GUI-session agent (Accessibility/TCC is per-user and needs a login session), so it goes
+# under LaunchAgents and SMAppService.agent registers it. RunAtLoad + KeepAlive so it stays up and
+# comes back on login; it prompts for Accessibility permission itself on first run.
+tee "$INSTALL_PATH/Contents/Library/LaunchAgents/${SCANNER_LABEL}.plist" > /dev/null <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>${SCANNER_LABEL}</string>
+    <key>Program</key>
+    <string>${INSTALL_PATH}/Contents/MacOS/FocusLockScanner</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/tmp/focuslock-scanner.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/focuslock-scanner.log</string>
+</dict>
+</plist>
+PLIST
+
+echo "==> Code-signing (daemons + agent first, then app bundle)"
 codesign --force --options runtime --sign "$SIGN_IDENTITY" "$INSTALL_PATH/Contents/MacOS/FocusLockHelperd"
 codesign --force --options runtime --sign "$SIGN_IDENTITY" "$INSTALL_PATH/Contents/MacOS/FocusLockWatchdog"
+codesign --force --options runtime --sign "$SIGN_IDENTITY" "$INSTALL_PATH/Contents/MacOS/FocusLockScanner"
 codesign --force --options runtime --sign "$SIGN_IDENTITY" "$INSTALL_PATH/Contents/MacOS/${EXECUTABLE_NAME}"
 codesign --force --options runtime --sign "$SIGN_IDENTITY" "$INSTALL_PATH"
 
