@@ -137,6 +137,16 @@
             android:name=".updates.UpdateInstallResultReceiver"
             android:exported="false" />
 
+        <!-- Receives the filter-server's "poll now" push so Mac tamper alerts reach the partner in
+             seconds instead of on MacTamperPollWorker's 15-minute floor. See MacTamperMessagingService. -->
+        <service
+            android:name=".alerts.MacTamperMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+
         <service
             android:name=".content.VpnFilterService"
             android:exported="true"

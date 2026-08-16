@@ -45,6 +45,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import app.otterling.admin.DeviceOwnerManager
+import app.otterling.alerts.FcmTokenRegistrar
 import app.otterling.alerts.MacTamperPollWorker
 import app.otterling.content.BlocklistRefreshWorker
 import app.otterling.data.ProtectedApp
@@ -219,6 +220,9 @@ class MainActivity : ComponentActivity() {
         BlocklistRefreshWorker.enqueuePeriodic(applicationContext)
         UpdateCheckWorker.enqueuePeriodic(applicationContext)
         MacTamperPollWorker.enqueuePeriodic(applicationContext)
+        // Hand our FCM token to the filter-server so it can push a "poll now" wake -- turns the
+        // 15-minute poll floor into seconds. Idempotent and best-effort; falls back to polling.
+        FcmTokenRegistrar.registerCurrentToken(applicationContext)
         setContent {
             FamilyGuardTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {

@@ -50,3 +50,9 @@ filter-server/.ci-otterling-deploy-key
 
 .DS_Store
 filter-server/fleet/.env
+
+# Firebase credentials — never committed (matches the production mirror's convention). The app's
+# client config is dropped onto the build host; the server's service-account key goes in the
+# gitignored lockprofile-data/ mount. Both are placed out-of-band, see FCM setup notes.
+app/google-services.json
+**/fcm-service-account.json

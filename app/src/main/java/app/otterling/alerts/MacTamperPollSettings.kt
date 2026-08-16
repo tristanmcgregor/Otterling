@@ -51,11 +51,21 @@ class MacTamperPollSettings(context: Context) {
         prefs.edit().putLong(KEY_LAST_POLLED, millis).apply()
     }
 
+    /** The FCM registration token this device last *successfully* handed to the filter-server, so
+     *  [FcmTokenRegistrar] can skip a redundant re-POST when nothing has changed. Not a secret (it's
+     *  a routing address, useless without the FCM server key), so it lives in plain prefs. */
+    fun lastRegisteredFcmToken(): String = prefs.getString(KEY_FCM_TOKEN, "").orEmpty()
+
+    fun setLastRegisteredFcmToken(token: String) {
+        prefs.edit().putString(KEY_FCM_TOKEN, token).apply()
+    }
+
     private companion object {
         const val SECURE_PREFS = "mac_tamper_poll_secure"
         const val PREFS = "mac_tamper_poll_settings"
         const val KEY_TOKEN = "lockprofile_token"
         const val KEY_LAST_SEEN_ID = "last_seen_alert_id"
         const val KEY_LAST_POLLED = "last_polled_at_millis"
+        const val KEY_FCM_TOKEN = "last_registered_fcm_token"
     }
 }

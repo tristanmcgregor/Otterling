@@ -38,6 +38,12 @@ val releaseCertSha256 = System.getenv("RELEASE_CERT_SHA256")
     ?: localProperties.getProperty("RELEASE_CERT_SHA256")
     ?: ""
 
+// Google's Firebase plugin reads this file at build time and fails the build if it's missing, so
+// the plugin is applied conditionally at the bottom of this file -- the project builds fine without
+// it, and FCM push (instant tamper alerts) just stays inert until google-services.json is dropped
+// in for the app.otterling / otterling-98c2e Firebase project.
+val googleServicesJson = file("google-services.json")
+
 android {
     namespace = "app.otterling"
     compileSdk = 36
@@ -119,6 +125,12 @@ dependencies {
     implementation("androidx.work:work-runtime-ktx:2.11.2")
     implementation("androidx.security:security-crypto:1.1.0")
 
+    // FCM: lets the filter-server push a "poll now" wake to the phone so a Mac tamper alert reaches
+    // the accountability partner in seconds instead of on MacTamperPollWorker's 15-minute floor.
+    // Only firebase-messaging -- no firestore/crashlytics -- to keep the dependency surface minimal.
+    implementation(platform("com.google.firebase:firebase-bom:34.17.0"))
+    implementation("com.google.firebase:firebase-messaging")
+
     // On-device image embeddings for habit photo-proof verification (MobileNet-V3 TFLite model
     // bundled in assets/mobilenet_embedder.tflite).
     implementation("com.google.mediapipe:tasks-vision:0.10.35")
@@ -129,4 +141,10 @@ dependencies {
     testImplementation("org.xerial:sqlite-jdbc:3.46.1.3")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
+}
+
+// See the googleServicesJson doc comment above: applied only when the file is present, so a
+// checkout without it still builds (FCM inert) rather than failing outright.
+if (googleServicesJson.exists()) {
+    apply(plugin = "com.google.gms.google-services")
 }
