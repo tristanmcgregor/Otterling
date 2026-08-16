@@ -15,7 +15,7 @@ final class EnforcementLoop {
 
     private var stateStore: StateStore?
     private var timer: Timer?
-    private let queue = DispatchQueue(label: "au.com.tbmcgregor.bwparker.focuslock.enforcement")
+    private let queue = DispatchQueue(label: "app.otterling.enforcement")
 
     // Tracks what's currently applied to /etc/hosts and pf so reapplyNow() (called on every XPC
     // mutation plus every timer tick) only touches the filesystem/pf when something changed.
@@ -49,6 +49,11 @@ final class EnforcementLoop {
     private var lastLockProfileCheckAt: Date?
     private let lockProfileCheckInterval: TimeInterval = 15
 
+    // VPNGuard shells out (scutil + route); its own slightly slower cadence -- a VPN coming up a few
+    // seconds before it's noticed is fine, and this keeps the tick cheap.
+    private var lastVPNCheckAt: Date?
+    private let vpnCheckInterval: TimeInterval = 20
+
     func start(stateStore: StateStore, interval: TimeInterval = 3) {
         self.stateStore = stateStore
         reapplyNow()
@@ -62,6 +67,20 @@ final class EnforcementLoop {
     func reapplyNow() {
         queue.async { [weak self] in
             guard let self, let stateStore = self.stateStore else { return }
+
+            // Before reading state for this tick: apply anything whose cooldown has elapsed, so
+            // the rest of the tick enforces the post-change state rather than lagging by up to 3s.
+            // Runs off the timer rather than a scheduled wake-up on purpose -- a `PendingAction`
+            // matures based on the timestamp persisted in state.json, so a reboot, a daemon
+            // restart, or a `launchctl bootout` in the middle of a cooldown neither loses the
+            // action nor lets it land early.
+            let applied = PendingActionApplier.applyMatured(stateStore: stateStore)
+            for action in applied {
+                FileHandle.standardError.write(
+                    "[cooldown] applied: \(action.describedFully)\n".data(using: .utf8)!
+                )
+            }
+
             let state = stateStore.snapshot()
 
             // Cheap staleness check -- only actually dispatches a download (on its own background
@@ -93,6 +112,14 @@ final class EnforcementLoop {
             if self.lastLockProfileCheckAt == nil || lockProfileNow.timeIntervalSince(self.lastLockProfileCheckAt!) >= self.lockProfileCheckInterval {
                 LockProfileGuard.checkAndReportChanges()
                 self.lastLockProfileCheckAt = lockProfileNow
+            }
+
+            // A VPN tunnels traffic around the whole content filter, so it's checked on every tick's
+            // slow cadence right alongside the lock profile.
+            let vpnNow = Date()
+            if self.lastVPNCheckAt == nil || vpnNow.timeIntervalSince(self.lastVPNCheckAt!) >= self.vpnCheckInterval {
+                VPNGuard.checkAndReportChanges()
+                self.lastVPNCheckAt = vpnNow
             }
 
             let siteBlockActive = !domainsToBlock.isEmpty

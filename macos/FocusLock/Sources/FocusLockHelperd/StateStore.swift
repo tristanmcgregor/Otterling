@@ -29,7 +29,12 @@ final class StateStore {
 
     private static func load(from fileURL: URL) -> FocusLockState? {
         guard let data = try? Data(contentsOf: fileURL) else { return nil }
-        return FocusLockCodec.decode(FocusLockState.self, from: data)
+        guard var state = FocusLockCodec.decode(FocusLockState.self, from: data) else { return nil }
+        // `passcodeConfigured` is only meaningful as a transport field (getStatus sets it after
+        // stripping the digest). Re-derive it from what's actually on disk so a hand-edited
+        // state.json can't make the daemon claim a passcode it can't verify against.
+        state.passcodeConfigured = state.guardianPasscode != nil
+        return state
     }
 
     func snapshot() -> FocusLockState {

@@ -23,13 +23,13 @@ BUILD_DIR="$PROJECT_DIR/.build/debug"
 # EXECUTABLE_NAME matches the SwiftPM product names in Package.swift (unchanged -- renaming these
 # would mean large Package.swift/target churn for no user-facing benefit). APP_NAME/DISPLAY_NAME
 # is purely the install path and Info.plist branding -- bundle/Mach/LaunchDaemon IDs stay as
-# au.com.tbmcgregor.bwparker.focuslock* so an existing install isn't orphaned by this rename.
+# app.otterling* so an existing install isn't orphaned by this rename.
 EXECUTABLE_NAME="FocusLock"
 APP_NAME="Otterling"
 DISPLAY_NAME="Otterling"
-BUNDLE_ID="au.com.tbmcgregor.bwparker.focuslock"
-HELPER_LABEL="au.com.tbmcgregor.bwparker.focuslock.helperd"
-WATCHDOG_LABEL="au.com.tbmcgregor.bwparker.focuslock.watchdog"
+BUNDLE_ID="app.otterling"
+HELPER_LABEL="app.otterling.helperd"
+WATCHDOG_LABEL="app.otterling.watchdog"
 INSTALL_PATH="/Applications/${APP_NAME}.app"
 # Must match FocusLockConstants.appVersionCode in Sources/FocusLockShared/Constants.swift -- kept
 # in sync by hand (see that constant's doc comment); UpdateManager compares against the Swift

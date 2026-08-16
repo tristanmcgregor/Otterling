@@ -71,7 +71,7 @@ permanent once added: there's no timer to wait out, only removal by the Guardian
 - **A routine `sudo` command that never touches the daemon's XPC surface at all.** The admin-group
   check above only guards `removeBlockedApp`/`removeBlockedDomain`/`disableDNSEnforcement`/
   `setCloudFilterEnabled(false)` -- it says nothing about `sudo launchctl bootout
-  system/au.com.tbmcgregor.bwparker.focuslock.helperd` (unloads the daemon outright),
+  system/app.otterling.helperd` (unloads the daemon outright),
   `sudo rm /Library/Application\ Support/FocusLock/state.json` or the embedded LaunchDaemon plist,
   `sudo pfctl -d`, or `networksetup -setdnsservers <service> Empty`. Anyone who already has the
   Guardian's admin password can run any of these from a normal Terminal, no reboot required -- this

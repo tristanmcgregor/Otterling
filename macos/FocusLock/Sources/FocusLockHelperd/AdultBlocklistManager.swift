@@ -18,7 +18,7 @@ final class AdultBlocklistManager {
     static let shared = AdultBlocklistManager()
 
     private let cacheFileURL = URL(fileURLWithPath: FocusLockConstants.adultBlocklistCachePath)
-    private let queue = DispatchQueue(label: "au.com.tbmcgregor.bwparker.focuslock.adultblocklist")
+    private let queue = DispatchQueue(label: "app.otterling.adultblocklist")
     private let lock = NSLock()
     private var cached: [String]
     private var lastRefreshed: Date?

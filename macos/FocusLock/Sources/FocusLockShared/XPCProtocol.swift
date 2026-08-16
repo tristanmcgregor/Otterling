@@ -3,12 +3,22 @@ import Foundation
 /// XPC surface exposed by FocusLockHelperd. Complex payloads cross the wire as JSON `Data`
 /// (NSXPCConnection can't carry arbitrary Codable structs directly).
 ///
-/// The daemon enforces the actual asymmetry here, not the GUI: it checks the *calling process's*
-/// real user ID and only honors `removeBlockedApp`/`removeBlockedDomain` if that user is in the
-/// `admin` group. Under the Guardian-account model your day-to-day account is Standard, so those
-/// calls are structurally rejected no matter what the GUI sends -- the GUI binary itself has no
-/// way to make the daemon accept them. Blocking itself is unconditional and permanent for
-/// whatever is in the list, with no session/timer to wait out.
+/// The daemon enforces the actual asymmetry here, not the GUI. Two gates, applied in order to
+/// every protection-reducing call:
+///
+/// 1. **The passcode.** Once `setGuardianPasscode` has been called, a correct passcode is the only
+///    way through -- `admin` group membership no longer counts for anything. This is what makes the
+///    design work on a machine whose daily user *is* the admin: the boundary stops being an
+///    identity the user already has and becomes a secret they don't. Before any passcode is set the
+///    daemon falls back to the historical `admin`-group check, so an install that never runs
+///    `set-passcode` behaves exactly as it did under the Guardian-account model.
+/// 2. **The cooldown.** A correct passcode doesn't apply the change; it *schedules* it, `cooldownHours`
+///    out (see `PendingAction`). `EnforcementLoop` applies it when due, and `TamperReporter` files the
+///    request the moment it's made. Anyone can cancel a pending action without the passcode --
+///    cancelling restores protection, so it's on the ungated side of the same asymmetry.
+///
+/// Blocking itself stays unconditional and permanent for whatever is in the list, with no session
+/// or timer to wait out. Every `passcode` parameter below is ignored while no passcode is set.
 @objc public protocol FocusLockXPCProtocol {
     func getStatus(reply: @escaping (Data?) -> Void)
 
@@ -17,42 +27,63 @@ import Foundation
     /// Always allowed, from any account.
     func addBlockedDomain(_ domain: String, reply: @escaping (Data) -> Void)
 
-    /// Requires the calling account to be in the `admin` group (i.e. the Guardian account).
-    func removeBlockedApp(executableName: String, reply: @escaping (Data) -> Void)
-    /// Requires the calling account to be in the `admin` group (i.e. the Guardian account).
-    func removeBlockedDomain(_ domain: String, reply: @escaping (Data) -> Void)
+    /// Passcode-gated, then queued for the cooldown.
+    func removeBlockedApp(executableName: String, passcode: String, reply: @escaping (Data) -> Void)
+    /// Passcode-gated, then queued for the cooldown.
+    func removeBlockedDomain(_ domain: String, passcode: String, reply: @escaping (Data) -> Void)
 
     /// Always allowed, from any account. Locks the bundle immediately (best-effort) and adds it
     /// to the enforcement loop's relaunch-if-not-running list.
     func addProtectedApp(_ appJSON: Data, reply: @escaping (Data) -> Void)
-    /// Requires the calling account to be in the `admin` group (i.e. the Guardian account).
-    /// Unlocks the bundle (clears the immutable flag) before removing it from the list.
-    func removeProtectedApp(executableName: String, reply: @escaping (Data) -> Void)
+    /// Passcode-gated, then queued for the cooldown. Unlocks the bundle (clears the immutable flag)
+    /// only when the action actually matures, not when it's requested.
+    func removeProtectedApp(executableName: String, passcode: String, reply: @escaping (Data) -> Void)
 
     /// Always allowed, from any account. Points every network service's DNS at the configured
     /// cloud content filter (or Cloudflare Family as fallback) and blocks alternate/DoH resolvers
     /// so it can't be sidestepped.
     func enableDNSEnforcement(reply: @escaping (Data) -> Void)
-    /// Requires the calling account to be in the `admin` group (i.e. the Guardian account).
-    func disableDNSEnforcement(reply: @escaping (Data) -> Void)
+    /// Passcode-gated, then queued for the cooldown.
+    func disableDNSEnforcement(passcode: String, reply: @escaping (Data) -> Void)
 
-    /// Always allowed, from any account -- picking where the cloud filter points doesn't reduce
-    /// protection (Cloudflare Family stays the fallback either way).
-    func setCloudFilterHost(_ host: String, reply: @escaping (Data) -> Void)
-    /// Turning ON is always allowed; turning OFF (falling back to Cloudflare Family only) requires
-    /// the calling account to be in the `admin` group, same asymmetry as disabling DNS enforcement
-    /// outright.
-    func setCloudFilterEnabled(_ enabled: Bool, reply: @escaping (Data) -> Void)
+    /// Passcode-gated, then queued for the cooldown -- repointing the host at an unfiltered
+    /// resolver is equivalent to turning the filter off, so it's gated like a removal rather than
+    /// left open the way *adding* a block is.
+    func setCloudFilterHost(_ host: String, passcode: String, reply: @escaping (Data) -> Void)
+    /// Turning ON is immediate and ungated; turning OFF is passcode-gated and queued.
+    func setCloudFilterEnabled(_ enabled: Bool, passcode: String, reply: @escaping (Data) -> Void)
+
+    /// Sets or changes the Guardian passcode. Setting the *first* one is always allowed from any
+    /// account -- it only ever adds a gate where there was none, so it's protection-increasing --
+    /// and takes effect immediately. Changing an existing one requires the current passcode and is
+    /// likewise immediate (a rotation doesn't weaken anything). Pass an empty `newPasscode` to
+    /// request removal of the passcode entirely, which is protection-*reducing* and therefore
+    /// queued for the cooldown like any other removal.
+    func setGuardianPasscode(newPasscode: String, currentPasscode: String, reply: @escaping (Data) -> Void)
+
+    /// Raising the cooldown is immediate and ungated. Lowering it is passcode-gated and queued --
+    /// at the *current* (higher) cooldown, so the wait can't be shortened by first shortening the
+    /// wait. Clamped to `FocusLockConstants.maximumCooldownHours`.
+    func setCooldownHours(_ hours: Double, passcode: String, reply: @escaping (Data) -> Void)
+
+    /// Always allowed, from any account, no passcode: cancelling a queued action restores
+    /// protection, which is never the direction that needs gating.
+    func cancelPendingAction(id: String, reply: @escaping (Data) -> Void)
 
     /// Always allowed, from any account -- checking/installing an update isn't a way to weaken
-    /// protection (the opposite, if anything), so it doesn't need the admin-group gate. See
+    /// protection (the opposite, if anything), so it doesn't need the gate. See
     /// `UpdateManager`. Reply is an encoded `UpdateCheckStatus`.
     func checkForUpdate(reply: @escaping (Data) -> Void)
     /// Re-checks (never trusts a manifest the caller might supply) then downloads/verifies/installs
     /// if newer, and -- only on success -- restarts both LaunchDaemons a couple of seconds after
     /// replying (enough time for this reply to actually reach the caller first). Reply is an
     /// encoded `UpdateInstallResult`.
-    func installAvailableUpdate(reply: @escaping (Data) -> Void)
+    ///
+    /// Passcode-gated but *not* cooldown-queued: an update only ever moves the install forward to a
+    /// build the pinned Team ID vouches for, and delaying security fixes by a day is the wrong
+    /// trade. The gate is here because installing swaps the running bundle and restarts both
+    /// daemons, which is too close to the tamper surface to leave open.
+    func installAvailableUpdate(passcode: String, reply: @escaping (Data) -> Void)
 }
 
 public enum FocusLockCodec {

@@ -1,4 +1,4 @@
-// swift-tools-version: 5.10
+// swift-tools-version: 5.9
 import PackageDescription
 
 let package = Package(
@@ -33,6 +33,14 @@ let package = Package(
         // own, so killing FocusLockHelperd can't also kill this.
         .executableTarget(
             name: "FocusLockWatchdog",
+            dependencies: ["FocusLockShared"]
+        ),
+
+        // Covers the parts of FocusLockShared where a silent bug is a security bug rather than a
+        // visible malfunction: passcode verification, and the encode/decode split that keeps the
+        // passcode digest on disk but out of every `getStatus` reply.
+        .testTarget(
+            name: "FocusLockSharedTests",
             dependencies: ["FocusLockShared"]
         ),
     ]

@@ -70,17 +70,17 @@ public final class FocusLockXPCClient {
         }, onError: .denied("Could not reach FocusLockHelperd"))
     }
 
-    public func removeBlockedApp(executableName: String) async -> FocusLockResult {
+    public func removeBlockedApp(executableName: String, passcode: String) async -> FocusLockResult {
         await withXPCContinuation({ resume, onError in
-            proxy(errorHandler: onError).removeBlockedApp(executableName: executableName) { data in
+            proxy(errorHandler: onError).removeBlockedApp(executableName: executableName, passcode: passcode) { data in
                 resume(FocusLockCodec.decode(FocusLockResult.self, from: data) ?? .denied("Malformed reply"))
             }
         }, onError: .denied("Could not reach FocusLockHelperd"))
     }
 
-    public func removeBlockedDomain(_ domain: String) async -> FocusLockResult {
+    public func removeBlockedDomain(_ domain: String, passcode: String) async -> FocusLockResult {
         await withXPCContinuation({ resume, onError in
-            proxy(errorHandler: onError).removeBlockedDomain(domain) { data in
+            proxy(errorHandler: onError).removeBlockedDomain(domain, passcode: passcode) { data in
                 resume(FocusLockCodec.decode(FocusLockResult.self, from: data) ?? .denied("Malformed reply"))
             }
         }, onError: .denied("Could not reach FocusLockHelperd"))
@@ -94,9 +94,9 @@ public final class FocusLockXPCClient {
         }, onError: .denied("Could not reach FocusLockHelperd"))
     }
 
-    public func removeProtectedApp(executableName: String) async -> FocusLockResult {
+    public func removeProtectedApp(executableName: String, passcode: String) async -> FocusLockResult {
         await withXPCContinuation({ resume, onError in
-            proxy(errorHandler: onError).removeProtectedApp(executableName: executableName) { data in
+            proxy(errorHandler: onError).removeProtectedApp(executableName: executableName, passcode: passcode) { data in
                 resume(FocusLockCodec.decode(FocusLockResult.self, from: data) ?? .denied("Malformed reply"))
             }
         }, onError: .denied("Could not reach FocusLockHelperd"))
@@ -110,25 +110,49 @@ public final class FocusLockXPCClient {
         }, onError: .denied("Could not reach FocusLockHelperd"))
     }
 
-    public func disableDNSEnforcement() async -> FocusLockResult {
+    public func disableDNSEnforcement(passcode: String) async -> FocusLockResult {
         await withXPCContinuation({ resume, onError in
-            proxy(errorHandler: onError).disableDNSEnforcement { data in
+            proxy(errorHandler: onError).disableDNSEnforcement(passcode: passcode) { data in
                 resume(FocusLockCodec.decode(FocusLockResult.self, from: data) ?? .denied("Malformed reply"))
             }
         }, onError: .denied("Could not reach FocusLockHelperd"))
     }
 
-    public func setCloudFilterHost(_ host: String) async -> FocusLockResult {
+    public func setCloudFilterHost(_ host: String, passcode: String) async -> FocusLockResult {
         await withXPCContinuation({ resume, onError in
-            proxy(errorHandler: onError).setCloudFilterHost(host) { data in
+            proxy(errorHandler: onError).setCloudFilterHost(host, passcode: passcode) { data in
                 resume(FocusLockCodec.decode(FocusLockResult.self, from: data) ?? .denied("Malformed reply"))
             }
         }, onError: .denied("Could not reach FocusLockHelperd"))
     }
 
-    public func setCloudFilterEnabled(_ enabled: Bool) async -> FocusLockResult {
+    public func setCloudFilterEnabled(_ enabled: Bool, passcode: String) async -> FocusLockResult {
         await withXPCContinuation({ resume, onError in
-            proxy(errorHandler: onError).setCloudFilterEnabled(enabled) { data in
+            proxy(errorHandler: onError).setCloudFilterEnabled(enabled, passcode: passcode) { data in
+                resume(FocusLockCodec.decode(FocusLockResult.self, from: data) ?? .denied("Malformed reply"))
+            }
+        }, onError: .denied("Could not reach FocusLockHelperd"))
+    }
+
+    public func setGuardianPasscode(newPasscode: String, currentPasscode: String) async -> FocusLockResult {
+        await withXPCContinuation({ resume, onError in
+            proxy(errorHandler: onError).setGuardianPasscode(newPasscode: newPasscode, currentPasscode: currentPasscode) { data in
+                resume(FocusLockCodec.decode(FocusLockResult.self, from: data) ?? .denied("Malformed reply"))
+            }
+        }, onError: .denied("Could not reach FocusLockHelperd"))
+    }
+
+    public func setCooldownHours(_ hours: Double, passcode: String) async -> FocusLockResult {
+        await withXPCContinuation({ resume, onError in
+            proxy(errorHandler: onError).setCooldownHours(hours, passcode: passcode) { data in
+                resume(FocusLockCodec.decode(FocusLockResult.self, from: data) ?? .denied("Malformed reply"))
+            }
+        }, onError: .denied("Could not reach FocusLockHelperd"))
+    }
+
+    public func cancelPendingAction(id: String) async -> FocusLockResult {
+        await withXPCContinuation({ resume, onError in
+            proxy(errorHandler: onError).cancelPendingAction(id: id) { data in
                 resume(FocusLockCodec.decode(FocusLockResult.self, from: data) ?? .denied("Malformed reply"))
             }
         }, onError: .denied("Could not reach FocusLockHelperd"))
@@ -142,9 +166,9 @@ public final class FocusLockXPCClient {
         }, onError: nil)
     }
 
-    public func installAvailableUpdate() async -> UpdateInstallResult {
+    public func installAvailableUpdate(passcode: String) async -> UpdateInstallResult {
         await withXPCContinuation({ resume, onError in
-            proxy(errorHandler: onError).installAvailableUpdate { data in
+            proxy(errorHandler: onError).installAvailableUpdate(passcode: passcode) { data in
                 resume(FocusLockCodec.decode(UpdateInstallResult.self, from: data) ?? .rejected("Malformed reply"))
             }
         }, onError: .rejected("Could not reach FocusLockHelperd"))

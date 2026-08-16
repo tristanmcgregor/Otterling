@@ -1,24 +1,23 @@
 import Foundation
 
 /// Best-effort POST of a tamper event to the filter-server's `/alerts/tamper` ingestion endpoint
-/// (see `filter-server/lockprofile_service.py`). Ingestion only for now -- no outbound
-/// notification is wired up on the server side yet, so this is a paper trail the Guardian can go
-/// look at, not an alert that reaches them proactively. Never blocks or throws into its caller.
+/// (see `filter-server/lockprofile_service.py`), which fans it out to ntfy and the phone's
+/// `/alerts/poll` -> SMS relay. Never blocks or throws into its caller.
 ///
 /// Lives in `FocusLockShared` (not `FocusLockHelperd`) because both the main daemon
 /// (`LockProfileGuard`) and the independent watchdog LaunchDaemon (`FocusLockWatchdog`) need to
 /// call it, and those are separate executable targets/processes -- this is the one piece of logic
 /// they share beyond the XPC protocol itself.
 public enum TamperReporter {
-    /// Fire-and-forget with a single retry. Silently does nothing if `install_lock_profile.py`
-    /// was never run (no saved host/token) -- that's a valid, expected state for any install that
-    /// hasn't set up the lock profile yet, not an error.
+    /// Fire-and-forget with a single retry. Uses the host/token provisioned by
+    /// `install_lock_profile.py` when present, otherwise the baked-in defaults in
+    /// `FocusLockConstants` -- so reporting works out of the box on a fresh install.
     public static func report(type: String, details: String) {
-        guard let host = readTrimmed(FocusLockConstants.lockProfileHostPath),
-              let token = readTrimmed(FocusLockConstants.lockProfileTokenPath),
-              !host.isEmpty, !token.isEmpty else {
-            return
-        }
+        let host = nonEmpty(readTrimmed(FocusLockConstants.lockProfileHostPath))
+            ?? FocusLockConstants.defaultLockProfileHost
+        let token = nonEmpty(readTrimmed(FocusLockConstants.lockProfileTokenPath))
+            ?? FocusLockConstants.defaultLockProfileToken
+        guard !host.isEmpty, !token.isEmpty else { return }
         guard let url = URL(string: "https://\(host)/alerts/tamper") else { return }
         let body: [String: Any] = [
             "device_id": deviceID() ?? "unknown",
@@ -79,5 +78,12 @@ public enum TamperReporter {
     private static func readTrimmed(_ path: String) -> String? {
         guard let data = FileManager.default.contents(atPath: path) else { return nil }
         return String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Treats an empty/whitespace-only file the same as a missing one, so a provisioned-but-blank
+    /// file falls through to the baked-in default rather than disabling reporting.
+    private static func nonEmpty(_ value: String?) -> String? {
+        guard let value, !value.isEmpty else { return nil }
+        return value
     }
 }

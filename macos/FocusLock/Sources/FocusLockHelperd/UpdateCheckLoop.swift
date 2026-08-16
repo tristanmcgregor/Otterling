@@ -14,7 +14,7 @@ final class UpdateCheckLoop {
 
     private var stateStore: StateStore?
     private var timer: Timer?
-    private let queue = DispatchQueue(label: "au.com.tbmcgregor.bwparker.focuslock.updatecheck")
+    private let queue = DispatchQueue(label: "app.otterling.updatecheck")
 
     func start(stateStore: StateStore, interval: TimeInterval = 60 * 60) {
         self.stateStore = stateStore

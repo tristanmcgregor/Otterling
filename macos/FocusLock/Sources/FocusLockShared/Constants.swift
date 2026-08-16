@@ -3,8 +3,8 @@ import Foundation
 /// Shared identifiers so the app, daemon, and CLI agree on bundle IDs, the XPC Mach service
 /// name, and where root-owned state lives on disk.
 public enum FocusLockConstants {
-    public static let appBundleIdentifier = "au.com.tbmcgregor.bwparker.focuslock"
-    public static let helperBundleIdentifier = "au.com.tbmcgregor.bwparker.focuslock.helperd"
+    public static let appBundleIdentifier = "app.otterling"
+    public static let helperBundleIdentifier = "app.otterling.helperd"
     public static let machServiceName = helperBundleIdentifier
 
     public static let stateDirectory = "/Library/Application Support/FocusLock"
@@ -13,7 +13,7 @@ public enum FocusLockConstants {
     public static let adultBlocklistCachePath = "\(stateDirectory)/adult_domains.txt"
 
     /// pf anchor the daemon loads its `block drop` rules into.
-    public static let pfAnchorName = "au.com.tbmcgregor.focuslock"
+    public static let pfAnchorName = "app.otterling"
     public static let pfAnchorFilePath = "/Library/Application Support/FocusLock/pf.anchor"
 
     /// Marker comment so the daemon can find/replace only the lines it owns in /etc/hosts.
@@ -37,16 +37,40 @@ public enum FocusLockConstants {
     /// filter-server/README.md at the repo root), mirroring the Android app's `CloudFilterSettings`.
     public static let defaultCloudFilterHost = "vpn.bartholomew.help"
 
+    /// How long an authorized protection-reducing action waits before `EnforcementLoop` applies it.
+    /// 24h is chosen to outlast an impulse rather than to be merely annoying -- the cooldown is the
+    /// part of the design that still works when the person it's slowing down holds admin, so it has
+    /// to be long enough that "wait it out" isn't a comfortable alternative to not doing it.
+    public static let defaultCooldownHours: Double = 24
+
+    /// Ceiling on `cooldownHours`, so a fat-fingered "10000" can't wedge the install into a state
+    /// where nothing can ever be removed through the supported path.
+    public static let maximumCooldownHours: Double = 24 * 30
+
     /// PayloadIdentifier of the lock profile `Scripts/install_lock_profile.py` installs (matches
     /// `PROFILE_IDENTIFIER` in `filter-server/lockprofile_service.py`). A tamper *tripwire*, not a
     /// removal lock -- see GUARDIAN_SETUP.md §6. `LockProfileGuard` polls for this identifier's
     /// presence via `profiles show -type configuration`.
-    public static let lockProfileIdentifier = "au.com.tbmcgregor.bwparker.focuslock.lockprofile"
+    public static let lockProfileIdentifier = "app.otterling.lockprofile"
 
     /// Root-only files `install_lock_profile.py` writes next to `state.json`, holding the
     /// filter-server host + bearer token `TamperReporter` needs to POST to `/alerts/tamper`.
+    /// When present they take precedence over the baked-in defaults below.
     public static let lockProfileTokenPath = "\(stateDirectory)/lockprofile_token"
     public static let lockProfileHostPath = "\(stateDirectory)/lockprofile_host"
+
+    /// Baked-in fallbacks so on-device tamper reporting (daemon-unloaded, watchdog recovery, lock-
+    /// profile removed) reaches the filter-server -- and from there ntfy + the phone's SMS relay --
+    /// out of the box, before/without running `install_lock_profile.py`. The provisioned files
+    /// above override these when they exist.
+    ///
+    /// Embedding the token means it ships inside the app bundle and is extractable by anyone with
+    /// the binary. That's an accepted trade here: `/alerts/tamper` is append-only ingestion for a
+    /// personal accountability deployment, so the worst a leaked token buys is posting spurious
+    /// alerts (noise the Guardian sees) or reading the alert feed -- not turning off any protection.
+    /// Rotate it by regenerating `LOCKPROFILE_TOKEN` server-side and updating this constant.
+    public static let defaultLockProfileHost = defaultCloudFilterHost
+    public static let defaultLockProfileToken = "22ff3ed0a6b843633a6499911abb7378239e6e9e6cbd97d56e465b39d0dbdc9b"
 
     /// Fixed install location `Scripts/build_app.sh` assembles the app bundle at -- both
     /// LaunchDaemon plists live under here, embedded (see `Contents/Library/LaunchDaemons` in that
@@ -58,7 +82,7 @@ public enum FocusLockConstants {
     /// FocusLockWatchdog: an independent LaunchDaemon whose only job is re-bootstrapping
     /// FocusLockHelperd if it's ever unloaded outside its own XPC surface (e.g. `sudo launchctl
     /// bootout`) -- detects and reports, doesn't prevent; see GUARDIAN_SETUP.md §5.
-    public static let watchdogBundleIdentifier = "au.com.tbmcgregor.bwparker.focuslock.watchdog"
+    public static let watchdogBundleIdentifier = "app.otterling.watchdog"
     public static let watchdogLaunchDaemonPlistPath =
         "\(installedAppBundlePath)/Contents/Library/LaunchDaemons/\(watchdogBundleIdentifier).plist"
 

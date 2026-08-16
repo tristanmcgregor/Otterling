@@ -48,7 +48,7 @@ import urllib.request
 STATE_DIR = "/Library/Application Support/FocusLock"
 TOKEN_PATH = os.path.join(STATE_DIR, "lockprofile_token")
 HOST_PATH = os.path.join(STATE_DIR, "lockprofile_host")
-LOCK_PROFILE_IDENTIFIER = "au.com.tbmcgregor.bwparker.focuslock.lockprofile"
+LOCK_PROFILE_IDENTIFIER = "app.otterling.lockprofile"
 
 
 def fail(message: str, code: int = 1) -> "NoReturn":  # type: ignore[name-defined]
