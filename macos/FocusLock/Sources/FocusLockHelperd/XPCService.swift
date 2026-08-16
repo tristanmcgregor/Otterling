@@ -1,14 +1,17 @@
 import Foundation
 import FocusLockShared
 
-/// Implements the daemon side of FocusLockXPCProtocol, and is where both gates actually live.
+/// Implements the daemon side of FocusLockXPCProtocol, and is where both gates live.
 ///
-/// Historically the only gate was `AdminGroupCheck` against the connecting process's real uid,
-/// which assumed the Guardian-account split (your daily account Standard, a separate account
-/// admin). That assumption is what `authorize` replaces: once a Guardian passcode is set, the
-/// boundary is the passcode and group membership is irrelevant, so the model holds up on a machine
-/// where the daily user is also the only admin. With no passcode set it falls back to the old
-/// admin-group check, so existing installs are unaffected until they opt in.
+/// Every protection-reducing call (removing a block, disabling DNS enforcement, clearing a
+/// protection) requires the caller to be in the admin (Guardian) group -- this is unconditional and
+/// never bypassed. When a Guardian passcode is also set, it is required *in addition* to admin-group
+/// membership (and then the cooldown before the change lands). The two layers cover different
+/// deployments: with the classic Guardian-account split (daily account Standard, separate admin
+/// account) the admin-group check alone already gates removals; on a machine where the daily user is
+/// the only admin, that check is satisfied automatically, so the partner-held passcode is what
+/// actually gates a removal. Either way a Standard account can never remove or disable protections,
+/// while adding blocks / enabling filtering stays open to any caller.
 ///
 /// Clearing the gate doesn't perform the change -- `schedule` queues it for `cooldownHours` and
 /// `EnforcementLoop` applies it later. See `PendingActionApplier`.
@@ -39,16 +42,22 @@ final class XPCService: NSObject, FocusLockXPCProtocol {
     private func authorize(passcode: String, action: String) -> String? {
         let state = stateStore.snapshot()
 
+        // §6b invariant, never bypassed: a protection-reducing call ALWAYS requires the caller to
+        // be in the admin (Guardian) group. On a machine with the classic Guardian-account split
+        // this is the gate; on a single-admin machine the daily user satisfies it automatically, so
+        // the passcode below becomes the meaningful barrier -- but the admin check is still enforced
+        // either way, so a Standard account can never remove/disable protections.
+        guard isCallerAdmin() else {
+            return "Only the Guardian admin account can \(action)."
+        }
+
+        // No passcode configured: admin-group membership is the whole gate (prior behaviour).
         guard let record = state.guardianPasscode else {
-            // Pre-passcode behaviour, unchanged. Worth stating explicitly in the denial: on a
-            // single-admin machine this branch grants the daily user everything, which is exactly
-            // the hole `set-passcode` closes.
-            guard isCallerAdmin() else {
-                return "Only the Guardian admin account can \(action)."
-            }
             return nil
         }
 
+        // Passcode configured: admin-group AND a correct passcode are both required (defence in
+        // depth), then the cooldown before the change actually lands.
         if let until = currentLockout(), until > Date() {
             let seconds = Int(until.timeIntervalSinceNow.rounded(.up))
             return "Too many incorrect passcode attempts. Try again in \(seconds)s."
