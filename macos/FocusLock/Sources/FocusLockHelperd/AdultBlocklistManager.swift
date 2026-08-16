@@ -11,9 +11,12 @@ import FocusLockShared
 /// safe to call on every enforcement tick -- it's a cheap timestamp check that only dispatches
 /// actual network work when the cache is missing or a day old.
 ///
-/// The full list is loaded and applied uncapped (mirrors the Android app, which does the same);
-/// on a modern Mac this is a few tens of thousands of /etc/hosts lines, which is fine for lookup
-/// performance but is worth knowing about before treating hosts-file size as a red flag elsewhere.
+/// IMPORTANT: the list is applied to /etc/hosts with a hard cap (see
+/// `FocusLockConstants.maxHostsBlocklistDomains` and `HostsFileBlocker`). These upstream sources
+/// grew to ~1M domains, which uncapped produced a ~4,000,000-line /etc/hosts and took the machine
+/// fully offline (mDNSResponder can't cope). /etc/hosts is a bounded defense-in-depth layer, not
+/// the primary category filter -- that's the cloud filter DNS. `domains()` therefore returns at
+/// most the cap, and this manager never stores or caches more than that.
 final class AdultBlocklistManager {
     static let shared = AdultBlocklistManager()
 
@@ -64,7 +67,9 @@ final class AdultBlocklistManager {
             lock.unlock()
             return
         }
-        let sorted = combined.sorted()
+        // Bound what we store/cache to the same hard cap /etc/hosts enforces, so a source that has
+        // ballooned to ~1M domains never sits in memory or on disk at full size either.
+        let sorted = Array(combined.sorted().prefix(FocusLockConstants.maxHostsBlocklistDomains))
         try? sorted.joined(separator: "\n").write(to: cacheFileURL, atomically: true, encoding: .utf8)
         lock.lock()
         cached = sorted
@@ -86,7 +91,10 @@ final class AdultBlocklistManager {
         _ = semaphore.wait(timeout: .now() + 20)
         guard let body, let text = String(data: body, encoding: .utf8) else { return }
         for rawLine in text.split(separator: "\n", omittingEmptySubsequences: true) {
-            let line = rawLine.split(separator: "#", maxSplits: 1)[0].trimmingCharacters(in: .whitespaces)
+            // Strip any inline "# comment". Using prefix(while:) rather than split(separator:"#")[0]
+            // because a line that is *only* hashes (e.g. the "##########" separators these lists use)
+            // makes split return an empty array, and [0] on it crashed the whole daemon.
+            let line = rawLine.prefix { $0 != "#" }.trimmingCharacters(in: .whitespaces)
             guard !line.isEmpty else { continue }
             let parts = line.split(separator: " ").filter { !$0.isEmpty }
             guard parts.count >= 2, parts[0] == "0.0.0.0" || parts[0] == "127.0.0.1" else { continue }
@@ -97,6 +105,9 @@ final class AdultBlocklistManager {
 
     private static func loadCache(from url: URL) -> [String] {
         guard let text = try? String(contentsOf: url, encoding: .utf8) else { return [] }
-        return text.split(separator: "\n").map(String.init)
+        // Capped on load too: an old on-disk cache written before the cap existed could be ~1M
+        // lines, and returning it uncapped at startup would recreate the oversized /etc/hosts before
+        // the next refresh trims it.
+        return text.split(separator: "\n").prefix(FocusLockConstants.maxHostsBlocklistDomains).map(String.init)
     }
 }

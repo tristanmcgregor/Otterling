@@ -11,12 +11,27 @@ enum HostsFileBlocker {
         guard let original = try? String(contentsOfFile: hostsPath, encoding: .utf8) else { return }
         let stripped = stripManagedBlock(from: original)
 
+        // Hard safety cap, independent of any caller: an oversized /etc/hosts cripples mDNSResponder
+        // and takes the whole machine offline. Callers are expected to prioritise the Guardian's
+        // manual domains ahead of the bulk list (see EnforcementLoop), so truncating the tail here
+        // drops only bulk-list entries, never the intentional ones. See maxHostsBlocklistDomains.
+        let cap = FocusLockConstants.maxHostsBlocklistDomains
+        let safeDomains: [String]
+        if domains.count > cap {
+            FileHandle.standardError.write(
+                "[hosts] blocklist of \(domains.count) domains exceeds the \(cap) cap -- writing the first \(cap) only to protect DNS resolution\n".data(using: .utf8)!
+            )
+            safeDomains = Array(domains.prefix(cap))
+        } else {
+            safeDomains = domains
+        }
+
         let newContent: String
-        if domains.isEmpty {
+        if safeDomains.isEmpty {
             newContent = stripped
         } else {
             var lines = [FocusLockConstants.hostsMarkerBegin]
-            for domain in domains {
+            for domain in safeDomains {
                 lines.append("127.0.0.1 \(domain)")
                 lines.append("127.0.0.1 www.\(domain)")
                 lines.append("::1 \(domain)")

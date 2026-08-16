@@ -20,6 +20,15 @@ public enum FocusLockConstants {
     public static let hostsMarkerBegin = "# Otterling BEGIN - do not edit, managed by FocusLockHelperd"
     public static let hostsMarkerEnd = "# Otterling END"
 
+    /// Hard ceiling on how many domains the daemon will ever write into /etc/hosts. This is a
+    /// SAFETY limit, not a policy one: an oversized /etc/hosts cripples mDNSResponder and takes the
+    /// machine fully offline -- the downloaded adult blocklists grew to ~1M domains, which produced
+    /// a ~4,000,000-line /etc/hosts and blocked all internet. /etc/hosts is not a bulk-blocklist
+    /// mechanism; comprehensive category blocking is the cloud filter's job. The Guardian's manual
+    /// domains are always applied first; the downloaded list only fills whatever room remains under
+    /// this cap. 15k domains ≈ 60k hosts lines, comfortably within what the resolver handles well.
+    public static let maxHostsBlocklistDomains = 15_000
+
     /// Marker comments so the daemon can find/replace only the anchor reference it owns in
     /// /etc/pf.conf, without touching Apple's or any other tool's rules.
     public static let pfConfMarkerBegin = "# Otterling BEGIN - do not edit, managed by FocusLockHelperd"

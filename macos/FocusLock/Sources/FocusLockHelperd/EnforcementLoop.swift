@@ -90,7 +90,20 @@ final class EnforcementLoop {
             // defense in depth that keeps blocking known adult domains even with the cloud filter
             // off or unreachable -- mirrors the Android app's local blocklist being applied
             // client-side regardless of the VPN's cloud-filter state.
-            let domainsToBlock = Array(Set(state.blockedDomains).union(AdultBlocklistManager.shared.domains())).sorted()
+            // The Guardian's manual domains are intentional and always applied in full. The
+            // downloaded adult list only fills whatever room remains under the hosts cap -- ordered
+            // manual-first so HostsFileBlocker's safety truncation can only ever drop bulk entries,
+            // never the Guardian's. A ~4M-line /etc/hosts (the uncapped ~1M-domain list × 4 lines)
+            // once took the whole machine offline; comprehensive category blocking is the cloud
+            // filter's job, and this local layer stays a bounded defense-in-depth.
+            let cap = FocusLockConstants.maxHostsBlocklistDomains
+            let manualDomains = state.blockedDomains.sorted()
+            var domainsToBlock = manualDomains
+            var seenDomains = Set(manualDomains)
+            for domain in AdultBlocklistManager.shared.domains().sorted() {
+                if domainsToBlock.count >= cap { break }
+                if seenDomains.insert(domain).inserted { domainsToBlock.append(domain) }
+            }
             if domainsToBlock != self.lastAppliedDomains {
                 HostsFileBlocker.apply(domains: domainsToBlock)
                 self.lastAppliedDomains = domainsToBlock
