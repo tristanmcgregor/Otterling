@@ -19,7 +19,9 @@ final class EnforcementLoop {
 
     // Tracks what's currently applied to /etc/hosts and pf so reapplyNow() (called on every XPC
     // mutation plus every timer tick) only touches the filesystem/pf when something changed.
-    private var lastAppliedDomains: [String] = []
+    // Domain filtering is entirely server-side now; the daemon only ensures /etc/hosts holds none
+    // of its own entries (stripped once per session). See reapplyNow.
+    private var didStripHostsBlock = false
     private var lastAppliedPFActive = false
     private var lastAppliedAllowedResolverIPs: [String] = []
 
@@ -83,30 +85,16 @@ final class EnforcementLoop {
 
             let state = stateStore.snapshot()
 
-            // Cheap staleness check -- only actually dispatches a download (on its own background
-            // queue) if the cache is missing or a day old, so this never stalls this tick.
-            AdultBlocklistManager.shared.refreshIfStale()
-            // Always merged in, independent of dnsEnforcementEnabled: this is the local, always-on
-            // defense in depth that keeps blocking known adult domains even with the cloud filter
-            // off or unreachable -- mirrors the Android app's local blocklist being applied
-            // client-side regardless of the VPN's cloud-filter state.
-            // The Guardian's manual domains are intentional and always applied in full. The
-            // downloaded adult list only fills whatever room remains under the hosts cap -- ordered
-            // manual-first so HostsFileBlocker's safety truncation can only ever drop bulk entries,
-            // never the Guardian's. A ~4M-line /etc/hosts (the uncapped ~1M-domain list × 4 lines)
-            // once took the whole machine offline; comprehensive category blocking is the cloud
-            // filter's job, and this local layer stays a bounded defense-in-depth.
-            let cap = FocusLockConstants.maxHostsBlocklistDomains
-            let manualDomains = state.blockedDomains.sorted()
-            var domainsToBlock = manualDomains
-            var seenDomains = Set(manualDomains)
-            for domain in AdultBlocklistManager.shared.domains().sorted() {
-                if domainsToBlock.count >= cap { break }
-                if seenDomains.insert(domain).inserted { domainsToBlock.append(domain) }
-            }
-            if domainsToBlock != self.lastAppliedDomains {
-                HostsFileBlocker.apply(domains: domainsToBlock)
-                self.lastAppliedDomains = domainsToBlock
+            // All domain filtering now lives on the SERVER (the cloud filter DNS / AdGuard + the
+            // dns-classifier). The local /etc/hosts layer is deliberately kept EMPTY: writing large
+            // blocklists there once produced a ~4,000,000-line /etc/hosts that crippled mDNSResponder
+            // and took the whole machine offline. DNSEnforcer + PFBlocker below force ALL DNS through
+            // the server filter, so the server's blocklists apply to everything on this Mac without a
+            // single entry written locally. We strip any managed block a previous build left behind
+            // once per session (apply([]) is a no-op once /etc/hosts is already clean).
+            if !self.didStripHostsBlock {
+                HostsFileBlocker.apply(domains: [])
+                self.didStripHostsBlock = true
             }
 
             // Resolved (or re-resolved) before pf below, so pf's allowlist reflects this tick's
@@ -135,8 +123,9 @@ final class EnforcementLoop {
                 self.lastVPNCheckAt = vpnNow
             }
 
-            let siteBlockActive = !domainsToBlock.isEmpty
-            let pfActive = siteBlockActive || state.dnsEnforcementEnabled
+            // pf's only job now is to stop DoH/DoT from bypassing the server's DNS filter -- there is
+            // no local site-blocking layer anymore -- so it's active whenever DNS enforcement is on.
+            let pfActive = state.dnsEnforcementEnabled
             let allowedResolverIPs = DNSEnforcer.lastResolvedIPs
             if pfActive != self.lastAppliedPFActive || allowedResolverIPs != self.lastAppliedAllowedResolverIPs {
                 PFBlocker.apply(active: pfActive, allowedResolverIPs: allowedResolverIPs)
