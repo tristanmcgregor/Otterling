@@ -1,0 +1,64 @@
+# Fleet policy: Otterling is installed AND its daemon is actually running.
+#
+# Apply with:  fleetctl apply -f otterling-tamper-policy.yml
+# (or paste the `query` into Fleet UI > Policies > Add policy > custom SQL.)
+#
+# A Fleet policy PASSES when its query returns >=1 row and FAILS when it returns 0.
+# This query returns a single row (the literal 1) only when BOTH conditions hold:
+#
+#   1. the app bundle is present  (apps table, matched on bundle id -- survives a rename of the
+#      .app on disk), and
+#   2. the daemon process is live (processes table).
+#
+# Why check the process and not just the file: deleting the app is the loud bypass; the QUIET one
+# is `sudo launchctl bootout system/...helperd` -- app still on disk, enforcement dead. A file-only
+# check sails right past that. Checking `processes` is what catches it.
+#
+# Why `processes` and not osquery's `launchd` table: FocusLockHelperd is registered via
+# SMAppService from a plist INSIDE the app bundle (Contents/Library/LaunchDaemons), not from
+# /Library/LaunchDaemons, so osquery's launchd table generally won't enumerate it. The running
+# process is the reliable signal.
+#
+# Note on the watchdog: FocusLockWatchdog re-bootstraps FocusLockHelperd within ~20s of a kill, so
+# a transient bootout self-heals before the next Fleet policy run and won't false-alarm. A SUSTAINED
+# absence -- someone killed the watchdog first, then the helper -- is exactly what should fail this
+# policy, and does. See the stricter both-processes variant at the bottom if you'd rather fail the
+# instant either one is missing.
+
+apiVersion: v1
+kind: policy
+spec:
+  name: "Otterling tamper — installed AND daemon running"
+  platform: darwin
+  critical: true
+  description: >-
+    Fails if the Otterling content filter has been uninstalled OR its root daemon
+    (FocusLockHelperd) is not running. Catches both `rm`-ing the app and quietly
+    `launchctl bootout`-ing the daemon without deleting it.
+  resolution: >-
+    Reinstall /Applications/Otterling.app and/or re-register the daemon
+    (open the app once to let SMAppService re-bootstrap it). Investigate why it stopped.
+  query: |
+    SELECT 1
+    WHERE
+      (SELECT COUNT(*) FROM apps
+         WHERE bundle_identifier = 'app.otterling') >= 1
+      AND
+      (SELECT COUNT(*) FROM processes
+         WHERE name = 'FocusLockHelperd') >= 1;
+
+# ---------------------------------------------------------------------------------------------
+# Stricter variant -- also requires the watchdog to be alive, so killing the watchdog alone (the
+# necessary FIRST step of a quiet takedown) fails the policy immediately instead of waiting for the
+# helper to also go. Trade-off: may briefly false-fail during an app update that restarts both.
+# Swap it in by replacing the `query:` above with this body.
+#
+#   query: |
+#     SELECT 1
+#     WHERE
+#       (SELECT COUNT(*) FROM apps
+#          WHERE bundle_identifier = 'app.otterling') >= 1
+#       AND
+#       (SELECT COUNT(*) FROM processes WHERE name = 'FocusLockHelperd') >= 1
+#       AND
+#       (SELECT COUNT(*) FROM processes WHERE name = 'FocusLockWatchdog') >= 1;

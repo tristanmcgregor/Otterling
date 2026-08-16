@@ -1,0 +1,88 @@
+# Fleet (osquery fleet manager) for Otterling's macOS tamper-detection.
+#
+# Scope: policies + failing-policy webhook + host last_seen API only -- NOT Apple MDM, so this
+# needs no APNs cert, no Apple Business Manager, no ABM/ADE/T2. Just MySQL + Redis + Fleet.
+#
+# Runs as its own stack, separate from filter-server/docker-compose.yml, so it can't disturb the
+# live cloud filter / update / lockprofile services. Fleet is published to host loopback only
+# (127.0.0.1:8412); the existing Caddy (network_mode: host, in the otterling-updates container)
+# terminates TLS for fleet.bartholomew.help and reverse-proxies to it -- see caddy-fleet.snippet.
+#
+# Secrets live in an .env file next to this (generated on the server by deploy.sh, never committed):
+#   MYSQL_ROOT_PASSWORD, FLEET_MYSQL_PASSWORD, FLEET_SERVER_PRIVATE_KEY
+
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: otterling-fleet-mysql
+    restart: unless-stopped
+    # mysql:8.4 defaults to caching_sha2_password and REMOVED the --default-authentication-plugin
+    # flag that 8.0 used, so it must not be passed here (passing it aborts startup).
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: fleet
+      MYSQL_USER: fleet
+      MYSQL_PASSWORD: ${FLEET_MYSQL_PASSWORD}
+    volumes:
+      - fleet-mysql:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    networks: [fleet]
+
+  redis:
+    image: redis:7
+    container_name: otterling-fleet-redis
+    restart: unless-stopped
+    networks: [fleet]
+
+  fleet:
+    image: fleetdm/fleet:latest
+    container_name: otterling-fleet
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    # Run migrations (idempotent) then serve. Loops until the DB accepts the migration so a slow
+    # first-boot MySQL init doesn't wedge the container.
+    command: sh -c "until /usr/bin/fleet prepare db --no-prompt; do echo 'waiting for mysql...'; sleep 3; done; /usr/bin/fleet serve"
+    environment:
+      FLEET_MYSQL_ADDRESS: mysql:3306
+      FLEET_MYSQL_USERNAME: fleet
+      FLEET_MYSQL_PASSWORD: ${FLEET_MYSQL_PASSWORD}
+      FLEET_MYSQL_DATABASE: fleet
+      FLEET_REDIS_ADDRESS: redis:6379
+      # Caddy terminates TLS; Fleet speaks plain HTTP on the internal port it publishes to loopback.
+      FLEET_SERVER_TLS: "false"
+      FLEET_SERVER_ADDRESS: "0.0.0.0:8080"
+      # >=32 bytes; encrypts secrets Fleet stores at rest. Generated once by deploy.sh.
+      FLEET_SERVER_PRIVATE_KEY: ${FLEET_SERVER_PRIVATE_KEY}
+      FLEET_LOGGING_JSON: "true"
+      # How often the host is asked to re-run policy queries (default 1h). Lowered so a stopped
+      # daemon / removed app surfaces within minutes rather than up to an hour. Pairs with the 5m
+      # failing-policies webhook interval; going much lower mainly adds load for little gain.
+      FLEET_OSQUERY_POLICY_UPDATE_INTERVAL: 5m
+    ports:
+      # Loopback only -- the public path is Caddy -> here. Never bind this to 0.0.0.0.
+      - "127.0.0.1:8412:8080"
+    networks: [fleet]
+
+  # NOTE: the dead-man's-switch service (deadman.py) is intentionally DISABLED. A silence/heartbeat
+  # alarm only works when silence is abnormal; on a laptop that legitimately goes offline for long,
+  # irregular stretches, any threshold short enough to catch a quiet bypass false-alarms constantly,
+  # and any threshold long enough to avoid that just hands the same window back as a bypass-and-
+  # restore gap. So it adds no net protection here and would only cry wolf. `deadman.py` is kept in
+  # this dir for reference / future hardware where silence *is* informative. To re-enable, restore
+  # the service block from git history plus the `filterserver` external network and its state volume.
+  # Trade-off accepted: with this off, a bypass that keeps the Mac offline is NOT detected -- only
+  # the online failing-policy webhook (app removed / daemon stopped while checked in) still fires.
+
+networks:
+  fleet:
+    name: otterling-fleet
+
+volumes:
+  fleet-mysql:
+    name: otterling-fleet-mysql

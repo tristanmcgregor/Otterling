@@ -1,0 +1,22 @@
+# Fleet vhost -- append to filter-server/Caddyfile (the otterling-updates container serves it).
+# Requires a DNS A record: fleet.bartholomew.help -> 121.222.88.226 (this host's public IP).
+#
+# The existing Caddy runs `protocols h1` globally (HTTP/1.1 only) and UDP/443 is blocked on this
+# host -- fleetd/osquery speak HTTPS over TCP, so h1 is fine. This block inherits that global
+# setting. Reverse-proxies to Fleet on host loopback (Caddy is network_mode: host).
+
+fleet.bartholomew.help {
+	bind 0.0.0.0
+
+	tls {
+		issuer acme {
+			preferred_chains {
+				root_common_name "ISRG Root X1"
+			}
+		}
+	}
+
+	reverse_proxy 127.0.0.1:8412
+
+	encode gzip
+}

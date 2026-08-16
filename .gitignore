@@ -47,3 +47,6 @@ filter-server/caddy-config/
 filter-server/lockprofile-data/
 
 filter-server/.ci-otterling-deploy-key
+
+.DS_Store
+filter-server/fleet/.env
