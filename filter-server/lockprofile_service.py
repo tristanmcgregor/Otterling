@@ -78,6 +78,12 @@ LISTEN_HOST = os.environ.get("LOCKPROFILE_LISTEN_HOST", "0.0.0.0")
 LISTEN_PORT = int(os.environ.get("LOCKPROFILE_LISTEN_PORT", "8091"))
 TOKEN = os.environ.get("LOCKPROFILE_TOKEN", "")
 
+# Separate secret for the Fleet failing-policy webhook. Fleet's webhook can't send an Authorization
+# header, so that one route authenticates on a `?token=` query secret instead of the Bearer TOKEN
+# every other route requires -- see Handler._handle_fleet_webhook. Empty = the route is disabled
+# (returns 403), so an unconfigured deployment can't be poked with unauthenticated Fleet payloads.
+FLEET_WEBHOOK_SECRET = os.environ.get("FLEET_WEBHOOK_SECRET", "")
+
 NTFY_SERVER = os.environ.get("NTFY_SERVER", "https://ntfy.sh").rstrip("/")
 NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "")
 
@@ -88,11 +94,24 @@ NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "")
 NTFY_EVENT_STYLE = {
     "lock_profile_removed": ("Otterling: lock profile removed", "urgent", "warning"),
     "lock_profile_installed": ("Otterling: lock profile installed", "default", "white_check_mark"),
+    # A VPN routes traffic around the DNS floor + hosts + pf, defeating the content filter itself
+    # (not just the alerting) -- urgent. `vpn_cleared` is the all-clear once it's down again.
+    "vpn_active": ("Otterling: VPN up — content filter bypassed", "urgent", "warning"),
+    "vpn_cleared": ("Otterling: VPN down — filter back in effect", "default", "white_check_mark"),
     "daemon_unloaded_recovered": ("Otterling: daemon was down, watchdog recovered it", "high", "robot"),
     "watchdog_or_daemon_reregistered": ("Otterling: needed re-registration on GUI launch", "high", "warning"),
+    # Mac-side tamper signals from Fleet (see fleet/ + tamper-alerts/). A failing policy means the
+    # app was removed or its daemon stopped; "silent" means the Mac stopped checking in entirely,
+    # which is the quiet-bypass path (network cut / fleetd killed) the dead-man's switch catches.
+    "mac_tamper_policy": ("Otterling Mac: tamper policy failing", "urgent", "warning"),
+    "mac_silent": ("Otterling Mac: stopped checking in", "urgent", "warning"),
+    "mac_back": ("Otterling Mac: checking in again", "default", "white_check_mark"),
+    # The dead-man's switch itself is blind (can't reach Fleet) -- a monitor-health warning, not a
+    # tamper, and only after a sustained outage. See deadman.py.
+    "monitor_degraded": ("Otterling Mac: tamper monitor is blind", "high", "warning"),
 }
 
-PROFILE_IDENTIFIER = "au.com.tbmcgregor.bwparker.focuslock.lockprofile"
+PROFILE_IDENTIFIER = "app.otterling.lockprofile"
 DNS_PAYLOAD_IDENTIFIER = f"{PROFILE_IDENTIFIER}.dns"
 FAMILY_DOH_URL = "https://family.cloudflare-dns.com/dns-query"
 
@@ -221,10 +240,37 @@ def _next_alert_id_locked(state: dict) -> int:
     return next_id
 
 
+def _record_ack(since_id: int) -> None:
+    """Records that a poller has durably received every event with `id <= since_id` (the phone only
+    advances its poll cursor after persisting each event into its local SMS outbox, so a poll at
+    `since_id` is a delivery acknowledgement up to that id). `_rotate_alerts_if_needed` uses this
+    watermark to guarantee an un-acknowledged tamper report is never rotated away -- so a report
+    survives on the server until the partner's phone has actually taken it, no matter how long the
+    phone stays offline."""
+    if since_id <= 0:
+        return
+    with _state_lock:
+        state = _load_state()
+        meta = state.setdefault("_meta", {})
+        if since_id > meta.get("acked_alert_id", 0):
+            meta["acked_alert_id"] = since_id
+            _save_state(state)
+
+
+def _acked_alert_id() -> int:
+    with _state_lock:
+        return _load_state().get("_meta", {}).get("acked_alert_id", 0)
+
+
 def _rotate_alerts_if_needed() -> None:
-    """Keeps ALERTS_PATH from growing without bound -- called (already under `_alerts_lock`) after
-    every append. `os.path.getsize` is O(1), so this is nearly free in the common case; the actual
-    rewrite only happens the rare times the size threshold is crossed."""
+    """Bounds ALERTS_PATH's size -- called (already under `_alerts_lock`) after every append.
+    `os.path.getsize` is O(1), so this is nearly free in the common case; the rewrite only happens
+    the rare times the size threshold is crossed.
+
+    Crucially, it NEVER drops an event the phone hasn't acknowledged yet (id > `_acked_alert_id`):
+    rotating one away would silently lose a tamper report the partner never received. Unacknowledged
+    events are always kept, even if that pushes the file past the keep-lines budget -- durability of
+    an undelivered alert wins over the size cap."""
     try:
         size = os.path.getsize(ALERTS_PATH)
     except OSError:
@@ -235,9 +281,25 @@ def _rotate_alerts_if_needed() -> None:
         lines = fh.readlines()
     if len(lines) <= ALERTS_ROTATE_KEEP_LINES:
         return
+
+    acked = _acked_alert_id()
+
+    def _line_id(line: str) -> int:
+        try:
+            return int(json.loads(line).get("id", 0))
+        except (json.JSONDecodeError, ValueError, TypeError):
+            return 0
+
+    # Lines are in ascending-id append order, so unacked events (id > acked) are the tail. Keep all
+    # of them, then backfill the remaining budget with the most recent acknowledged events.
+    unacked = [ln for ln in lines if _line_id(ln) > acked]
+    acked_lines = [ln for ln in lines if _line_id(ln) <= acked]
+    budget = ALERTS_ROTATE_KEEP_LINES - len(unacked)
+    kept = (acked_lines[-budget:] + unacked) if budget > 0 else unacked
+
     tmp_path = ALERTS_PATH + ".tmp"
     with open(tmp_path, "w", encoding="utf-8") as fh:
-        fh.writelines(lines[-ALERTS_ROTATE_KEEP_LINES:])
+        fh.writelines(kept)
     os.replace(tmp_path, ALERTS_PATH)
 
 
@@ -383,7 +445,47 @@ class Handler(BaseHTTPRequestHandler):
         except (json.JSONDecodeError, UnicodeDecodeError):
             return None
 
+    def _handle_fleet_webhook(self, parsed) -> None:
+        """Fleet's failing-policy webhook -> the existing tamper-alert pipeline (JSONL + ntfy +
+        the phone's /alerts/poll -> SMS relay). Authenticated by a `?token=` query secret rather
+        than the Bearer TOKEN, because Fleet's webhook sends no auth header. Fleet's payload is
+        `{"policy": {"name": ...}, "hosts": [{"display_name"/"hostname"/"url"/"id": ...}]}`; each
+        host becomes one `mac_tamper_policy` event so the partner is told which machine and why."""
+        query = urllib.parse.parse_qs(parsed.query)
+        provided = query.get("token", [""])[0]
+        if not FLEET_WEBHOOK_SECRET or not secrets.compare_digest(provided, FLEET_WEBHOOK_SECRET):
+            return self._send_json(403, {"error": "forbidden"})
+        body = self._read_json_body()
+        if body is None:
+            return self._send_json(400, {"error": "bad json"})
+
+        policy_name = (body.get("policy") or {}).get("name") or "an Otterling policy"
+        hosts = body.get("hosts") or [{}]  # still emit one event if Fleet omits host detail
+        count = 0
+        for host in hosts:
+            name = host.get("display_name") or host.get("hostname") or (
+                f"host {host.get('id')}" if host.get("id") else "unknown-mac"
+            )
+            url = host.get("url")
+            details = f"'{policy_name}' is failing on {name}." + (f" {url}" if url else "")
+            event = _append_alert({
+                "device_id": name,
+                "type": "mac_tamper_policy",
+                "details": details,
+                "reported_at": time.time(),
+                "received_at": time.time(),
+            })
+            threading.Thread(target=_send_ntfy_notification, args=(event,), daemon=True).start()
+            count += 1
+        return self._send_json(200, {"status": "ok", "events": count})
+
     def do_POST(self):  # noqa: N802 (http.server API)
+        parsed = urllib.parse.urlparse(self.path)
+        # This one route authenticates on a query secret (Fleet can't send a Bearer header), so it
+        # is dispatched BEFORE the Bearer gate that every other route below still passes through.
+        if parsed.path == "/alerts/fleet-webhook":
+            return self._handle_fleet_webhook(parsed)
+
         if not self._authorized():
             return self._send_json(401, {"error": "unauthorized"})
 
@@ -440,6 +542,9 @@ class Handler(BaseHTTPRequestHandler):
                 since_id = int(query.get("since_id", ["0"])[0])
             except ValueError:
                 return self._send_json(400, {"error": "since_id must be an integer"})
+            # Polling at since_id acknowledges durable receipt of everything up to it, so the
+            # rotation never drops those -- and, more importantly, never drops anything ABOVE it.
+            _record_ack(since_id)
             events = _read_alerts_since(since_id)
             max_id = events[-1]["id"] if events else since_id
             return self._send_json(200, {"events": events, "max_id": max_id})
