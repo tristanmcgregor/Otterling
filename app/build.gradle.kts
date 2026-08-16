@@ -72,6 +72,14 @@ android {
         noCompress += "tflite"
     }
 
+    lint {
+        // False positive: MainActivity is a Compose ComponentActivity, not a FragmentActivity, so
+        // its registerForActivityResult calls are correct regardless of the androidx.fragment
+        // version. This check only started firing (failing lintVitalRelease) once firebase-messaging
+        // pulled androidx.fragment onto the classpath transitively -- the app uses no Fragments.
+        disable += "InvalidFragmentVersionForActivityResult"
+    }
+
     signingConfigs {
         // Only defined when the release keystore secrets are actually present -- CI's protected
         // `release` environment (after AI review + Guardian approval), or deliberately set up
