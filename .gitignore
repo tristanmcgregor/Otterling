@@ -51,8 +51,12 @@ filter-server/.ci-otterling-deploy-key
 .DS_Store
 filter-server/fleet/.env
 
-# Firebase credentials — never committed (matches the production mirror's convention). The app's
-# client config is dropped onto the build host; the server's service-account key goes in the
-# gitignored lockprofile-data/ mount. Both are placed out-of-band, see FCM setup notes.
-app/google-services.json
+# Firebase server-side secrets — NEVER committed. The service-account private key lets the server
+# SEND pushes; it lives in the gitignored lockprofile-data/ mount on the server, placed out-of-band.
 **/fcm-service-account.json
+# Firebase Admin SDK service-account keys, however named (as downloaded from the console).
+**/*firebase-adminsdk*.json
+# NOTE: app/google-services.json is DELIBERATELY committed (not ignored). It's the app's client
+# config, designed to ship inside every APK, and the release pipeline's `git clean -fdx` wipes any
+# gitignored file, so it must be tracked to reach the CI build (private repo). It is not a server
+# secret — the API key is client-scoped.

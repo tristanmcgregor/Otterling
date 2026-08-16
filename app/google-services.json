@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "265031774023",
+    "project_id": "otterling-98c2e",
+    "storage_bucket": "otterling-98c2e.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:265031774023:android:7cfddde1f18e60a19ce662",
+        "android_client_info": {
+          "package_name": "app.otterling"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBCpnQ7XkQaTgAso2a7ILELFPoFzgNEntI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
