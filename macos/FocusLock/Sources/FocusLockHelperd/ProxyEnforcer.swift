@@ -139,7 +139,24 @@ enum ProxyEnforcer {
         return enabled && server == host && currentPort == String(port)
     }
 
+    // `getaddrinfo` has no built-in timeout and depends on whatever resolver is *currently*
+    // configured -- which could be this app's own previous choice, now unreachable after a network
+    // change. Hard-bounded on a background thread so a dead resolver can never stall this past a
+    // few seconds -- see `DNSEnforcer.resolveIPv4`'s doc comment for the incident this addresses.
+    private static let resolveTimeout: TimeInterval = 3
+
     private static func resolveIPv4(_ host: String) -> [String]? {
+        let semaphore = DispatchSemaphore(value: 0)
+        var result: [String]?
+        DispatchQueue.global().async {
+            result = resolveIPv4Blocking(host)
+            semaphore.signal()
+        }
+        _ = semaphore.wait(timeout: .now() + resolveTimeout)
+        return result
+    }
+
+    private static func resolveIPv4Blocking(_ host: String) -> [String]? {
         var hints = addrinfo()
         hints.ai_family = AF_INET
         hints.ai_socktype = SOCK_STREAM

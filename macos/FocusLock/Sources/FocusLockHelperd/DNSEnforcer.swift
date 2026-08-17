@@ -69,12 +69,33 @@ enum DNSEnforcer {
     }
 
     /// Resolves a hostname to its IPv4 addresses via the system resolver (`getaddrinfo`) -- this
-    /// runs *before* DNS gets pointed at the cloud filter, so it still sees whatever resolver was
-    /// configured previously (ISP/router default), not the one this call is about to set.
+    /// runs *before* DNS gets pointed at the cloud filter, so it still sees whatever resolver is
+    /// *currently* configured. That's a real hazard, not just a quirk: if the current resolver is
+    /// this app's own previous choice (e.g. `homeLANHost`, left set from being on the home network)
+    /// and the Mac has since moved to a different network where that address is unreachable,
+    /// `getaddrinfo` has no built-in timeout and can hang far longer than this loop's 15s reassert
+    /// cadence assumes -- which stalls DNS recovery and can look exactly like "no internet" for
+    /// much longer than intended. Hard-bounded to `resolveTimeout` on a background thread for
+    /// exactly that reason -- a slow/dead resolver must never block this past a few seconds,
+    /// because the whole point of this function's caller is to fix a broken resolver, not get stuck
+    /// waiting on it.
+    private static let resolveTimeout: TimeInterval = 3
+
     private static func resolveIPv4(_ host: String) -> [String]? {
         // A bare IP address needs no resolution -- also lets the host field accept a literal IP.
         if isIPv4Address(host) { return [host] }
 
+        let semaphore = DispatchSemaphore(value: 0)
+        var result: [String]?
+        DispatchQueue.global().async {
+            result = resolveIPv4Blocking(host)
+            semaphore.signal()
+        }
+        _ = semaphore.wait(timeout: .now() + resolveTimeout)
+        return result
+    }
+
+    private static func resolveIPv4Blocking(_ host: String) -> [String]? {
         var hints = addrinfo()
         hints.ai_family = AF_INET
         hints.ai_socktype = SOCK_DGRAM
