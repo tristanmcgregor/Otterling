@@ -31,18 +31,18 @@ enum DNSEnforcer {
     /// DNS unmanaged.
     static func apply(cloudHost: String, cloudEnabled: Bool) {
         let servers: [String]
-        // Prefer the known home LAN address when it's cryptographically confirmed as the real
-        // filter-server (see `HomeLANVerifier`'s doc comment) -- see `FocusLockConstants
-        // .homeLANHost`'s doc comment: the lock profile's managed DoH setting makes normal hostname
-        // resolution for `cloudHost` return its public WAN IP even while on the home network, which
-        // this bypasses. A bare TCP/port probe is NOT enough here: anyone squatting this private IP
-        // on any network the Mac joins would otherwise get this Mac's plaintext DNS traffic handed
-        // to them.
-        if cloudEnabled, cloudHost == FocusLockConstants.defaultCloudFilterHost,
-           HomeLANVerifier.verify(ip: FocusLockConstants.homeLANHost, hostname: cloudHost) {
-            servers = [FocusLockConstants.homeLANHost]
-            lastResolvedIPs = servers
-        } else if cloudEnabled, !cloudHost.isEmpty, let resolved = resolveIPv4(cloudHost), !resolved.isEmpty {
+        // DISABLED (2026-08-17): the home-LAN shortcut here re-verified reachability every tick via
+        // a live TLS handshake and switched `servers` between the LAN IP and the publicly-resolved
+        // IP based on that live result. Every time the chosen IP changed, `EnforcementLoop` treated
+        // it as a real change and told `PFBlocker` to do a full firewall-rule reload -- if that
+        // check ever flapped (even occasionally, e.g. a slow handshake past its timeout), it could
+        // trigger repeated reloads over hours, which is suspected to be the cause of a severe,
+        // worsening-over-time connectivity degradation (30+ second ping times, fixed only by a
+        // reboot) reported the same day this was added. Reverted to always resolving the hostname
+        // normally (still hard-timeout-bounded, see `resolveIPv4` below) until this can be
+        // re-introduced with real debouncing/hysteresis instead of switching on every tick's live
+        // result. This does bring back the router-hairpin slowdown this shortcut existed to avoid.
+        if cloudEnabled, !cloudHost.isEmpty, let resolved = resolveIPv4(cloudHost), !resolved.isEmpty {
             servers = resolved
             lastResolvedIPs = resolved
         } else {

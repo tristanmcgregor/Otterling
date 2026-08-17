@@ -150,12 +150,18 @@ final class EnforcementLoop {
                 self.lastVPNCheckAt = vpnNow
             }
 
-            // Proxy enforcement: point the system HTTP/HTTPS proxy at the filter-server's mitmproxy
-            // and keep re-asserting it (own slower cadence). ProxyEnforcer is fail-open -- it returns
-            // false and removes the proxy whenever the proxy is unreachable or unprovisioned -- and
-            // that verdict (proxyActive) is what gates the pf force-through below, so a down proxy can
-            // never wedge web access.
-            if state.proxyEnforcementEnabled {
+            // Proxy enforcement DISABLED as of 2026-08-17 (maintainer kill switch, not the Guardian
+            // passcode path -- this is fixing a design flaw, not weakening protection): routing this
+            // Mac's web traffic through a proxy that lives on the same home LAN means every
+            // downloaded byte crosses the home WiFi/LAN link TWICE (Mac->router->home-server, then
+            // home-server->router->Mac again for the same data coming back from the internet).
+            // Under real load (video, several tabs) that can saturate the LAN link itself, degrading
+            // -- and delaying -- everything sharing it, including traffic that never touches the
+            // proxy at all. Reported the same day as a severe, escalating "no internet" incident.
+            // DNS-based category filtering (DNSEnforcer, below) has no such doubling and stays on.
+            // Re-enabling this needs a real fix for the bandwidth doubling, not just a flag flip.
+            let proxyEnforcementEnabled = false
+            if proxyEnforcementEnabled {
                 let proxyNow = Date()
                 if self.lastProxyCheckAt == nil || proxyNow.timeIntervalSince(self.lastProxyCheckAt!) >= self.proxyCheckInterval {
                     self.proxyActive = ProxyEnforcer.apply(

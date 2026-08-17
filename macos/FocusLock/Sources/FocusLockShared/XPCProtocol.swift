@@ -95,6 +95,15 @@ import Foundation
     /// trade. The gate is here because installing swaps the running bundle and restarts both
     /// daemons, which is too close to the tamper surface to leave open.
     func installAvailableUpdate(passcode: String, reply: @escaping (Data) -> Void)
+
+    /// The privilege-elevation broker for once the Guardian's own macOS account is Standard (no
+    /// direct sudo) -- see `SudoBroker.swift`'s doc comment for the full decision pipeline. No
+    /// passcode parameter: unlike everything else in this protocol, a passcode the Guardian knows
+    /// is exactly what this must NOT be gated by, since the Guardian is who this exists to gate.
+    /// Every request is decided (denylist, then allowlist, then an AI review round-trip that fails
+    /// closed on any error/ambiguity) and reported via TamperReporter regardless of outcome --
+    /// requestJSON/reply carry an encoded `ElevatedCommandRequest`/`ElevatedCommandResult`.
+    func requestElevatedCommand(_ requestJSON: Data, reply: @escaping (Data) -> Void)
 }
 
 public enum FocusLockCodec {

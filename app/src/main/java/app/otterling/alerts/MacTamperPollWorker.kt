@@ -100,6 +100,12 @@ class MacTamperPollWorker(context: Context, params: WorkerParameters) : Coroutin
         // without removing the profile -- see LockProfileGuard.swift's dnsFloorFunctionallyActive().
         "dns_floor_disabled" -> AlertSeverity.CRITICAL to "MAC_DNS_FLOOR_DISABLED"
         "dns_floor_reenabled" -> AlertSeverity.INFO to "MAC_DNS_FLOOR_REENABLED"
+        // SudoBroker.swift's privilege-elevation decisions -- reported for every outcome, approved
+        // or denied, so a successful AI-review approval still reaches the partner (see that file's
+        // doc comment for why that matters: a social-engineered approval must not go unnoticed).
+        "sudo_request_approved" -> AlertSeverity.CRITICAL to "MAC_SUDO_APPROVED"
+        "sudo_request_denied" -> AlertSeverity.WARNING to "MAC_SUDO_DENIED"
+        "sudo_request_ai_reviewed" -> AlertSeverity.WARNING to "MAC_SUDO_AI_REVIEWED"
         else -> AlertSeverity.WARNING to "MAC_TAMPER_${macType.uppercase()}"
     }
 

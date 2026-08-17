@@ -41,22 +41,13 @@ enum ProxyEnforcer {
             return false
         }
 
-        // Prefer the known home LAN address when it's cryptographically confirmed as the real
-        // filter-server (see `HomeLANVerifier`'s doc comment -- a bare TCP connect is NOT enough
-        // here, since anyone squatting this private IP on any network would otherwise hijack the
-        // Mac's proxy config) AND the mitmproxy port itself is reachable there. See
-        // `FocusLockConstants.homeLANHost`'s doc comment for why resolving/connecting via the
-        // hostname hairpins every request through the router while on the home network. Using the
-        // literal IP directly as the configured proxy server means no further DNS lookup is ever
-        // needed to reach it.
-        let target: String
-        if host == FocusLockConstants.defaultCloudFilterHost,
-           HomeLANVerifier.verify(ip: FocusLockConstants.homeLANHost, hostname: host),
-           isReachable(host: FocusLockConstants.homeLANHost, port: port) {
-            target = FocusLockConstants.homeLANHost
-        } else {
-            target = host
-        }
+        // DISABLED (2026-08-17): this used to switch `target` between the LAN IP and the public
+        // hostname based on a live re-verification every tick -- see DNSEnforcer.apply's matching
+        // doc comment for why that's suspected to have caused a severe, worsening connectivity
+        // degradation via repeated PFBlocker firewall reloads whenever the choice flapped. Reverted
+        // to always using `host` directly until real debouncing/hysteresis is added. Brings back the
+        // router-hairpin slowdown this shortcut existed to avoid.
+        let target: String = host
 
         guard let ips = resolveIPv4(target), !ips.isEmpty, isReachable(host: target, port: port) else {
             FileHandle.standardError.write(

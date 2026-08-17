@@ -129,6 +129,12 @@ services:
     volumes:
       - ./lockprofile_service.py:/opt/otterling/lockprofile_service.py:ro
       - ./lockprofile-data:/data
+    # Lets this container reach the host-level sudo_review_server.py (see that file and
+    # lockprofile_service.py's SUDO_REVIEW_URL) -- `host-gateway` is the Docker Engine special value
+    # that resolves to the host's own bridge-gateway IP on Linux (Docker Desktop provides this
+    # mapping automatically; Linux Engine needs it declared explicitly like this).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       - LOCKPROFILE_TOKEN=${LOCKPROFILE_TOKEN:?set LOCKPROFILE_TOKEN in .env}
       - FLEET_WEBHOOK_SECRET=${FLEET_WEBHOOK_SECRET:-}

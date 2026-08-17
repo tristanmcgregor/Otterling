@@ -40,6 +40,13 @@ func printUsage() {
       focuslockctl check-update
       focuslockctl install-update                         (passcode, no cooldown)
 
+      focuslockctl sudo "<command>" [reason]               (privilege-elevation broker -- see
+                                                            SudoBroker.swift. NOT the passcode gate:
+                                                            no passcode unlocks this, since it's
+                                                            meant to hold even against the Guardian
+                                                            who knows it. Inert until the account is
+                                                            actually converted to Standard.)
+
     The two gates, and why they're shaped this way:
 
       Passcode -- once set, it replaces the `admin`-group check entirely. That check assumed the
@@ -285,6 +292,24 @@ Task {
             print("Installed \(manifest.versionName). Restarting the filter daemon now.")
         case .rejected(let reason):
             print("DENIED: \(reason)")
+        }
+
+    case "sudo":
+        guard arguments.count > 2 else {
+            print("Usage: focuslockctl sudo \"<command>\" [reason]")
+            break
+        }
+        let command = arguments[2]
+        let reason = arguments.count > 3 ? arguments[3...].joined(separator: " ") : ""
+        let result = await client.requestElevatedCommand(command: command, reason: reason)
+        if result.approved {
+            print("APPROVED (\(result.source)): \(result.explanation)")
+            if let stdout = result.stdout, !stdout.isEmpty { print(stdout, terminator: "") }
+            if let stderr = result.stderr, !stderr.isEmpty { FileHandle.standardError.write(stderr.data(using: .utf8) ?? Data()) }
+            if let code = result.exitCode { exit(code) }
+        } else {
+            print("DENIED (\(result.source)): \(result.explanation)")
+            exit(1)
         }
 
     default:

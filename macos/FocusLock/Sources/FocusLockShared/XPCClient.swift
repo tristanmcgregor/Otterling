@@ -189,4 +189,16 @@ public final class FocusLockXPCClient {
             }
         }, onError: .rejected("Could not reach FocusLockHelperd"))
     }
+
+    public func requestElevatedCommand(command: String, reason: String) async -> ElevatedCommandResult {
+        let request = FocusLockCodec.encode(ElevatedCommandRequest(command: command, reason: reason))
+        return await withXPCContinuation({ resume, onError in
+            proxy(errorHandler: onError).requestElevatedCommand(request) { data in
+                resume(
+                    FocusLockCodec.decode(ElevatedCommandResult.self, from: data)
+                        ?? ElevatedCommandResult(approved: false, source: "error", explanation: "Malformed reply")
+                )
+            }
+        }, onError: ElevatedCommandResult(approved: false, source: "error", explanation: "Could not reach FocusLockHelperd"))
+    }
 }

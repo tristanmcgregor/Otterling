@@ -43,6 +43,12 @@ is assigned as each event is appended (its 1-based position in `ALERTS_PATH`), u
 so concurrent reporters (the daemon and the watchdog can both be POSTing around the same moment)
 never race onto the same id.
 
+Sudo-elevation review: `POST /sudo-review/check` (see `SudoBroker.swift` / `sudo_review_server.py`)
+is the tier-3 fallback for the Mac's privilege-elevation broker -- a command its own local
+denylist/allowlist didn't resolve gets forwarded here, which calls out to a host-level AI reviewer
+(NOT reachable from inside this container -- see `sudo_review_server.py`'s own doc comment for why)
+and returns allow/deny. Fails closed (deny) on any error, unlike everything else in this file.
+
 Code-tamper check-in: `POST /integrity/checkin` (see `IntegrityReporter.swift`) -- the macOS daemon
 reports the git commit and working-tree-dirty state it was built from (`build-info.json`, written by
 `Scripts/build_app.sh`) on every start and every 15 minutes after. A dirty tree at build time means
@@ -77,6 +83,13 @@ import urllib.parse
 import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+# Host-level AI reviewer for SudoBroker.swift's tier-3 fallback (see sudo_review_server.py's module
+# doc comment for why this has to be a separate host-level process rather than something this
+# container does itself). `host.docker.internal` needs docker-compose.yml's `extra_hosts:
+# ["host.docker.internal:host-gateway"]` on this service to resolve on Linux.
+SUDO_REVIEW_URL = os.environ.get("SUDO_REVIEW_URL", "http://host.docker.internal:9072/review")
+SUDO_REVIEW_TIMEOUT = 20
 
 DATA_DIR = os.environ.get("LOCKPROFILE_DATA_DIR", "/data")
 STATE_PATH = os.path.join(DATA_DIR, "state.json")
@@ -149,6 +162,11 @@ NTFY_EVENT_STYLE = {
     # can't see it).
     "dns_floor_disabled": ("Otterling Mac: DNS floor filter switched off", "urgent", "warning"),
     "dns_floor_reenabled": ("Otterling Mac: DNS floor filter back on", "default", "white_check_mark"),
+    # SudoBroker.swift's decision pipeline -- see that file's doc comment. Reported for every
+    # decision, approved or denied, specifically so an AI-review approval still reaches the partner.
+    "sudo_request_approved": ("Otterling Mac: elevated command APPROVED", "urgent", "warning"),
+    "sudo_request_denied": ("Otterling Mac: elevated command denied", "default", "shield"),
+    "sudo_request_ai_reviewed": ("Otterling Mac: AI reviewed an elevated command", "high", "robot"),
 }
 
 PROFILE_IDENTIFIER = "app.otterling.lockprofile"
@@ -573,6 +591,29 @@ def _send_fcm_wake(event: dict) -> None:
             print(f"[lockprofile] FCM send failed for {event.get('type')}: {error}", flush=True)
 
 
+def _check_sudo_command(command: str, reason: str) -> tuple[str, str]:
+    """Calls out to the host-level `sudo_review_server.py` (see its own doc comment for why this
+    can't happen inside this container). ANY failure -- unreachable, timeout, malformed response --
+    is "deny", never "allow": this is the one place in the whole system that fails closed on purpose,
+    since an admin command denied on a hiccup is safe and recoverable, unlike DNS/proxy enforcement
+    failing open elsewhere in this project."""
+    payload = json.dumps({"command": command, "reason": reason}).encode("utf-8")
+    request = urllib.request.Request(
+        SUDO_REVIEW_URL, data=payload, method="POST", headers={"Content-Type": "application/json"}
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=SUDO_REVIEW_TIMEOUT) as response:
+            parsed = json.loads(response.read().decode("utf-8"))
+    except (urllib.error.URLError, OSError, json.JSONDecodeError, UnicodeDecodeError) as error:
+        return "deny", f"Could not reach the AI reviewer ({error}) -- denying on failure."
+
+    verdict = str(parsed.get("verdict", "")).lower()
+    explanation = str(parsed.get("explanation", "(no explanation)"))
+    if verdict not in ("allow", "deny"):
+        return "deny", f"Reviewer returned an unrecognized verdict -- denying on ambiguity. {explanation}"
+    return verdict, explanation
+
+
 def _push_event(event: dict) -> None:
     """Fan an accepted event out to both push channels, each best-effort and non-blocking."""
     threading.Thread(target=_send_ntfy_notification, args=(event,), daemon=True).start()
@@ -729,6 +770,29 @@ class Handler(BaseHTTPRequestHandler):
             # is computed by `git status` at build time and can't be faked without also faking a
             # clean tree, i.e. actually committing the change somewhere findable.
             return self._send_json(200, {"status": "ok"})
+
+        if self.path == "/sudo-review/check":
+            body = self._read_json_body()
+            command = (body or {}).get("command", "").strip()
+            if not command:
+                return self._send_json(400, {"error": "command required"})
+            reason = (body or {}).get("reason", "")
+            device_id = (body or {}).get("device_id", "unknown")
+            device_name = (body or {}).get("device_name", "")
+            verdict, explanation = _check_sudo_command(command, reason)
+            # Reported here too (not just by the Mac's own TamperReporter call) so a request is
+            # visible even if the daemon crashes/is killed before it can report its own result --
+            # the whole point of this system is that a decision can never go unreported.
+            event = _append_alert({
+                "device_id": device_id,
+                "device_name": device_name,
+                "type": "sudo_request_ai_reviewed",
+                "details": f"[{verdict.upper()}] \"{command}\" (reason: \"{reason}\") -- {explanation}",
+                "reported_at": time.time(),
+                "received_at": time.time(),
+            })
+            _push_event(event)
+            return self._send_json(200, {"verdict": verdict, "explanation": explanation})
 
         if self.path == "/device-logs/upload":
             body = self._read_json_body(MAX_LOG_BODY_BYTES)

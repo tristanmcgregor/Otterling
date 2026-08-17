@@ -52,6 +52,11 @@
 	handle /integrity/* {
 		reverse_proxy 127.0.0.1:8091
 	}
+	# Sudo-elevation broker's AI-review fallback (see SudoBroker.swift / AIReviewClient.swift).
+	# Same bearer-token auth as /alerts/* above.
+	handle /sudo-review/* {
+		reverse_proxy 127.0.0.1:8091
+	}
 
 	# AI review dashboard (filter-server/review-dashboard/) -- read-only view of the server-side
 	# release.sh pipeline's status/history, written to /var/lib/otterling/review/ (see
@@ -108,6 +113,9 @@ http://192.168.0.254 {
 		reverse_proxy 127.0.0.1:8091
 	}
 	handle /integrity/* {
+		reverse_proxy 127.0.0.1:8091
+	}
+	handle /sudo-review/* {
 		reverse_proxy 127.0.0.1:8091
 	}
 

@@ -490,4 +490,19 @@ final class XPCService: NSObject, FocusLockXPCProtocol {
             }
         }
     }
+
+    func requestElevatedCommand(_ requestJSON: Data, reply: @escaping (Data) -> Void) {
+        guard let request = FocusLockCodec.decode(ElevatedCommandRequest.self, from: requestJSON) else {
+            reply(FocusLockCodec.encode(ElevatedCommandResult(
+                approved: false, source: "error", explanation: "Malformed request"
+            )))
+            return
+        }
+        // SudoBroker.handle blocks on the AI-review network round-trip (tier 3) -- off the XPC
+        // connection's own thread so a slow/unreachable reviewer doesn't stall the whole daemon.
+        DispatchQueue.global().async {
+            let result = SudoBroker.handle(command: request.command, reason: request.reason)
+            reply(FocusLockCodec.encode(result))
+        }
+    }
 }
