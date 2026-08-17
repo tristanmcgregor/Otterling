@@ -108,6 +108,8 @@ class AccountabilityPartnerSettings(context: Context) {
         private const val KEY_ENABLED = "enabled"
         private const val KEY_NUMBER_LEGACY = "partner_number"
         private const val KEY_NUMBERS = "partner_numbers"
-        const val DAILY_SMS_CAP = 30
+        // Temporarily uncapped for tamper-detection testing -- was 30. Revert once testing is done;
+        // see AlertReporter.kt's underDailyCap()/maybeNotifyPartnerCapReached() for what this gates.
+        const val DAILY_SMS_CAP = Int.MAX_VALUE
     }
 }
