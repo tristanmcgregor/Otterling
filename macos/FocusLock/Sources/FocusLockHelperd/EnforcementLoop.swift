@@ -66,6 +66,12 @@ final class EnforcementLoop {
     private var lastVPNCheckAt: Date?
     private let vpnCheckInterval: TimeInterval = 20
 
+    // IntegrityReporter check-in cadence -- a network round-trip, so far slower than the local
+    // checks above. 15 minutes matches the phone's own MacTamperPollWorker floor; there's no need
+    // for this to be tighter since it's a reporting signal, not something anything else waits on.
+    private var lastIntegrityCheckAt: Date?
+    private let integrityCheckInterval: TimeInterval = 900
+
     // ProxyEnforcer shells out to networksetup + does a TCP reachability probe; same "own slower
     // cadence" reasoning as DNS. Re-asserts the system proxy (or removes it when unreachable).
     private var lastProxyCheckAt: Date?
@@ -128,6 +134,12 @@ final class EnforcementLoop {
             if self.lastLockProfileCheckAt == nil || lockProfileNow.timeIntervalSince(self.lastLockProfileCheckAt!) >= self.lockProfileCheckInterval {
                 LockProfileGuard.checkAndReportChanges()
                 self.lastLockProfileCheckAt = lockProfileNow
+            }
+
+            let integrityNow = Date()
+            if self.lastIntegrityCheckAt == nil || integrityNow.timeIntervalSince(self.lastIntegrityCheckAt!) >= self.integrityCheckInterval {
+                IntegrityReporter.checkIn()
+                self.lastIntegrityCheckAt = integrityNow
             }
 
             // A VPN tunnels traffic around the whole content filter, so it's checked on every tick's

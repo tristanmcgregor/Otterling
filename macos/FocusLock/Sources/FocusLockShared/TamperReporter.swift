@@ -57,8 +57,9 @@ public enum TamperReporter {
 
     /// Same `IOPlatformUUID` this device is provisioned under server-side by
     /// `install_lock_profile.py`'s `device_id()` -- must match exactly for tamper events to
-    /// correlate with the right device.
-    private static func deviceID() -> String? {
+    /// correlate with the right device. Public so `IntegrityReporter` reports under the identical
+    /// device_id rather than risking a second, divergent implementation.
+    public static func deviceID() -> String? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/sbin/ioreg")
         process.arguments = ["-rd1", "-c", "IOPlatformExpertDevice"]
@@ -80,8 +81,9 @@ public enum TamperReporter {
     }
 
     /// The name shown in System Settings > General > About / Sharing (e.g. "Tristan's MacBook
-    /// Pro") -- display-only, see the doc comment where this is used in `report`'s body.
-    private static func computerName() -> String? {
+    /// Pro") -- display-only, see the doc comment where this is used in `report`'s body. Public for
+    /// `IntegrityReporter`'s reuse, same reasoning as `deviceID()` above.
+    public static func computerName() -> String? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/sbin/scutil")
         process.arguments = ["--get", "ComputerName"]

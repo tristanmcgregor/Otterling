@@ -55,6 +55,23 @@ if [ -f "$PROJECT_DIR/Resources/AppIcon.icns" ]; then
   cp "$PROJECT_DIR/Resources/AppIcon.icns" "$INSTALL_PATH/Contents/Resources/AppIcon.icns"
 fi
 
+# Build provenance for IntegrityReporter.swift: lets the daemon tell the server whether it was
+# built from a clean, committed working tree, or from local changes that were never committed --
+# the exact "edited the code and installed it locally" scenario the tamper check exists to catch.
+# Scoped to `macos/FocusLock` specifically (not the whole monorepo) so unrelated in-progress work
+# elsewhere in the tree (Android/server) doesn't produce false "tampered" reports.
+REPO_ROOT="$(cd "$PROJECT_DIR/../.." && pwd)"
+GIT_SHA="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
+if [ -n "$(git -C "$REPO_ROOT" status --porcelain -- macos/FocusLock 2>/dev/null)" ]; then
+  GIT_DIRTY=true
+else
+  GIT_DIRTY=false
+fi
+BUILT_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+cat > "$INSTALL_PATH/Contents/Resources/build-info.json" <<JSON
+{"git_sha": "${GIT_SHA}", "dirty": ${GIT_DIRTY}, "built_at": "${BUILT_AT}"}
+JSON
+
 tee "$INSTALL_PATH/Contents/Info.plist" > /dev/null <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

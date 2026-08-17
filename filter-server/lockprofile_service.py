@@ -43,6 +43,15 @@ is assigned as each event is appended (its 1-based position in `ALERTS_PATH`), u
 so concurrent reporters (the daemon and the watchdog can both be POSTing around the same moment)
 never race onto the same id.
 
+Code-tamper check-in: `POST /integrity/checkin` (see `IntegrityReporter.swift`) -- the macOS daemon
+reports the git commit and working-tree-dirty state it was built from (`build-info.json`, written by
+`Scripts/build_app.sh`) on every start and every 15 minutes after. A dirty tree at build time means
+local, uncommitted source changes -- the direct "edit the code and install it locally" bypass -- and
+fires a `mac_code_tampered` event through the same alert pipeline as everything else here. Reporting
+only, never a gate: nothing waits on this endpoint's response, so an outage here can't take the Mac's
+own filtering offline (the project's fail-open rule). See the handler itself for what this does and
+does not verify about `git_sha`.
+
 Device log upload: `POST /device-logs/upload` (see `DeviceLogUploader.kt` / the "Send diagnostic
 logs" button in the app's filter settings) accepts a device's own recent logcat output plus a
 snapshot of its MITM-exemption state, so a Guardian debugging "this app still doesn't work" can see
@@ -130,6 +139,10 @@ NTFY_EVENT_STYLE = {
     # The dead-man's switch itself is blind (can't reach Fleet) -- a monitor-health warning, not a
     # tamper, and only after a sustained outage. See deadman.py.
     "monitor_degraded": ("Otterling Mac: tamper monitor is blind", "high", "warning"),
+    # See `/integrity/checkin` below -- the daemon reported it was built from an uncommitted,
+    # locally-modified source tree. This is the actual "edited the code and installed it locally to
+    # dodge review" scenario the rest of this project's self-lockout design exists to catch.
+    "mac_code_tampered": ("Otterling Mac: running locally-modified code", "urgent", "warning"),
 }
 
 PROFILE_IDENTIFIER = "app.otterling.lockprofile"
@@ -684,6 +697,31 @@ class Handler(BaseHTTPRequestHandler):
             if not token:
                 return self._send_json(400, {"error": "token required"})
             _register_fcm_token(token, (body or {}).get("device_model", "").strip() or "unknown")
+            return self._send_json(200, {"status": "ok"})
+
+        if self.path == "/integrity/checkin":
+            body = self._read_json_body()
+            if not body or not body.get("device_id") or "dirty" not in body:
+                return self._send_json(400, {"error": "device_id and dirty required"})
+            git_sha = str(body.get("git_sha", "unknown"))[:64]
+            if body.get("dirty"):
+                event = _append_alert({
+                    "device_id": body["device_id"],
+                    "device_name": body.get("device_name", ""),
+                    "type": "mac_code_tampered",
+                    "details": f"built from an uncommitted, locally-modified source tree (git {git_sha[:12]})",
+                    "reported_at": body.get("ts", time.time()),
+                    "received_at": time.time(),
+                })
+                _push_event(event)
+            # NOTE on what this does NOT verify: it does not confirm `git_sha` was ever pushed to, or
+            # is reachable from, this repo's main branch -- that would need this server to hold live
+            # GitHub credentials and keep a checkout in sync, which isn't set up (see SELF_LOCKOUT.md
+            # for why the CI checkout in particular is handled carefully). So a locally *committed*
+            # change that's simply never pushed passes this check silently. What this DOES reliably
+            # catch is the direct case: edit a file and rebuild without committing at all -- `dirty`
+            # is computed by `git status` at build time and can't be faked without also faking a
+            # clean tree, i.e. actually committing the change somewhere findable.
             return self._send_json(200, {"status": "ok"})
 
         if self.path == "/device-logs/upload":

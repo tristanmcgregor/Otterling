@@ -91,6 +91,11 @@ class MacTamperPollWorker(context: Context, params: WorkerParameters) : Coroutin
         "daemon_unloaded_recovered" -> AlertSeverity.WARNING to "MAC_DAEMON_RECOVERED"
         "watchdog_or_daemon_reregistered" -> AlertSeverity.WARNING to "MAC_DAEMON_REREGISTERED"
         "lock_profile_installed" -> AlertSeverity.INFO to "MAC_LOCK_PROFILE_INSTALLED"
+        // The Mac's own app binaries were built from an uncommitted, locally-modified source tree
+        // -- see IntegrityReporter.swift / lockprofile_service.py's /integrity/checkin. This is the
+        // direct "edited the code and installed it locally" bypass the rest of the self-lockout
+        // design exists to catch, so it gets the same top severity as the VPN-bypass case.
+        "mac_code_tampered" -> AlertSeverity.CRITICAL to "MAC_CODE_TAMPERED"
         else -> AlertSeverity.WARNING to "MAC_TAMPER_${macType.uppercase()}"
     }
 
