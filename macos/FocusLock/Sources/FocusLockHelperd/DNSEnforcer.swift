@@ -1,5 +1,6 @@
 import Foundation
 import FocusLockShared
+import Network
 
 /// Points every active network service's DNS at a cloud content-filter host (a Canopy-style
 /// AdGuard Home deployment -- the primary category filter, mirroring the Android app's
@@ -28,10 +29,18 @@ enum DNSEnforcer {
 
     /// Resolves `cloudHost` (when `cloudEnabled`) and points every active network service's DNS at
     /// it; falls back to Cloudflare Family if disabled or resolution fails, rather than leaving
-    /// DNS unmanaged.
-    static func apply(cloudHost: String, cloudEnabled: Bool) {
+    /// DNS unmanaged. `lanProbePort` is the mitmproxy port on the same filter-server host -- AdGuard
+    /// Home itself only answers DNS over UDP (a TCP probe against :53 is refused), so this reuses a
+    /// port we know accepts TCP as the "am I on the home LAN right now" signal instead.
+    static func apply(cloudHost: String, cloudEnabled: Bool, lanProbePort: Int) {
         let servers: [String]
-        if cloudEnabled, !cloudHost.isEmpty, let resolved = resolveIPv4(cloudHost), !resolved.isEmpty {
+        // Prefer the known home LAN address when reachable -- see `FocusLockConstants.homeLANHost`'s
+        // doc comment: the lock profile's managed DoH setting makes normal hostname resolution for
+        // `cloudHost` return its public WAN IP even while on the home network, which this bypasses.
+        if cloudEnabled, cloudHost == FocusLockConstants.defaultCloudFilterHost, isPortOpen(host: FocusLockConstants.homeLANHost, port: lanProbePort) {
+            servers = [FocusLockConstants.homeLANHost]
+            lastResolvedIPs = servers
+        } else if cloudEnabled, !cloudHost.isEmpty, let resolved = resolveIPv4(cloudHost), !resolved.isEmpty {
             servers = resolved
             lastResolvedIPs = resolved
         } else {
@@ -89,6 +98,32 @@ enum DNSEnforcer {
             }
         }
         return addresses
+    }
+
+    /// Short TCP connect probe (AdGuardHome answers TCP as well as UDP on :53) -- same pattern as
+    /// `ProxyEnforcer.isReachable`, just duplicated here since the two enforcers are separate
+    /// executable-linked types with no shared helper module of their own.
+    private static func isPortOpen(host: String, port: Int) -> Bool {
+        guard let nwPort = NWEndpoint.Port(rawValue: UInt16(port)) else { return false }
+        let connection = NWConnection(host: NWEndpoint.Host(host), port: nwPort, using: .tcp)
+        let semaphore = DispatchSemaphore(value: 0)
+        var reachable = false
+        connection.stateUpdateHandler = { state in
+            switch state {
+            case .ready:
+                reachable = true
+                semaphore.signal()
+            case .failed, .cancelled:
+                reachable = false
+                semaphore.signal()
+            default:
+                break
+            }
+        }
+        connection.start(queue: .global())
+        _ = semaphore.wait(timeout: .now() + 2)
+        connection.cancel()
+        return reachable
     }
 
     private static func isIPv4Address(_ host: String) -> Bool {

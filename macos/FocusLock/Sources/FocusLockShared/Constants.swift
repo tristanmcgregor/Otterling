@@ -46,6 +46,19 @@ public enum FocusLockConstants {
     /// filter-server/README.md at the repo root), mirroring the Android app's `CloudFilterSettings`.
     public static let defaultCloudFilterHost = "vpn.bartholomew.help"
 
+    /// The filter-server's LAN address (see `~/.ssh/config`'s `192.168.0.254` entries and
+    /// AdGuardHome's own `vpn.bartholomew.help -> 192.168.0.254` rewrite rule). The lock profile's
+    /// `com.apple.dnsSettings.managed` payload points the Mac's real DNS resolution at public
+    /// Cloudflare DoH (see `lockprofile_service.py`'s `FAMILY_DOH_URL` comment) -- which, unlike our
+    /// own AdGuardHome, has no idea this host is on the LAN and answers with its public WAN IP
+    /// instead. `DNSEnforcer`/`ProxyEnforcer` resolving the hostname the normal way inherits that
+    /// same public answer, which makes every DNS lookup and every proxied web request hairpin out
+    /// through the home router and back in -- slow, and unreliable under Chrome's heavier concurrent
+    /// connection load. Both enforcers check this literal IP for reachability first and use it
+    /// directly (skipping hostname resolution entirely) when it answers, falling back to normal
+    /// hostname resolution when away from home.
+    public static let homeLANHost = "192.168.0.254"
+
     // MARK: - mitmproxy content-filter proxy (optional, opt-in)
 
     /// The filter-server's mitmproxy HTTP CONNECT proxy (see filter-server/docker-compose.yml's

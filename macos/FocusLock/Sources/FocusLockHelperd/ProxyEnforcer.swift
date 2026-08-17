@@ -41,9 +41,21 @@ enum ProxyEnforcer {
             return false
         }
 
-        guard let ips = resolveIPv4(host), !ips.isEmpty, isReachable(host: host, port: port) else {
+        // Prefer the known home LAN address when it's actually reachable on this port -- see
+        // `FocusLockConstants.homeLANHost`'s doc comment for why resolving/connecting via the
+        // hostname hairpins every request through the router while on the home network. Using the
+        // literal IP directly as the configured proxy server means no further DNS lookup is ever
+        // needed to reach it.
+        let target: String
+        if host == FocusLockConstants.defaultCloudFilterHost, isReachable(host: FocusLockConstants.homeLANHost, port: port) {
+            target = FocusLockConstants.homeLANHost
+        } else {
+            target = host
+        }
+
+        guard let ips = resolveIPv4(target), !ips.isEmpty, isReachable(host: target, port: port) else {
             FileHandle.standardError.write(
-                "[proxy] mitmproxy \(host):\(port) is not reachable -- NOT setting the proxy (fail open)\n".data(using: .utf8)!
+                "[proxy] mitmproxy \(target):\(port) is not reachable -- NOT setting the proxy (fail open)\n".data(using: .utf8)!
             )
             remove()
             return false
@@ -55,11 +67,11 @@ enum ProxyEnforcer {
         for service in activeNetworkServices() {
             // Skip services already pointed here to avoid re-running networksetup (and re-passing the
             // password on the command line) four times per service on every tick.
-            guard !isProxyAlreadySet(service: service, host: host, port: port) else { continue }
+            guard !isProxyAlreadySet(service: service, host: target, port: port) else { continue }
             ProcessRunner.runSilently("/usr/sbin/networksetup",
-                ["-setwebproxy", service, host, portString, "on", user, password])
+                ["-setwebproxy", service, target, portString, "on", user, password])
             ProcessRunner.runSilently("/usr/sbin/networksetup",
-                ["-setsecurewebproxy", service, host, portString, "on", user, password])
+                ["-setsecurewebproxy", service, target, portString, "on", user, password])
         }
         return true
     }

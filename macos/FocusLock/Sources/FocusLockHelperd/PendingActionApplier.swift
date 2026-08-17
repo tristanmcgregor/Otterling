@@ -105,6 +105,6 @@ enum PendingActionApplier {
     private static func reapplyDNSIfEnforcing(stateStore: StateStore) {
         let state = stateStore.snapshot()
         guard state.dnsEnforcementEnabled else { return }
-        DNSEnforcer.apply(cloudHost: state.cloudFilterHost, cloudEnabled: state.cloudFilterEnabled)
+        DNSEnforcer.apply(cloudHost: state.cloudFilterHost, cloudEnabled: state.cloudFilterEnabled, lanProbePort: state.proxyPort)
     }
 }

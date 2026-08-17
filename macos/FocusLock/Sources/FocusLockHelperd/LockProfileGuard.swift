@@ -49,9 +49,20 @@ enum LockProfileGuard {
         let tempPath = NSTemporaryDirectory() + "focuslock-profiles-show-\(UUID().uuidString).plist"
         defer { try? FileManager.default.removeItem(atPath: tempPath) }
 
+        // This daemon runs as root with no login session of its own. `install_lock_profile.py`'s
+        // server-provisioned .mobileconfig installs at the *user* level (confirmed via `profiles
+        // list -type=configuration` showing it under the console user, not as a device profile),
+        // and plain root `profiles show -type configuration` only enumerates device-level profiles
+        // -- it silently omits per-user ones. Without `-user <consoleUser>` this always reports
+        // "not installed" even right after a real, successful install.
+        var arguments = ["show", "-type", "configuration", "-output", tempPath]
+        if let user = consoleUser() {
+            arguments += ["-user", user]
+        }
+
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/profiles")
-        process.arguments = ["show", "-type", "configuration", "-output", tempPath]
+        process.arguments = arguments
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
         guard (try? process.run()) != nil else { return lastKnownInstalled ?? false }
@@ -64,5 +75,25 @@ enum LockProfileGuard {
         guard let data = FileManager.default.contents(atPath: tempPath) else { return lastKnownInstalled ?? false }
         // Substring search deliberately over raw bytes, not a parsed plist -- see doc comment.
         return data.range(of: Data(FocusLockConstants.lockProfileIdentifier.utf8)) != nil
+    }
+
+    /// The classic root-safe trick for "who's actually logged in at the console" -- `/dev/console`
+    /// is owned by whoever owns the current GUI session, independent of this process's own (root)
+    /// identity. Returns nil (rather than "root") if that ownership lookup fails or the machine is
+    /// at the login window, so callers fall back to the un-scoped device-level check.
+    private static func consoleUser() -> String? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/stat")
+        process.arguments = ["-f", "%Su", "/dev/console"]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        guard (try? process.run()) != nil else { return nil }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else { return nil }
+        let user = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let user, !user.isEmpty, user != "root" else { return nil }
+        return user
     }
 }
