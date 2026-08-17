@@ -39,7 +39,7 @@ class AlertReporter(context: Context) {
 
         var enqueued = false
         if (partnerWantsSms && !debounced) {
-            val body = formatBody(details, deviceName)
+            val body = formatBody(type, details, deviceName)
             for (number in partnerNumbers) {
                 if (underDailyCap(partnerSettings.dailySentCount(number))) {
                     outboxDao.insert(SmsOutboxEntry(body = body, recipientOverride = number))
@@ -161,18 +161,28 @@ class AlertReporter(context: Context) {
      * [details] for a trigger-word hit is always produced in the `"<word>" seen in/on <place>`
      * shape (see `FocusGuardAccessibilityService`, macOS `FocusLockScanner`, and the server's
      * `block_reporter.py` -- all three write it identically on purpose so this one parse covers
-     * every source) and gets rendered into the "flagged"-style clause below; anything that doesn't
-     * match (tamper/status events like a removed lock profile) is shown as plain text instead.
+     * every source) and gets rendered into the "flagged"-style clause below.
+     *
+     * Everything else is one of two buckets: [BENIGN_TYPES] (status/recovery events whose own
+     * `details` text is already clear and fine to send as-is -- "content filter VPN blocked
+     * example.com", "watched app opened", etc.) or a tamper event, which -- per direct request --
+     * collapses to one simple, human line instead of leaking internal detail text (raw type/id
+     * strings like "ACCESSIBILITY_SERVICE_DESTROYED" or a git sha mean nothing to an accountability
+     * partner reading an SMS). A type not in either bucket defaults to the tamper message rather
+     * than benign passthrough, so a newly-added tamper type alerts loudly by default instead of
+     * silently going out as raw text.
      */
-    private fun formatBody(details: String, deviceName: String?): String {
+    private fun formatBody(type: String, details: String, deviceName: String?): String {
         val device = deviceName?.takeIf { it.isNotBlank() } ?: Build.MODEL
         val time = DateFormat.getTimeInstance(DateFormat.SHORT).format(Date())
         val match = TRIGGER_WORD_DETAILS.find(details)
-        val message = if (match != null) {
-            val (word, preposition, place) = match.destructured
-            "\"$word\" flagged $preposition $place"
-        } else {
-            details
+        val message = when {
+            match != null -> {
+                val (word, preposition, place) = match.destructured
+                "\"$word\" flagged $preposition $place"
+            }
+            type in BENIGN_TYPES -> details
+            else -> "App has been tampered with. It is highly recommended to check up on Tristan."
         }
         val raw = "Otterling Alert: $message ($device) · $time"
         return if (raw.length <= 300) raw else raw.take(297) + "..."
@@ -183,6 +193,14 @@ class AlertReporter(context: Context) {
 
         // Matches the exact `"<word>" seen in/on <place>` shape every trigger-word source writes.
         val TRIGGER_WORD_DETAILS = Regex("^\"(.+)\" seen (in|on) (.+)$")
+
+        // Status/recovery events, not tamper -- their own `details` text is already a clear,
+        // human-readable sentence, so it's sent as-is rather than collapsed to the generic tamper
+        // message. Everything NOT listed here (see formatBody's doc comment) defaults to tamper.
+        val BENIGN_TYPES = setOf(
+            "VPN_BLOCK", "WATCHED_APP", "UPDATE_REQUESTED", "APP_UPDATE", "HABIT_UNLOCK",
+            "MAC_VPN_CLEARED", "MAC_LOCK_PROFILE_INSTALLED", "MAC_BACK",
+        )
 
         // Shared by every AlertReporter instance in the process (companion-object members are
         // per-class, not per-instance) -- see flushOutbox()'s doc comment for why this needs to be
