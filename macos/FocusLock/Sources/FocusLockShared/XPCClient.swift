@@ -210,6 +210,14 @@ public final class FocusLockXPCClient {
         }, onError: ElevatedCommandResult(approved: false, source: "error", explanation: "Could not reach FocusLockHelperd"))
     }
 
+    public func killSwitch() async -> FocusLockResult {
+        await withXPCContinuation({ resume, onError in
+            proxy(errorHandler: onError).killSwitch { data in
+                resume(FocusLockCodec.decode(FocusLockResult.self, from: data) ?? .denied("Malformed reply"))
+            }
+        }, onError: .denied("Could not reach FocusLockHelperd"))
+    }
+
     public func requestAssistantAction(request: String) async -> AssistantActionResult {
         let payload = FocusLockCodec.encode(AssistantRequest(request: request))
         return await withXPCContinuation({ resume, onError in

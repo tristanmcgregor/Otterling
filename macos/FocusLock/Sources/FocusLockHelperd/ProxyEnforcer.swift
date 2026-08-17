@@ -25,8 +25,12 @@ enum ProxyEnforcer {
 
     /// Returns true iff the system proxy is now set AND pointed at a reachable mitmproxy. False means
     /// "not enforcing" (disabled, no password, or unreachable) and the proxy has been removed.
+    /// `onHomeLAN` is `HomeLANState`'s DEBOUNCED signal -- see that type's doc comment for the
+    /// 2026-08-17 reload-storm incident this parameter exists to prevent a repeat of. Only used to
+    /// pick the target when `host` is the default cloud filter host; a custom host is always used
+    /// as-is.
     @discardableResult
-    static func apply(host: String, port: Int, enabled: Bool) -> Bool {
+    static func apply(host: String, port: Int, enabled: Bool, onHomeLAN: Bool = false) -> Bool {
         guard enabled else {
             remove()
             return false
@@ -41,13 +45,7 @@ enum ProxyEnforcer {
             return false
         }
 
-        // DISABLED (2026-08-17): this used to switch `target` between the LAN IP and the public
-        // hostname based on a live re-verification every tick -- see DNSEnforcer.apply's matching
-        // doc comment for why that's suspected to have caused a severe, worsening connectivity
-        // degradation via repeated PFBlocker firewall reloads whenever the choice flapped. Reverted
-        // to always using `host` directly until real debouncing/hysteresis is added. Brings back the
-        // router-hairpin slowdown this shortcut existed to avoid.
-        let target: String = host
+        let target = (host == FocusLockConstants.defaultCloudFilterHost && onHomeLAN) ? FocusLockConstants.homeLANHost : host
 
         guard let ips = resolveIPv4(target), !ips.isEmpty, isReachable(host: target, port: port) else {
             FileHandle.standardError.write(

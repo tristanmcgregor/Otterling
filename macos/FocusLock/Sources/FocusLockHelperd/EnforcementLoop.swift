@@ -56,6 +56,9 @@ final class EnforcementLoop {
     // cadence instead.
     private var lastDNSCheckAt: Date?
     private let dnsCheckInterval: TimeInterval = 15
+    // See HomeLANState.sample()'s call site above -- computed on the DNS check's cadence, reused by
+    // ProxyEnforcer below so both agree without a second network round-trip.
+    private var lastHomeLANState = false
 
     // LockProfileGuard also shells out (to `profiles show`); same reasoning, same cadence.
     private var lastLockProfileCheckAt: Date?
@@ -120,10 +123,17 @@ final class EnforcementLoop {
 
             // Resolved (or re-resolved) before pf below, so pf's allowlist reflects this tick's
             // address rather than lagging a tick behind whenever the cloud host's IP changes.
+            //
+            // HomeLANState.sample() is computed here, once per this same slow cadence, and reused
+            // for ProxyEnforcer below too -- one real network round-trip per tick, not two, and DNS
+            // and proxy always agree on whether they're home rather than risking one saying yes and
+            // the other no in the same tick. See HomeLANState's doc comment for why this value is
+            // DEBOUNCED rather than a live per-tick result.
             if state.dnsEnforcementEnabled {
                 let now = Date()
                 if self.lastDNSCheckAt == nil || now.timeIntervalSince(self.lastDNSCheckAt!) >= self.dnsCheckInterval {
-                    DNSEnforcer.apply(cloudHost: state.cloudFilterHost, cloudEnabled: state.cloudFilterEnabled)
+                    self.lastHomeLANState = HomeLANState.sample()
+                    DNSEnforcer.apply(cloudHost: state.cloudFilterHost, cloudEnabled: state.cloudFilterEnabled, onHomeLAN: self.lastHomeLANState)
                     self.lastDNSCheckAt = now
                 }
             } else {
@@ -165,7 +175,7 @@ final class EnforcementLoop {
                 let proxyNow = Date()
                 if self.lastProxyCheckAt == nil || proxyNow.timeIntervalSince(self.lastProxyCheckAt!) >= self.proxyCheckInterval {
                     self.proxyActive = ProxyEnforcer.apply(
-                        host: state.proxyHost, port: state.proxyPort, enabled: true
+                        host: state.proxyHost, port: state.proxyPort, enabled: true, onHomeLAN: self.lastHomeLANState
                     )
                     self.lastProxyCheckAt = proxyNow
                 }

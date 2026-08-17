@@ -117,6 +117,22 @@ import Foundation
     /// through the exact same `SudoBroker` pipeline `requestElevatedCommand` uses -- never a
     /// separate, ungated execution path. Reply is an encoded `AssistantActionResult`.
     func requestAssistantAction(_ requestJSON: Data, reply: @escaping (Data) -> Void)
+
+    /// Emergency stop: immediately unloads both LaunchDaemons and clears DNS/proxy/pf, restoring
+    /// plain unfiltered networking. Deliberately NOT routed through `SudoBroker` -- that broker's own
+    /// denylist blocks `launchctl bootout`/`pfctl -d` (exactly what this needs to run) precisely
+    /// because those commands can disable protection, which is normally the right call. But once
+    /// this account is Standard, the broker becomes the ONLY path to privileged commands at all --
+    /// if this recovery path were denylisted like everything else, a genuine enforcement-layer bug
+    /// (this project has had real ones: a DNS-resolution hang and a firewall-reload storm, both
+    /// causing severe outages) would have NO way to be recovered from except a full reinstall.
+    /// A hardcoded, parameter-less, single-purpose XPC method sidesteps that: it can't be repurposed
+    /// into a general bypass (it takes no arguments and does exactly one fixed thing), but it's
+    /// always reachable through the already-root daemon regardless of the caller's own account
+    /// privilege. Always allowed, no passcode -- see the project's fail-open philosophy: the filter
+    /// must never be able to take the machine fully offline with no way back. Reported via
+    /// TamperReporter the moment it fires, same as everything else that reduces protection.
+    func killSwitch(reply: @escaping (Data) -> Void)
 }
 
 public enum FocusLockCodec {

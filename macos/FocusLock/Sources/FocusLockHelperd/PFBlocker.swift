@@ -138,6 +138,13 @@ enum PFBlocker {
             }
             lines.append("block drop quick proto tcp from any to any port 80")
             lines.append("block drop quick proto tcp from any to any port 443")
+            // mitmproxy is an HTTP CONNECT proxy -- it cannot proxy QUIC (HTTP/3 over UDP), so unlike
+            // the TCP rule above there's no "pass to the proxy" option for it. Blocking UDP/443
+            // outright forces Chrome/Firefox to fall back to standard TLS over TCP, which the proxy
+            // rules above do catch -- without this, QUIC would just sail past the content filter
+            // entirely on any site that offers it, silently, since a browser prefers QUIC when
+            // available and doesn't announce this fallback to the user or the daemon.
+            lines.append("block drop quick proto udp from any to any port 443")
         }
 
         let content = lines.joined(separator: "\n") + "\n"

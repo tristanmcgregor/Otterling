@@ -40,6 +40,16 @@ func printUsage() {
       focuslockctl check-update
       focuslockctl install-update                         (passcode, no cooldown)
 
+      focuslockctl killswitch                              (emergency stop: clears DNS/proxy/pf and
+                                                            unloads both daemons. No passcode, not
+                                                            routed through the sudo broker -- always
+                                                            reachable even after this account is
+                                                            Standard, specifically so a real
+                                                            enforcement-layer bug can never leave you
+                                                            with no way back online. Reported to your
+                                                            accountability partner the moment it
+                                                            fires.)
+
       focuslockctl protect-user <username>                 (push the trigger-word scanner into a
                                                             DIFFERENT local user's session -- for
                                                             an admin protecting a separate Standard
@@ -303,6 +313,9 @@ Task {
         case .rejected(let reason):
             print("DENIED: \(reason)")
         }
+
+    case "killswitch":
+        printResult(await client.killSwitch())
 
     case "protect-user":
         guard arguments.count > 2 else {

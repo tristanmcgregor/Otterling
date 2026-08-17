@@ -28,21 +28,16 @@ enum DNSEnforcer {
 
     /// Resolves `cloudHost` (when `cloudEnabled`) and points every active network service's DNS at
     /// it; falls back to Cloudflare Family if disabled or resolution fails, rather than leaving
-    /// DNS unmanaged.
-    static func apply(cloudHost: String, cloudEnabled: Bool) {
+    /// DNS unmanaged. `onHomeLAN` is `HomeLANState`'s DEBOUNCED signal (see that type's doc comment
+    /// for the 2026-08-17 reload-storm incident this exists to prevent) -- when true, uses the LAN
+    /// IP directly rather than resolving the hostname (which the lock profile's managed DoH setting
+    /// would otherwise shadow with a public answer even while on the home network).
+    static func apply(cloudHost: String, cloudEnabled: Bool, onHomeLAN: Bool = false) {
         let servers: [String]
-        // DISABLED (2026-08-17): the home-LAN shortcut here re-verified reachability every tick via
-        // a live TLS handshake and switched `servers` between the LAN IP and the publicly-resolved
-        // IP based on that live result. Every time the chosen IP changed, `EnforcementLoop` treated
-        // it as a real change and told `PFBlocker` to do a full firewall-rule reload -- if that
-        // check ever flapped (even occasionally, e.g. a slow handshake past its timeout), it could
-        // trigger repeated reloads over hours, which is suspected to be the cause of a severe,
-        // worsening-over-time connectivity degradation (30+ second ping times, fixed only by a
-        // reboot) reported the same day this was added. Reverted to always resolving the hostname
-        // normally (still hard-timeout-bounded, see `resolveIPv4` below) until this can be
-        // re-introduced with real debouncing/hysteresis instead of switching on every tick's live
-        // result. This does bring back the router-hairpin slowdown this shortcut existed to avoid.
-        if cloudEnabled, !cloudHost.isEmpty, let resolved = resolveIPv4(cloudHost), !resolved.isEmpty {
+        if cloudEnabled, cloudHost == FocusLockConstants.defaultCloudFilterHost, onHomeLAN {
+            servers = [FocusLockConstants.homeLANHost]
+            lastResolvedIPs = servers
+        } else if cloudEnabled, !cloudHost.isEmpty, let resolved = resolveIPv4(cloudHost), !resolved.isEmpty {
             servers = resolved
             lastResolvedIPs = resolved
         } else {
@@ -147,6 +142,14 @@ enum DNSEnforcer {
     }
 
     private static func setDNSServers(_ servers: [String], for service: String) {
-        ProcessRunner.runSilently("/usr/sbin/networksetup", ["-setdnsservers", service] + servers)
+        // Was `runSilently` -- a failure here (wrong service name, networksetup erroring) used to
+        // be completely invisible, which is exactly how a real bug in `remove()` went unnoticed
+        // during kill-switch testing. Log any non-zero exit so a silent failure can't happen again.
+        let result = ProcessRunner.run("/usr/sbin/networksetup", ["-setdnsservers", service] + servers)
+        if result.status != 0 {
+            FileHandle.standardError.write(
+                "[dns] setdnsservers '\(service)' \(servers) failed (exit \(result.status)): \(result.output)\n".data(using: .utf8)!
+            )
+        }
     }
 }

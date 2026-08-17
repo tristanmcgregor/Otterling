@@ -533,4 +533,49 @@ final class XPCService: NSObject, FocusLockXPCProtocol {
             reply(FocusLockCodec.encode(AssistantActionResult(translationExplanation: explanation, steps: steps)))
         }
     }
+
+    func killSwitch(reply: @escaping (Data) -> Void) {
+        FileHandle.standardError.write("[killswitch] activated -- clearing DNS/proxy/pf and unloading both LaunchDaemons\n".data(using: .utf8)!)
+        TamperReporter.report(type: "kill_switch_activated", details: "Emergency stop invoked -- all enforcement cleared, daemons unloading.")
+
+        // Persist the disable, not just the live network settings -- if this process somehow
+        // survives the bootout attempts below (e.g. a stuck SMAppService/BTM registration under a
+        // workaround label `launchctl bootout` doesn't know about -- a real, recurring issue on this
+        // project), its OWN next enforcement tick must not silently re-assert what this just cleared.
+        // Confirmed necessary by hand: an earlier version of this only cleared live settings, and
+        // the still-running loop reasserted DNS within one tick.
+        stateStore.mutate { state in
+            state.dnsEnforcementEnabled = false
+            state.proxyEnforcementEnabled = false
+            state.forceProxyViaFirewall = false
+        }
+        onStateChanged()
+
+        DNSEnforcer.remove()
+        ProxyEnforcer.remove()
+        PFBlocker.apply(active: false)
+        ProcessRunner.runSilently("/sbin/pfctl", ["-d"])
+
+        reply(FocusLockCodec.encode(FocusLockResult(success: true, message: "DNS, proxy, and pf cleared and disabled. Unloading daemons now.")))
+
+        // Delay so the reply above actually reaches the caller over the Mach port before this
+        // process exits -- same reasoning as installAvailableUpdate's restart delay. Tries BOTH the
+        // normal SMAppService-managed label and the direct-launchd workaround label this project has
+        // needed before (see GUARDIAN_SETUP.md/session notes on SMAppService/BTM getting stuck) --
+        // whichever one isn't actually registered just fails harmlessly, so trying both is strictly
+        // safer than guessing which scheme is currently active.
+        DispatchQueue.global().asyncAfter(deadline: .now() + 1) {
+            for label in [FocusLockConstants.watchdogBundleIdentifier, "\(FocusLockConstants.watchdogBundleIdentifier).direct"] {
+                ProcessRunner.runSilently("/bin/launchctl", ["bootout", "system/\(label)"])
+            }
+            for label in [FocusLockConstants.helperBundleIdentifier, "\(FocusLockConstants.helperBundleIdentifier).direct"] {
+                ProcessRunner.runSilently("/bin/launchctl", ["bootout", "system/\(label)"])
+            }
+            // Last resort: if this process is somehow still alive after both bootout attempts
+            // (neither label matched what's actually registered), just kill it directly. The
+            // persisted state change above already means it won't reassert anything even if this
+            // races or fails too.
+            kill(getpid(), SIGKILL)
+        }
+    }
 }
