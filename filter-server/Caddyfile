@@ -47,6 +47,11 @@
 	handle /device-logs/upload {
 		reverse_proxy 127.0.0.1:8091
 	}
+	# Build-provenance check-in (see IntegrityReporter.swift / lockprofile_service.py's
+	# /integrity/checkin doc comment). Same bearer-token auth as /alerts/* above.
+	handle /integrity/* {
+		reverse_proxy 127.0.0.1:8091
+	}
 
 	# AI review dashboard (filter-server/review-dashboard/) -- read-only view of the server-side
 	# release.sh pipeline's status/history, written to /var/lib/otterling/review/ (see
@@ -100,6 +105,9 @@ http://192.168.0.254 {
 		reverse_proxy 127.0.0.1:8091
 	}
 	handle /device-logs/upload {
+		reverse_proxy 127.0.0.1:8091
+	}
+	handle /integrity/* {
 		reverse_proxy 127.0.0.1:8091
 	}
 
