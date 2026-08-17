@@ -491,6 +491,15 @@ final class XPCService: NSObject, FocusLockXPCProtocol {
         }
     }
 
+    func protectUser(username: String, reply: @escaping (Data) -> Void) {
+        switch UserScannerInstaller.install(forUsername: username) {
+        case .success(let message):
+            reply(FocusLockCodec.encode(FocusLockResult(success: true, message: message)))
+        case .failure(let error):
+            reply(FocusLockCodec.encode(FocusLockResult.denied(error.description)))
+        }
+    }
+
     func requestElevatedCommand(_ requestJSON: Data, reply: @escaping (Data) -> Void) {
         guard let request = FocusLockCodec.decode(ElevatedCommandRequest.self, from: requestJSON) else {
             reply(FocusLockCodec.encode(ElevatedCommandResult(
@@ -503,6 +512,25 @@ final class XPCService: NSObject, FocusLockXPCProtocol {
         DispatchQueue.global().async {
             let result = SudoBroker.handle(command: request.command, reason: request.reason)
             reply(FocusLockCodec.encode(result))
+        }
+    }
+
+    func requestAssistantAction(_ requestJSON: Data, reply: @escaping (Data) -> Void) {
+        guard let request = FocusLockCodec.decode(AssistantRequest.self, from: requestJSON) else {
+            reply(FocusLockCodec.encode(AssistantActionResult(translationExplanation: "Malformed request", steps: [])))
+            return
+        }
+        DispatchQueue.global().async {
+            let (commands, explanation) = AIAssistantClient.translate(request: request.request)
+            // Each command goes through the SAME broker pipeline a manually-typed command does --
+            // see AIAssistantClient.swift's doc comment for why there's no shortcut here.
+            let steps = commands.map { command in
+                AssistantStep(
+                    command: command,
+                    result: SudoBroker.handle(command: command, reason: "AI Assistant: \"\(request.request)\"")
+                )
+            }
+            reply(FocusLockCodec.encode(AssistantActionResult(translationExplanation: explanation, steps: steps)))
         }
     }
 }

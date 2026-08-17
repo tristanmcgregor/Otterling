@@ -23,6 +23,37 @@ final class FocusLockViewModel: ObservableObject {
     @Published var confirmPasscodeText: String = ""
     @Published var passcodeStatusText: String?
     @Published var cooldownHoursText: String = ""
+
+    // MARK: Sudo broker terminal (see SudoBroker.swift) -- inert until the account is converted to
+    // Standard, but the UI works the same either way since it's just a front-end for the XPC call.
+    @Published var terminalCommandText: String = ""
+    @Published var terminalReasonText: String = ""
+    @Published var terminalLog: [TerminalEntry] = []
+    @Published var terminalRunning = false
+
+    // MARK: AI Assistant chat box (see AIAssistantClient.swift) -- translates natural language into
+    // command(s), each of which still goes through the SAME broker as the terminal above.
+    @Published var assistantRequestText: String = ""
+    @Published var assistantLog: [AssistantEntry] = []
+    @Published var assistantRunning = false
+
+    // MARK: Protect Another User (see UserScannerInstaller.swift)
+    @Published var protectUsernameText: String = ""
+    @Published var protectUserStatusText: String?
+
+    struct TerminalEntry: Identifiable {
+        let id = UUID()
+        let command: String
+        let reason: String
+        let result: ElevatedCommandResult
+    }
+
+    struct AssistantEntry: Identifiable {
+        let id = UUID()
+        let request: String
+        let result: AssistantActionResult
+    }
+
     private var pendingUpdateManifest: UpdateManifest?
     private var didSeedCooldownText = false
 
@@ -109,6 +140,40 @@ final class FocusLockViewModel: ObservableObject {
 
     func cancelPendingAction(_ id: String) {
         Task { await handle(await client.cancelPendingAction(id: id)) }
+    }
+
+    func runTerminalCommand() {
+        let command = terminalCommandText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !command.isEmpty, !terminalRunning else { return }
+        let reason = terminalReasonText
+        terminalCommandText = ""
+        terminalReasonText = ""
+        terminalRunning = true
+        Task {
+            let result = await client.requestElevatedCommand(command: command, reason: reason)
+            terminalLog.append(TerminalEntry(command: command, reason: reason, result: result))
+            terminalRunning = false
+        }
+    }
+
+    func runAssistantRequest() {
+        let request = assistantRequestText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !request.isEmpty, !assistantRunning else { return }
+        assistantRequestText = ""
+        assistantRunning = true
+        Task {
+            let result = await client.requestAssistantAction(request: request)
+            assistantLog.append(AssistantEntry(request: request, result: result))
+            assistantRunning = false
+        }
+    }
+
+    func protectUser(_ username: String) {
+        Task {
+            let result = await client.protectUser(username: username)
+            protectUserStatusText = result.message ?? (result.success ? "Done." : "Failed.")
+            if result.success { protectUsernameText = "" }
+        }
     }
 
     func setGuardianPasscode() {

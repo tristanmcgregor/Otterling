@@ -114,7 +114,9 @@ enum SudoBroker {
     private static func execute(command: String, decision: ElevatedCommandResult) -> ElevatedCommandResult {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/bash")
-        process.arguments = ["-c", command]
+        // `-l` (login shell) so approved commands see a normal PATH (Homebrew, etc.) -- a
+        // LaunchDaemon's default environment is minimal and wouldn't find `brew` otherwise.
+        process.arguments = ["-l", "-c", command]
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
         process.standardOutput = stdoutPipe

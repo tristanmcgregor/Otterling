@@ -40,6 +40,16 @@ func printUsage() {
       focuslockctl check-update
       focuslockctl install-update                         (passcode, no cooldown)
 
+      focuslockctl protect-user <username>                 (push the trigger-word scanner into a
+                                                            DIFFERENT local user's session -- for
+                                                            an admin protecting a separate Standard
+                                                            account, not the single-account model.
+                                                            They still need to click "Allow" on one
+                                                            Accessibility prompt themselves; see
+                                                            UserScannerInstaller.swift. Does NOT
+                                                            cover the DNS-floor profile -- that
+                                                            still needs a per-user install.)
+
       focuslockctl sudo "<command>" [reason]               (privilege-elevation broker -- see
                                                             SudoBroker.swift. NOT the passcode gate:
                                                             no passcode unlocks this, since it's
@@ -293,6 +303,13 @@ Task {
         case .rejected(let reason):
             print("DENIED: \(reason)")
         }
+
+    case "protect-user":
+        guard arguments.count > 2 else {
+            print("Usage: focuslockctl protect-user <username>")
+            break
+        }
+        printResult(await client.protectUser(username: arguments[2]))
 
     case "sudo":
         guard arguments.count > 2 else {

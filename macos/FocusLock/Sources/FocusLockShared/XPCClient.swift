@@ -190,6 +190,14 @@ public final class FocusLockXPCClient {
         }, onError: .rejected("Could not reach FocusLockHelperd"))
     }
 
+    public func protectUser(username: String) async -> FocusLockResult {
+        await withXPCContinuation({ resume, onError in
+            proxy(errorHandler: onError).protectUser(username: username) { data in
+                resume(FocusLockCodec.decode(FocusLockResult.self, from: data) ?? .denied("Malformed reply"))
+            }
+        }, onError: .denied("Could not reach FocusLockHelperd"))
+    }
+
     public func requestElevatedCommand(command: String, reason: String) async -> ElevatedCommandResult {
         let request = FocusLockCodec.encode(ElevatedCommandRequest(command: command, reason: reason))
         return await withXPCContinuation({ resume, onError in
@@ -200,5 +208,17 @@ public final class FocusLockXPCClient {
                 )
             }
         }, onError: ElevatedCommandResult(approved: false, source: "error", explanation: "Could not reach FocusLockHelperd"))
+    }
+
+    public func requestAssistantAction(request: String) async -> AssistantActionResult {
+        let payload = FocusLockCodec.encode(AssistantRequest(request: request))
+        return await withXPCContinuation({ resume, onError in
+            proxy(errorHandler: onError).requestAssistantAction(payload) { data in
+                resume(
+                    FocusLockCodec.decode(AssistantActionResult.self, from: data)
+                        ?? AssistantActionResult(translationExplanation: "Malformed reply", steps: [])
+                )
+            }
+        }, onError: AssistantActionResult(translationExplanation: "Could not reach FocusLockHelperd", steps: []))
     }
 }

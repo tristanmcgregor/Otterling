@@ -43,6 +43,12 @@ is assigned as each event is appended (its 1-based position in `ALERTS_PATH`), u
 so concurrent reporters (the daemon and the watchdog can both be POSTing around the same moment)
 never race onto the same id.
 
+AI assistant: `POST /ai-assistant/translate` (see `AIAssistantClient.swift`) turns a natural-language
+request ("install wget") into candidate shell command(s) via the same host-level reviewer's
+`/translate` route -- pure translation, no safety reasoning. Every returned command is then run
+through `/sudo-review/check` individually before anything executes, exactly like a manually-typed
+command -- this is a convenience layer over the broker, never a way around it.
+
 Sudo-elevation review: `POST /sudo-review/check` (see `SudoBroker.swift` / `sudo_review_server.py`)
 is the tier-3 fallback for the Mac's privilege-elevation broker -- a command its own local
 denylist/allowlist didn't resolve gets forwarded here, which calls out to a host-level AI reviewer
@@ -89,7 +95,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 # container does itself). `host.docker.internal` needs docker-compose.yml's `extra_hosts:
 # ["host.docker.internal:host-gateway"]` on this service to resolve on Linux.
 SUDO_REVIEW_URL = os.environ.get("SUDO_REVIEW_URL", "http://host.docker.internal:9072/review")
+SUDO_TRANSLATE_URL = os.environ.get("SUDO_TRANSLATE_URL", "http://host.docker.internal:9072/translate")
 SUDO_REVIEW_TIMEOUT = 20
+SUDO_TRANSLATE_TIMEOUT = 25
 
 DATA_DIR = os.environ.get("LOCKPROFILE_DATA_DIR", "/data")
 STATE_PATH = os.path.join(DATA_DIR, "state.json")
@@ -614,6 +622,25 @@ def _check_sudo_command(command: str, reason: str) -> tuple[str, str]:
     return verdict, explanation
 
 
+def _translate_request(request_text: str) -> tuple[list[str], str]:
+    """Calls out to the host-level reviewer's `/translate` route -- pure natural-language-to-shell
+    translation, no safety reasoning (see that route's own doc comment for why). Every command it
+    returns still goes through `_check_sudo_command` individually before anything executes."""
+    payload = json.dumps({"request": request_text}).encode("utf-8")
+    request = urllib.request.Request(
+        SUDO_TRANSLATE_URL, data=payload, method="POST", headers={"Content-Type": "application/json"}
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=SUDO_TRANSLATE_TIMEOUT) as response:
+            parsed = json.loads(response.read().decode("utf-8"))
+    except (urllib.error.URLError, OSError, json.JSONDecodeError, UnicodeDecodeError) as error:
+        return [], f"Could not reach the AI assistant ({error})."
+    commands = parsed.get("commands", [])
+    if not isinstance(commands, list):
+        return [], "Assistant returned a malformed response."
+    return [str(c) for c in commands], str(parsed.get("explanation", ""))
+
+
 def _push_event(event: dict) -> None:
     """Fan an accepted event out to both push channels, each best-effort and non-blocking."""
     threading.Thread(target=_send_ntfy_notification, args=(event,), daemon=True).start()
@@ -793,6 +820,14 @@ class Handler(BaseHTTPRequestHandler):
             })
             _push_event(event)
             return self._send_json(200, {"verdict": verdict, "explanation": explanation})
+
+        if self.path == "/ai-assistant/translate":
+            body = self._read_json_body()
+            request_text = (body or {}).get("request", "").strip()
+            if not request_text:
+                return self._send_json(400, {"error": "request required"})
+            commands, explanation = _translate_request(request_text)
+            return self._send_json(200, {"commands": commands, "explanation": explanation})
 
         if self.path == "/device-logs/upload":
             body = self._read_json_body(MAX_LOG_BODY_BYTES)

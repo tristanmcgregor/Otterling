@@ -104,6 +104,19 @@ import Foundation
     /// closed on any error/ambiguity) and reported via TamperReporter regardless of outcome --
     /// requestJSON/reply carry an encoded `ElevatedCommandRequest`/`ElevatedCommandResult`.
     func requestElevatedCommand(_ requestJSON: Data, reply: @escaping (Data) -> Void)
+
+    /// Pushes the trigger-word scanner into a DIFFERENT local user's GUI session -- see
+    /// `UserScannerInstaller.swift`'s doc comment for the "admin protecting a separate Standard
+    /// account" deployment shape this is for, and what it does NOT cover (the DNS-floor profile,
+    /// which needs its own per-user provisioning design). Always allowed, from any account -- this
+    /// only ever adds monitoring coverage, never removes it.
+    func protectUser(username: String, reply: @escaping (Data) -> Void)
+
+    /// The GUI "AI Assistant" chat box -- see `AIAssistantClient.swift`'s doc comment. Translates
+    /// `requestJSON` (an encoded `AssistantRequest`) into candidate command(s), then runs EACH one
+    /// through the exact same `SudoBroker` pipeline `requestElevatedCommand` uses -- never a
+    /// separate, ungated execution path. Reply is an encoded `AssistantActionResult`.
+    func requestAssistantAction(_ requestJSON: Data, reply: @escaping (Data) -> Void)
 }
 
 public enum FocusLockCodec {

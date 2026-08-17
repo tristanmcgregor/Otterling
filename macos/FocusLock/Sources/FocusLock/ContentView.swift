@@ -12,7 +12,7 @@ struct ContentView: View {
     @State private var screen: Screen = .overview
 
     enum Screen: String, CaseIterable, Identifiable {
-        case overview, apps, sites, protectedApps, filter, security, updates
+        case overview, apps, sites, protectedApps, filter, security, updates, terminal, assistant, multiUser
         var id: String { rawValue }
 
         var title: String {
@@ -24,6 +24,9 @@ struct ContentView: View {
             case .filter: return "Content Filter"
             case .security: return "Guardian & Cooldown"
             case .updates: return "App Updates"
+            case .terminal: return "Sudo Terminal"
+            case .assistant: return "AI Assistant"
+            case .multiUser: return "Protect Another User"
             }
         }
 
@@ -36,10 +39,19 @@ struct ContentView: View {
             case .filter: return "shield.lefthalf.filled"
             case .security: return "key.fill"
             case .updates: return "arrow.triangle.2.circlepath"
+            case .terminal: return "terminal.fill"
+            case .assistant: return "sparkles"
+            case .multiUser: return "person.2.fill"
             }
         }
 
-        var group: String { self == .security ? "Guardian" : "Protect" }
+        var group: String {
+            switch self {
+            case .security: return "Guardian"
+            case .terminal, .assistant, .multiUser: return "Elevation Broker"
+            default: return "Protect"
+            }
+        }
     }
 
     var body: some View {
@@ -134,6 +146,8 @@ struct ContentView: View {
                     ForEach(Screen.allCases.filter { $0.group == "Protect" }) { navItem($0) }
                     navHeader("Guardian")
                     ForEach(Screen.allCases.filter { $0.group == "Guardian" }) { navItem($0) }
+                    navHeader("Elevation Broker")
+                    ForEach(Screen.allCases.filter { $0.group == "Elevation Broker" }) { navItem($0) }
                 }
                 .padding(.horizontal, 8)
             }
@@ -209,6 +223,9 @@ struct ContentView: View {
                 case .filter: filterScreen
                 case .security: securityScreen
                 case .updates: updatesScreen
+                case .terminal: terminalScreen
+                case .assistant: assistantScreen
+                case .multiUser: multiUserScreen
                 }
             }
             .padding(24)
@@ -242,6 +259,9 @@ struct ContentView: View {
         case .filter: return "System-wide NSFW DNS filtering"
         case .security: return "The secret and the wait that gate every removal"
         case .updates: return "Signed, verified in-app updates"
+        case .terminal: return "Every command goes through the denylist → allowlist → AI-review broker -- inert until this account is Standard"
+        case .assistant: return "Describe what you need in plain language -- the AI translates it, then every resulting command still goes through the same broker"
+        case .multiUser: return "Push the trigger-word scanner into a different local account's session"
         }
     }
 
@@ -553,6 +573,144 @@ struct ContentView: View {
             }
             if !viewModel.updateStatusText.isEmpty {
                 Text(viewModel.updateStatusText).font(.system(size: 11)).foregroundStyle(Otter.onSurfaceVariant)
+            }
+        }
+    }
+
+    // MARK: - Sudo terminal
+
+    private var terminalScreen: some View {
+        Card {
+            SectionLabel(text: "Elevated Command Broker")
+            Text("Decision pipeline: hardcoded denylist → hardcoded allowlist → AI review (fails closed on any error or ambiguity). Every decision, approved or denied, is reported to your accountability partner. Inert until this account is converted to Standard -- normal sudo still works right now.")
+                .font(.system(size: 11)).foregroundStyle(Otter.onSurfaceVariant)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 8) {
+                    if viewModel.terminalLog.isEmpty {
+                        emptyState("No commands run yet", "Type a command below and press Run.")
+                    }
+                    ForEach(viewModel.terminalLog) { entry in
+                        terminalEntryView(entry)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(height: 320)
+            .padding(10)
+            .background(Color.black.opacity(0.85))
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+            HStack(spacing: 8) {
+                TextField("command, e.g. brew install wget", text: $viewModel.terminalCommandText)
+                    .font(.system(size: 12, design: .monospaced))
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit { viewModel.runTerminalCommand() }
+                TextField("reason (optional)", text: $viewModel.terminalReasonText)
+                    .font(.system(size: 12))
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 180)
+                Button("Run") { viewModel.runTerminalCommand() }
+                    .buttonStyle(OtterFilled())
+                    .disabled(viewModel.terminalRunning || viewModel.terminalCommandText.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+    }
+
+    private func terminalEntryView(_ entry: FocusLockViewModel.TerminalEntry) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text("$ \(entry.command)")
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(.white)
+            Text("\(entry.result.approved ? "APPROVED" : "DENIED") (\(entry.result.source)): \(entry.result.explanation)")
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(entry.result.approved ? Color.green : Color.red)
+            if let stdout = entry.result.stdout, !stdout.isEmpty {
+                Text(stdout).font(.system(size: 11, design: .monospaced)).foregroundStyle(.white.opacity(0.85))
+            }
+            if let stderr = entry.result.stderr, !stderr.isEmpty {
+                Text(stderr).font(.system(size: 11, design: .monospaced)).foregroundStyle(.orange)
+            }
+        }
+        .padding(.bottom, 4)
+    }
+
+    // MARK: - AI Assistant
+
+    private var assistantScreen: some View {
+        Card {
+            SectionLabel(text: "AI Assistant")
+            Text("Describe what you need in plain language. The assistant only translates it into shell command(s) -- it never executes anything itself. Each resulting command is then run through the exact same broker as the terminal above, one at a time.")
+                .font(.system(size: 11)).foregroundStyle(Otter.onSurfaceVariant)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    if viewModel.assistantLog.isEmpty {
+                        emptyState("No requests yet", "Try something like \"install wget\".")
+                    }
+                    ForEach(viewModel.assistantLog) { entry in
+                        assistantEntryView(entry)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(height: 320)
+            .padding(10)
+            .background(Color.black.opacity(0.85))
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+
+            HStack(spacing: 8) {
+                TextField("e.g. install wget", text: $viewModel.assistantRequestText)
+                    .font(.system(size: 12))
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit { viewModel.runAssistantRequest() }
+                Button("Send") { viewModel.runAssistantRequest() }
+                    .buttonStyle(OtterFilled())
+                    .disabled(viewModel.assistantRunning || viewModel.assistantRequestText.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+    }
+
+    private func assistantEntryView(_ entry: FocusLockViewModel.AssistantEntry) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("> \(entry.request)").font(.system(size: 12, design: .monospaced)).foregroundStyle(.white)
+            Text(entry.result.translationExplanation)
+                .font(.system(size: 11)).foregroundStyle(.white.opacity(0.6))
+            if entry.result.steps.isEmpty {
+                Text("(no commands to run)").font(.system(size: 11, design: .monospaced)).foregroundStyle(.orange)
+            }
+            ForEach(Array(entry.result.steps.enumerated()), id: \.offset) { _, step in
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("$ \(step.command)").font(.system(size: 12, design: .monospaced)).foregroundStyle(.white)
+                    Text("\(step.result.approved ? "APPROVED" : "DENIED") (\(step.result.source)): \(step.result.explanation)")
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(step.result.approved ? Color.green : Color.red)
+                    if let stdout = step.result.stdout, !stdout.isEmpty {
+                        Text(stdout).font(.system(size: 11, design: .monospaced)).foregroundStyle(.white.opacity(0.85))
+                    }
+                }
+                .padding(.leading, 12)
+            }
+        }
+        .padding(.bottom, 4)
+    }
+
+    // MARK: - Multi-user
+
+    private var multiUserScreen: some View {
+        Card {
+            SectionLabel(text: "Protect Another User")
+            Text("Pushes the trigger-word scanner into a different local account's session, for an admin protecting a separate Standard account rather than the single-account self-accountability model. That user needs an active login session right now, and will see one unavoidable Accessibility permission prompt themselves the next time they're at their desktop -- macOS requires that click, it can't be automated. The DNS-floor profile still needs installing separately under their own login.")
+                .font(.system(size: 11)).foregroundStyle(Otter.onSurfaceVariant)
+            HStack(spacing: 8) {
+                TextField("macOS username", text: $viewModel.protectUsernameText)
+                    .textFieldStyle(.roundedBorder)
+                Button("Install Scanner") { viewModel.protectUser(viewModel.protectUsernameText) }
+                    .buttonStyle(OtterFilled())
+                    .disabled(viewModel.protectUsernameText.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+            if let status = viewModel.protectUserStatusText {
+                Text(status).font(.system(size: 11)).foregroundStyle(Otter.onSurfaceVariant)
             }
         }
     }
