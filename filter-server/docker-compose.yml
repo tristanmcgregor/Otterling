@@ -45,9 +45,18 @@ services:
       # pattern as the two files above.
       - ./trigger_words.py:/home/mitmproxy/trigger_words.py:ro
       - ./block_reporter.py:/home/mitmproxy/block_reporter.py:ro
+      # Replaces the built-in --proxyauth mechanism (see proxy_auth_gate.py's docstring for why):
+      # same Basic-auth semantics, but skips the challenge for PROXY_AUTH_EXEMPT_IPS.
+      - ./proxy_auth_gate.py:/home/mitmproxy/proxy_auth_gate.py:ro
     environment:
       - PROXY_USER=${PROXY_USER:-otterling}
       - PROXY_PASSWORD=${PROXY_PASSWORD:?set PROXY_PASSWORD in .env}
+      # Household egress IP(s) that skip proxy auth entirely -- see proxy_auth_gate.py. Needed so
+      # the Mac's system-wide proxy (macos/FocusLock ProxyEnforcer.swift) works for every process,
+      # including non-interactive system daemons that can't answer a Basic-auth challenge. Comma-
+      # separated; update if the household's public IP changes. Empty = auth required for everyone
+      # (safe default -- an unset/misconfigured value never accidentally opens the proxy).
+      - PROXY_AUTH_EXEMPT_IPS=${PROXY_AUTH_EXEMPT_IPS:-}
       # Used by mitm_nsfw_addon.py's third-tier AI classifier -- same key already deployed for
       # the release-review pipeline (/var/lib/otterling/ci/secrets.env), reused here rather than
       # provisioning a second one. Addon fails open (no block) if this is unset.
@@ -68,15 +77,15 @@ services:
     # home network too, not just LAN), and every such connection looks "global-sourced" to
     # mitmproxy post-NAT regardless of whether it's genuinely external or just hairpinned --
     # confirmed via `docker compose logs mitmproxy` showing "killed by block_global option" for
-    # every non-LAN-direct connection attempt. --proxyauth above is the actual access control here,
-    # not source-IP filtering.
+    # every non-LAN-direct connection attempt. proxy_auth_gate.py (loaded below, NOT --proxyauth --
+    # the two must not both be active, or requests get double-gated) is the actual access control.
     command: >
       mitmdump
       --mode regular
       --listen-port 8080
-      --proxyauth "${PROXY_USER:-otterling}:${PROXY_PASSWORD}"
       --set confdir=/home/mitmproxy/.mitmproxy
       --set block_global=false
+      -s /home/mitmproxy/proxy_auth_gate.py
       -s /home/mitmproxy/mitm_nsfw_addon.py
 
   dns-classifier:
