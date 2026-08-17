@@ -657,6 +657,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json(400, {"error": "device_id and type required"})
             event = {
                 "device_id": body["device_id"],
+                # Optional human-readable computer name (e.g. "Tristan's MacBook Pro") --
+                # device_id itself stays a stable opaque key (IOPlatformUUID for the Mac daemon,
+                # a client IP for the mitm proxy's block_reporter.py) so per-device server records
+                # keep working; this is purely for the phone's SMS text (see AlertReporter
+                # .formatBody), which falls back to its own device name when this is absent.
+                "device_name": body.get("device_name", ""),
                 "type": body["type"],
                 "details": body.get("details", ""),
                 "reported_at": body.get("ts", time.time()),

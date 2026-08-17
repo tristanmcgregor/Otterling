@@ -58,12 +58,17 @@ class MacTamperPollWorker(context: Context, params: WorkerParameters) : Coroutin
                     if (id <= 0) continue
                     val macType = event.optString("type", "unknown")
                     val (severity, label) = severityAndLabel(macType)
+                    // device_name (a human-readable computer name, e.g. "Tristan's MacBook Pro")
+                    // is optional -- older event types / the mitm proxy's block_reporter.py don't
+                    // send one (it can't attribute a shared household egress IP to one device), so
+                    // AlertReporter.formatBody falls back to this phone's own model name rather
+                    // than showing device_id's raw UUID/IP.
                     reporter.report(
                         type = label,
-                        details = event.optString("details", "").ifBlank { "(no details)" } +
-                            " [Mac: ${event.optString("device_id", "?")}]",
+                        details = event.optString("details", "").ifBlank { "(no details)" },
                         severity = severity,
                         debounceKey = "mac_tamper|$id",
+                        deviceName = event.optString("device_name", "").ifBlank { null },
                     )
                     settings.setLastSeenAlertId(id)
                 }

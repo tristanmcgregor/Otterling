@@ -21,6 +21,10 @@ public enum TamperReporter {
         guard let url = URL(string: "https://\(host)/alerts/tamper") else { return }
         let body: [String: Any] = [
             "device_id": deviceID() ?? "unknown",
+            // Human-readable computer name (e.g. "Tristan's MacBook Pro") for the phone's SMS text
+            // (see AlertReporter.kt's formatBody) -- device_id above stays the stable opaque key
+            // (IOPlatformUUID) server-side records are keyed on; this is display-only.
+            "device_name": computerName() ?? "",
             "type": type,
             "details": details,
             "ts": Date().timeIntervalSince1970,
@@ -73,6 +77,22 @@ public enum TamperReporter {
             return value
         }
         return nil
+    }
+
+    /// The name shown in System Settings > General > About / Sharing (e.g. "Tristan's MacBook
+    /// Pro") -- display-only, see the doc comment where this is used in `report`'s body.
+    private static func computerName() -> String? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/sbin/scutil")
+        process.arguments = ["--get", "ComputerName"]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        guard (try? process.run()) != nil else { return nil }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else { return nil }
+        return String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private static func readTrimmed(_ path: String) -> String? {

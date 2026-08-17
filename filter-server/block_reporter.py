@@ -77,7 +77,14 @@ def _post(payload: bytes) -> None:
 
 def report(device_id: str, word: str, host: str, reason: str, dedupe_key: str | None = None) -> None:
     """Fire a `trigger_word_detected` alert for `word` seen on `host`. Fire-and-forget; safe to call
-    on the hot path. `device_id` is the client IP (best identifier the proxy has for which machine)."""
+    on the hot path. `device_id` is the client IP (best identifier the proxy has for which machine).
+
+    `reason` (which check fired -- domain-list, path-pattern, etc., and for path-pattern includes
+    the whole compiled regex) is internal-only and deliberately left OUT of `details`: it has no
+    value to the accountability partner reading the eventual SMS, and used to get dumped verbatim
+    into the text. `details` is kept in the exact `"<word>" seen on <host>` shape every trigger-word
+    source (the phone's own detector, macOS's FocusLockScanner) writes, since AlertReporter.kt's
+    formatBody parses that shape into the final report line."""
     if not ALERTS_URL or not TOKEN:
         return
     key = dedupe_key or f"{word}|{host}"
@@ -85,8 +92,11 @@ def report(device_id: str, word: str, host: str, reason: str, dedupe_key: str | 
         return
     event = {
         "device_id": device_id or "lan-client",
+        # Can't attribute a specific device from a shared household egress IP (see device_id above)
+        # -- left blank so the phone falls back to its own device name rather than showing an IP.
+        "device_name": "",
         "type": "trigger_word_detected",
-        "details": f'"{word}" seen on {host} ({reason})',
+        "details": f'"{word}" seen on {host}',
         "ts": time.time(),
     }
     payload = json.dumps(event).encode("utf-8")

@@ -564,8 +564,15 @@ async function refresh() {
     const status = await fetchJson(`${DATA_BASE}/status.json`);
     live = renderStatus(status);
     errorBanner.style.display = "none";
-  } catch {
-    errorBanner.textContent = "No review data yet — waiting for release.sh to write status.json.";
+  } catch (error) {
+    // Distinguish "no file yet" (a fresh install, genuinely nothing to show) from every other
+    // failure -- a stale/mismatched Basic Auth credential, a 5xx, or a network error all used to
+    // render this exact same "no data yet" message, which sent more than one debugging session
+    // chasing a missing release instead of a wrong password.
+    const httpStatus = error.message.match(/HTTP (\d+)/)?.[1];
+    errorBanner.textContent = httpStatus === "404"
+      ? "No review data yet — waiting for release.sh to write status.json."
+      : `Could not load status.json (${error.message}). If this is HTTP 401, the dashboard credentials don't match the server's REVIEW_DASHBOARD_PASSWORD_HASH.`;
     errorBanner.style.display = "block";
   }
 

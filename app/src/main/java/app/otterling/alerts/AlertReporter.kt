@@ -1,8 +1,11 @@
 package app.otterling.alerts
 
 import android.content.Context
+import android.os.Build
 import android.util.Log
 import app.otterling.data.AppDatabase
+import java.text.DateFormat
+import java.util.Date
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -27,6 +30,7 @@ class AlertReporter(context: Context) {
         details: String,
         severity: AlertSeverity = AlertSeverity.WARNING,
         debounceKey: String? = null,
+        deviceName: String? = null,
     ) = withContext(Dispatchers.IO) {
         val partnerNumbers = partnerSettings.partnerNumbers()
         val partnerWantsSms = shouldSms(severity) && partnerSettings.isEnabled() && partnerNumbers.isNotEmpty()
@@ -35,7 +39,7 @@ class AlertReporter(context: Context) {
 
         var enqueued = false
         if (partnerWantsSms && !debounced) {
-            val body = formatBody(type, details)
+            val body = formatBody(details, deviceName)
             for (number in partnerNumbers) {
                 if (underDailyCap(partnerSettings.dailySentCount(number))) {
                     outboxDao.insert(SmsOutboxEntry(body = body, recipientOverride = number))
@@ -152,13 +156,33 @@ class AlertReporter(context: Context) {
         }
     }
 
-    private fun formatBody(type: String, details: String): String {
-        val raw = "Otterling: $type — $details"
+    /**
+     * Compact one-line report: `Otterling Alert: "word" flagged on site (device) · 2:15 PM`.
+     * [details] for a trigger-word hit is always produced in the `"<word>" seen in/on <place>`
+     * shape (see `FocusGuardAccessibilityService`, macOS `FocusLockScanner`, and the server's
+     * `block_reporter.py` -- all three write it identically on purpose so this one parse covers
+     * every source) and gets rendered into the "flagged"-style clause below; anything that doesn't
+     * match (tamper/status events like a removed lock profile) is shown as plain text instead.
+     */
+    private fun formatBody(details: String, deviceName: String?): String {
+        val device = deviceName?.takeIf { it.isNotBlank() } ?: Build.MODEL
+        val time = DateFormat.getTimeInstance(DateFormat.SHORT).format(Date())
+        val match = TRIGGER_WORD_DETAILS.find(details)
+        val message = if (match != null) {
+            val (word, preposition, place) = match.destructured
+            "\"$word\" flagged $preposition $place"
+        } else {
+            details
+        }
+        val raw = "Otterling Alert: $message ($device) · $time"
         return if (raw.length <= 300) raw else raw.take(297) + "..."
     }
 
     private companion object {
         const val TAG = "AlertReporter"
+
+        // Matches the exact `"<word>" seen in/on <place>` shape every trigger-word source writes.
+        val TRIGGER_WORD_DETAILS = Regex("^\"(.+)\" seen (in|on) (.+)$")
 
         // Shared by every AlertReporter instance in the process (companion-object members are
         // per-class, not per-instance) -- see flushOutbox()'s doc comment for why this needs to be
