@@ -114,3 +114,12 @@ pipeline would need:
 
 None of that is set up here -- it's a real, separate infrastructure decision (get a Mac CI runner,
 manage a second set of signing secrets), not something to start blind as part of this pass.
+
+## Gotcha: pinning the wrong Team ID
+
+When filling in `FocusLockConstants.pinnedUpdateTeamID`, use the `TeamIdentifier=` line from
+`codesign -dv --verbose=4 <app>` -- not the parenthesized suffix in `security find-identity`'s
+display name. At least one "Apple Development" personal-team certificate showed a different value
+in each place (identity name `"... (C438Q9HAHP)"`, but every build it produced actually carried
+`TeamIdentifier=D4XJKWV7GY`). Trusting the display name silently made every build fail its own
+pinned-Team-ID check.
