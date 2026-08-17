@@ -160,9 +160,15 @@ public enum FocusLockConstants {
     /// SHA-256 check), but it can't forge this. **Empty by default, and `UpdateManager` refuses to
     /// install anything while it's empty** -- fail closed, same stance Android takes for a build
     /// with no `RELEASE_CERT_SHA256`. Fill in your own Apple Developer Team ID here and rebuild
-    /// before relying on auto-update; find it with `security find-identity -v -p codesigning` (the
-    /// parenthesized suffix after your certificate name) or in the Apple Developer portal.
-    public static let pinnedUpdateTeamID = "C438Q9HAHP"
+    /// before relying on auto-update.
+    ///
+    /// IMPORTANT: use the value from `codesign -dv --verbose=4 <app>`'s own `TeamIdentifier=` line,
+    /// not the parenthesized suffix in the certificate's display name (`security find-identity`) --
+    /// on at least one "Apple Development" personal-team certificate observed here, those two
+    /// differed (identity showed "(C438Q9HAHP)" in its Common Name, but the actual embedded
+    /// `TeamIdentifier` on every build it produces was "D4XJKWV7GY"). Trusting the display name
+    /// instead of `codesign`'s own output silently made every build fail its own update check.
+    public static let pinnedUpdateTeamID = "D4XJKWV7GY"
 
     /// Where `UpdateManager` looks for the manifest -- see `filter-server/updates/README.md` and
     /// `macos/FocusLock/RELEASE.md` for how it gets published. Uses the same host as the cloud
