@@ -27,14 +27,24 @@ class MacTamperPollSettings(context: Context) {
     private val prefs = appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
     /** The `LOCKPROFILE_TOKEN` from the server's `.env` -- same value `install_lock_profile.py`
-     *  uses on the Mac side. Only actually polls once this is set, same "off with no host/token
-     *  configured" stance as [CloudFilterSettings]. */
-    fun token(): String = securePrefs.getString(KEY_TOKEN, "").orEmpty()
+     *  uses on the Mac side, and the same baked-in-default tradeoff `FocusLockConstants
+     *  .defaultLockProfileToken` makes there: falls back to [DEFAULT_TOKEN] so polling/FCM
+     *  registration work out of the box, with no setup screen required before this phone's own
+     *  accountability alerts start flowing. Embedding it means it ships inside the APK and is
+     *  extractable by anyone with the binary -- an accepted trade here, since `/alerts/tamper` is
+     *  append-only ingestion for a personal accountability deployment: the worst a leaked token
+     *  buys is posting spurious alerts (noise the Guardian sees) or reading the alert feed, not
+     *  disabling any protection. The settings field still lets a different value override this
+     *  (e.g. pointing at a rotated token or a different family's server). */
+    fun token(): String = securePrefs.getString(KEY_TOKEN, "").orEmpty().ifBlank { DEFAULT_TOKEN }
 
     fun setToken(token: String) {
         securePrefs.edit().putString(KEY_TOKEN, token.trim()).apply()
     }
 
+    /** Always true now that [token] falls back to [DEFAULT_TOKEN] -- kept as a named check (rather
+     *  than inlining `true`) so call sites read the same as before, and so a future change back to
+     *  no-default-without-setup only needs to change this one place. */
     fun isConfigured(): Boolean = token().isNotEmpty()
 
     /** Highest event `id` already turned into an [AlertReporter] call -- `MacTamperPollWorker`
@@ -67,5 +77,9 @@ class MacTamperPollSettings(context: Context) {
         const val KEY_LAST_SEEN_ID = "last_seen_alert_id"
         const val KEY_LAST_POLLED = "last_polled_at_millis"
         const val KEY_FCM_TOKEN = "last_registered_fcm_token"
+
+        // Rotate this (and the server's LOCKPROFILE_TOKEN in filter-server/.env) together --
+        // see the doc comment on `token()` for why this is baked in at all.
+        const val DEFAULT_TOKEN = "22ff3ed0a6b843633a6499911abb7378239e6e9e6cbd97d56e465b39d0dbdc9b"
     }
 }

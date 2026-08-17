@@ -63,8 +63,9 @@ fun MacTamperAlertSection(context: Context) {
         subtitle = "Checks the family's filter-server (LOCKPROFILE_TOKEN in its .env) every " +
             "15 minutes for tamper events reported by the macOS app -- lock profile removed, " +
             "filter daemon unloaded and recovered, etc. -- and texts this phone's existing " +
-            "accountability partners the same way any other alert here does. Blank token = " +
-            "disabled, nothing polled.",
+            "accountability partners the same way any other alert here does. Works out of the " +
+            "box with a built-in default token; only change this if the server's token has " +
+            "been rotated.",
     ) {
         OutlinedTextField(
             value = token,
@@ -78,7 +79,7 @@ fun MacTamperAlertSection(context: Context) {
             onClick = {
                 settings.setToken(token)
                 hasToken = settings.isConfigured()
-                status = if (token.isBlank()) "Saved -- polling disabled (no token)." else "Saved."
+                status = if (token.isBlank()) "Saved -- reverted to the built-in default token." else "Saved."
             },
         ) {
             Text("Save")
