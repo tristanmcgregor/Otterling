@@ -96,6 +96,10 @@ class MacTamperPollWorker(context: Context, params: WorkerParameters) : Coroutin
         // direct "edited the code and installed it locally" bypass the rest of the self-lockout
         // design exists to catch, so it gets the same top severity as the VPN-bypass case.
         "mac_code_tampered" -> AlertSeverity.CRITICAL to "MAC_CODE_TAMPERED"
+        // The DNS floor's filter was switched off in System Settings > Network > VPN & Filters
+        // without removing the profile -- see LockProfileGuard.swift's dnsFloorFunctionallyActive().
+        "dns_floor_disabled" -> AlertSeverity.CRITICAL to "MAC_DNS_FLOOR_DISABLED"
+        "dns_floor_reenabled" -> AlertSeverity.INFO to "MAC_DNS_FLOOR_REENABLED"
         else -> AlertSeverity.WARNING to "MAC_TAMPER_${macType.uppercase()}"
     }
 

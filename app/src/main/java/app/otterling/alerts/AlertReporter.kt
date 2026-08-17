@@ -199,7 +199,7 @@ class AlertReporter(context: Context) {
         // message. Everything NOT listed here (see formatBody's doc comment) defaults to tamper.
         val BENIGN_TYPES = setOf(
             "VPN_BLOCK", "WATCHED_APP", "UPDATE_REQUESTED", "APP_UPDATE", "HABIT_UNLOCK",
-            "MAC_VPN_CLEARED", "MAC_LOCK_PROFILE_INSTALLED", "MAC_BACK",
+            "MAC_VPN_CLEARED", "MAC_LOCK_PROFILE_INSTALLED", "MAC_BACK", "MAC_DNS_FLOOR_REENABLED",
         )
 
         // Shared by every AlertReporter instance in the process (companion-object members are

@@ -143,6 +143,12 @@ NTFY_EVENT_STYLE = {
     # locally-modified source tree. This is the actual "edited the code and installed it locally to
     # dodge review" scenario the rest of this project's self-lockout design exists to catch.
     "mac_code_tampered": ("Otterling Mac: running locally-modified code", "urgent", "warning"),
+    # The lock profile's DNS Settings payload can be switched off from System Settings > Network >
+    # VPN & Filters without removing the profile at all -- see LockProfileGuard.swift's
+    # `dnsFloorFunctionallyActive()` doc comment for how this is detected (the `profiles` CLI itself
+    # can't see it).
+    "dns_floor_disabled": ("Otterling Mac: DNS floor filter switched off", "urgent", "warning"),
+    "dns_floor_reenabled": ("Otterling Mac: DNS floor filter back on", "default", "white_check_mark"),
 }
 
 PROFILE_IDENTIFIER = "app.otterling.lockprofile"

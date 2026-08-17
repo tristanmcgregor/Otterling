@@ -20,6 +20,11 @@ enum LockProfileGuard {
     // that gap is real and not closed here; the watchdog reports the unload itself separately).
     private static var lastKnownInstalled: Bool?
 
+    // Same "transitions only" reasoning, for `dnsFloorFunctionallyActive()` below. Stays nil (no
+    // report on next definitive reading) whenever a check comes back inconclusive, e.g. away from
+    // the home LAN -- see that function's doc comment.
+    private static var lastKnownDNSFloorActive: Bool?
+
     /// Call on the same slower cadence `EnforcementLoop` already uses for DNS
     /// (`dnsCheckInterval`) -- this shells out, so it's not free enough for every tick. Returns the
     /// current installed state so callers (status reporting) don't need a second, separate check.
@@ -37,6 +42,22 @@ enum LockProfileGuard {
             }
         }
         lastKnownInstalled = installed
+
+        if let floorActive = dnsFloorFunctionallyActive() {
+            if let last = lastKnownDNSFloorActive, last != floorActive {
+                if !floorActive {
+                    let message = "the DNS floor profile is still installed, but its filter was " +
+                        "switched off in System Settings > Network > VPN & Filters -- the " +
+                        "encrypted-DNS floor is not currently enforced"
+                    FileHandle.standardError.write("[LockProfileGuard] \(message)\n".data(using: .utf8)!)
+                    TamperReporter.report(type: "dns_floor_disabled", details: message)
+                } else {
+                    TamperReporter.report(type: "dns_floor_reenabled", details: "DNS floor filter re-enabled")
+                }
+            }
+            lastKnownDNSFloorActive = floorActive
+        }
+
         return installed
     }
 
@@ -75,6 +96,49 @@ enum LockProfileGuard {
         guard let data = FileManager.default.contents(atPath: tempPath) else { return lastKnownInstalled ?? false }
         // Substring search deliberately over raw bytes, not a parsed plist -- see doc comment.
         return data.range(of: Data(FocusLockConstants.lockProfileIdentifier.utf8)) != nil
+    }
+
+    /// Functional liveness check for the DNS Settings payload specifically -- macOS's "Filters &
+    /// Proxies" pane (System Settings > Network > VPN & Filters) lets a filter be individually
+    /// switched to "Disabled" WITHOUT removing the profile at all, and neither `profiles show`'s
+    /// human-readable listing nor its raw plist output changes in any way when that happens
+    /// (confirmed by hand: byte-identical output enabled vs. disabled) -- `isInstalled()` above
+    /// simply cannot see this. Detected functionally instead: this payload points the OS's real DNS
+    /// resolution at public Cloudflare Family DoH, which -- having no idea this Mac's filter-server
+    /// hostname is on the LAN -- always answers with its public WAN address. `DNSEnforcer`'s own
+    /// plain-DNS enforcement, once verified as genuinely talking to the real server (see
+    /// `HomeLANVerifier`), instead answers with the LAN address directly. So while confirmed on the
+    /// home LAN: if the OS's real resolution path (`dscacheutil`, not `dig`, since it goes through
+    /// the same resolution real apps use) still returns the LAN address, whatever public DoH floor
+    /// is supposed to be shadowing it isn't running. Returns nil (inconclusive) rather than false
+    /// when not confirmed on the home LAN right now -- away from home this specific signal can't
+    /// tell "disabled" apart from "working as designed."
+    private static func dnsFloorFunctionallyActive() -> Bool? {
+        guard HomeLANVerifier.verify(ip: FocusLockConstants.homeLANHost, hostname: FocusLockConstants.defaultCloudFilterHost) else {
+            return nil
+        }
+        guard let resolved = dscacheutilResolve(FocusLockConstants.defaultCloudFilterHost) else { return nil }
+        return resolved != FocusLockConstants.homeLANHost
+    }
+
+    private static func dscacheutilResolve(_ host: String) -> String? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/dscacheutil")
+        process.arguments = ["-q", "host", "-a", "name", host]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        guard (try? process.run()) != nil else { return nil }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0, let output = String(data: data, encoding: .utf8) else { return nil }
+        for line in output.split(separator: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("ip_address:") {
+                return trimmed.replacingOccurrences(of: "ip_address:", with: "").trimmingCharacters(in: .whitespaces)
+            }
+        }
+        return nil
     }
 
     /// The classic root-safe trick for "who's actually logged in at the console" -- `/dev/console`
