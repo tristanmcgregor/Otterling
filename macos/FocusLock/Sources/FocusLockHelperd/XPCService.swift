@@ -245,7 +245,7 @@ final class XPCService: NSObject, FocusLockXPCProtocol {
         }
         // Apply immediately -- don't wait for the enforcement loop's 15s DNS cadence.
         let state = stateStore.snapshot()
-        DNSEnforcer.apply(cloudHost: state.cloudFilterHost, cloudEnabled: state.cloudFilterEnabled, lanProbePort: state.proxyPort)
+        DNSEnforcer.apply(cloudHost: state.cloudFilterHost, cloudEnabled: state.cloudFilterEnabled)
         onStateChanged()
         reply(FocusLockCodec.encode(FocusLockResult.ok))
     }
@@ -447,7 +447,7 @@ final class XPCService: NSObject, FocusLockXPCProtocol {
     private func reapplyDNSIfEnforcing() {
         let state = stateStore.snapshot()
         guard state.dnsEnforcementEnabled else { return }
-        DNSEnforcer.apply(cloudHost: state.cloudFilterHost, cloudEnabled: state.cloudFilterEnabled, lanProbePort: state.proxyPort)
+        DNSEnforcer.apply(cloudHost: state.cloudFilterHost, cloudEnabled: state.cloudFilterEnabled)
     }
 
     func checkForUpdate(reply: @escaping (Data) -> Void) {

@@ -117,7 +117,7 @@ final class EnforcementLoop {
             if state.dnsEnforcementEnabled {
                 let now = Date()
                 if self.lastDNSCheckAt == nil || now.timeIntervalSince(self.lastDNSCheckAt!) >= self.dnsCheckInterval {
-                    DNSEnforcer.apply(cloudHost: state.cloudFilterHost, cloudEnabled: state.cloudFilterEnabled, lanProbePort: state.proxyPort)
+                    DNSEnforcer.apply(cloudHost: state.cloudFilterHost, cloudEnabled: state.cloudFilterEnabled)
                     self.lastDNSCheckAt = now
                 }
             } else {

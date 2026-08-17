@@ -41,13 +41,18 @@ enum ProxyEnforcer {
             return false
         }
 
-        // Prefer the known home LAN address when it's actually reachable on this port -- see
+        // Prefer the known home LAN address when it's cryptographically confirmed as the real
+        // filter-server (see `HomeLANVerifier`'s doc comment -- a bare TCP connect is NOT enough
+        // here, since anyone squatting this private IP on any network would otherwise hijack the
+        // Mac's proxy config) AND the mitmproxy port itself is reachable there. See
         // `FocusLockConstants.homeLANHost`'s doc comment for why resolving/connecting via the
         // hostname hairpins every request through the router while on the home network. Using the
         // literal IP directly as the configured proxy server means no further DNS lookup is ever
         // needed to reach it.
         let target: String
-        if host == FocusLockConstants.defaultCloudFilterHost, isReachable(host: FocusLockConstants.homeLANHost, port: port) {
+        if host == FocusLockConstants.defaultCloudFilterHost,
+           HomeLANVerifier.verify(ip: FocusLockConstants.homeLANHost, hostname: host),
+           isReachable(host: FocusLockConstants.homeLANHost, port: port) {
             target = FocusLockConstants.homeLANHost
         } else {
             target = host
