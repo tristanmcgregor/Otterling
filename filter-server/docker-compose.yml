@@ -22,6 +22,20 @@ services:
     image: mitmproxy/mitmproxy:latest
     container_name: otterling-mitmproxy
     restart: unless-stopped
+    # `./mitm-ca` on the host MUST stay owned by uid:gid 1000:1000 (the image's own built-in
+    # `mitmproxy` user -- confirmed via `docker run --rm mitmproxy/mitmproxy:latest id mitmproxy`),
+    # not whatever host user happens to run docker. The image's own docker-entrypoint.sh runs
+    # `usermod -u $(stat -u confdir) -g $(stat -g confdir) mitmproxy` as root on every single start,
+    # unconditionally (see `set -o errexit` at its top -- a failure here aborts the container before
+    # it ever execs mitmdump). `usermod -g` requires the target GID to already exist as a named
+    # group; the image defines only `mitmproxy:1000`, so any confdir owner GID other than 1000 makes
+    # every startup fail outright ("usermod: group '<gid>' does not exist", exit 6, crash-loop) --
+    # this took real content filtering down on 2026-08-18 when the directory ended up owned by the
+    # host's admin user (1001:1001) instead. Do NOT try to fix this with a `user:` override here --
+    # that skips entrypoint's usermod call entirely, which needs root to run `gosu` and drop
+    # privileges afterward, and breaks in a different way (confirmed: "usermod: invalid user ID
+    # '-g'", "Permission denied" statting the confdir). The actual fix is keeping the host directory
+    # at 1000:1000; if it ever needs recreating, `sudo chown -R 1000:1000 ./mitm-ca` first.
     # Host unbound/CleanBrowsing NXDOMAINs social domains (e.g. reddit.com). Use public DNS so
     # mitmproxy can still dial those hosts and apply path/title filtering instead of returning 502.
     dns:
