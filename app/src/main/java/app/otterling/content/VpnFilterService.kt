@@ -283,6 +283,21 @@ class VpnFilterService : VpnService() {
         val mitmExemptUids = exemptManager.exemptPackages().mapNotNullTo(mutableSetOf()) { pkg ->
             runCatching { packageManager.getPackageUid(pkg, 0) }.getOrNull()
         }
+        // TEMPORARY 2026-08-18: MITM interception restricted to Chrome only -- every other app's
+        // UID is exempted here too, on top of exemptManager's own curated list. Reported live: the
+        // proxy hop was breaking Netflix and Samsung's Wearable companion app badly enough to be
+        // unusable, and per-app exemption additions (MitmExemptManager) are reactive (an app has
+        // to actually break and get noticed/added first) -- this flips the model to opt-in
+        // (Chrome only) rather than opt-out, while every app's DNS/domain-blocklist filtering and
+        // QUIC/443-UDP blocking (see isBlockedDestination above) stays exactly as it was; only the
+        // HTTPS-content-inspection hop is scoped down. Revert by deleting this block --
+        // exemptManager's own list (Chrome permanently excluded from it, see
+        // MitmExemptManager.NEVER_EXEMPT_PACKAGES) is untouched and still the real mechanism.
+        packageManager.getInstalledApplications(0).forEach { appInfo ->
+            if (appInfo.packageName !in MitmExemptManager.NEVER_EXEMPT_PACKAGES) {
+                mitmExemptUids.add(appInfo.uid)
+            }
+        }
         val ownerUidResolver = AppUidResolver(applicationContext)
         // Auto-exempts an app after a few suspected pinning rejections within a short window,
         // closing the gap a static seeded list can't: an app nobody thought to add in advance (see

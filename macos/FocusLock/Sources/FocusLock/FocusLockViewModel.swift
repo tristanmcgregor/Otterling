@@ -30,12 +30,20 @@ final class FocusLockViewModel: ObservableObject {
     @Published var terminalReasonText: String = ""
     @Published var terminalLog: [TerminalEntry] = []
     @Published var terminalRunning = false
+    // The command currently in flight (denylist -> allowlist -> possibly an AI-review round-trip)
+    // -- shown as its own "reviewing..." row in the log immediately on submit, since the AI-review
+    // tier alone can take several seconds and, with nothing shown until it resolves, looked
+    // indistinguishable from the app being broken. `terminalRunning` alone only disabled the Run
+    // button, with no other visible change while a command was in flight.
+    @Published var pendingTerminalCommand: String?
 
     // MARK: AI Assistant chat box (see AIAssistantClient.swift) -- translates natural language into
     // command(s), each of which still goes through the SAME broker as the terminal above.
     @Published var assistantRequestText: String = ""
     @Published var assistantLog: [AssistantEntry] = []
     @Published var assistantRunning = false
+    // Same "show it's actually working" fix as pendingTerminalCommand above.
+    @Published var pendingAssistantRequest: String?
 
     // MARK: Protect Another User (see UserScannerInstaller.swift)
     @Published var protectUsernameText: String = ""
@@ -149,9 +157,11 @@ final class FocusLockViewModel: ObservableObject {
         terminalCommandText = ""
         terminalReasonText = ""
         terminalRunning = true
+        pendingTerminalCommand = command
         Task {
             let result = await client.requestElevatedCommand(command: command, reason: reason)
             terminalLog.append(TerminalEntry(command: command, reason: reason, result: result))
+            pendingTerminalCommand = nil
             terminalRunning = false
         }
     }
@@ -161,9 +171,11 @@ final class FocusLockViewModel: ObservableObject {
         guard !request.isEmpty, !assistantRunning else { return }
         assistantRequestText = ""
         assistantRunning = true
+        pendingAssistantRequest = request
         Task {
             let result = await client.requestAssistantAction(request: request)
             assistantLog.append(AssistantEntry(request: request, result: result))
+            pendingAssistantRequest = nil
             assistantRunning = false
         }
     }

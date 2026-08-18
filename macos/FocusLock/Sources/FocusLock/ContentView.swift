@@ -587,11 +587,14 @@ struct ContentView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {
-                    if viewModel.terminalLog.isEmpty {
+                    if viewModel.terminalLog.isEmpty && viewModel.pendingTerminalCommand == nil {
                         emptyState("No commands run yet", "Type a command below and press Run.")
                     }
                     ForEach(viewModel.terminalLog) { entry in
                         terminalEntryView(entry)
+                    }
+                    if let pending = viewModel.pendingTerminalCommand {
+                        pendingEntryView(command: pending)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -635,6 +638,23 @@ struct ContentView: View {
         .padding(.bottom, 4)
     }
 
+    /// A command that's been submitted but hasn't come back from the daemon yet -- the denylist/
+    /// allowlist tiers resolve near-instantly, but a command that reaches the AI-review tier is a
+    /// real network round-trip that can take several seconds, during which this is the only thing
+    /// telling the Guardian their command was actually received.
+    private func pendingEntryView(command: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text("$ \(command)")
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(.white)
+            ProgressView().controlSize(.small).tint(.white)
+            Text("reviewing…")
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.7))
+        }
+        .padding(.bottom, 4)
+    }
+
     // MARK: - AI Assistant
 
     private var assistantScreen: some View {
@@ -645,11 +665,14 @@ struct ContentView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
-                    if viewModel.assistantLog.isEmpty {
+                    if viewModel.assistantLog.isEmpty && viewModel.pendingAssistantRequest == nil {
                         emptyState("No requests yet", "Try something like \"install wget\".")
                     }
                     ForEach(viewModel.assistantLog) { entry in
                         assistantEntryView(entry)
+                    }
+                    if let pending = viewModel.pendingAssistantRequest {
+                        pendingAssistantEntryView(request: pending)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -691,6 +714,21 @@ struct ContentView: View {
                 }
                 .padding(.leading, 12)
             }
+        }
+        .padding(.bottom, 4)
+    }
+
+    /// Same "show it's actually working" fix as `pendingEntryView` above -- the translate call
+    /// alone is a network round-trip, before any of its resulting commands even reach the broker.
+    private func pendingAssistantEntryView(request: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text("> \(request)")
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(.white)
+            ProgressView().controlSize(.small).tint(.white)
+            Text("translating…")
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.7))
         }
         .padding(.bottom, 4)
     }
