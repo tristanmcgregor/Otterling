@@ -77,6 +77,7 @@ Caddy puts these behind the `/review` dashboard's Basic Auth and injects the bea
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import plistlib
@@ -205,8 +206,15 @@ DEVICE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 ALERTS_ROTATE_BYTES = 5 * 1024 * 1024
 ALERTS_ROTATE_KEEP_LINES = 2000
 
+# Per-device dashboard settings (see /dashboard-api/* below and filter-server/dashboard/) -- kept in
+# its own file/lock rather than folded into STATE_PATH's per-device records, since those hold the
+# mobileconfig passcode/UUIDs (a different concern with different write patterns) and this project
+# already separates concerns that way (e.g. alerts get their own ALERTS_PATH/_alerts_lock too).
+SETTINGS_PATH = os.path.join(DATA_DIR, "device_settings.json")
+
 _state_lock = threading.Lock()
 _alerts_lock = threading.Lock()
+_settings_lock = threading.Lock()
 
 
 def _load_state() -> dict:
@@ -482,6 +490,202 @@ def _list_device_logs() -> dict:
             files.append({"filename": filename, "size": stat.st_size, "mtime": stat.st_mtime})
         result[device_id] = files
     return result
+
+
+# ─── Dashboard device settings (/dashboard-api/*) ──────────────────────────────────────────────
+# Backs the web dashboard at filter-server/dashboard/ (served by Caddy at /dashboard/, see
+# Caddyfile) -- a guardian-facing settings console, distinct from the mac/phone-facing routes
+# above. Not yet pulled/enforced by the Android app itself (a documented follow-up, see
+# filter-server/dashboard/README.md); this is the server-side store + API only.
+
+# (dashboard-path-segment -> (settings list key, item-matching field)). Both the generic
+# add/remove handlers and _build_list_item below key off this table.
+LIST_ENDPOINTS = {
+    "websites": ("blockedWebsites", "domain"),
+    "bypass-apps": ("vpnBypassApps", "id"),
+    "habits": ("habits", "id"),
+    "rules": ("rules", "id"),
+    "app-budgets": ("appBudgets", "id"),
+}
+
+DASHBOARD_DEVICE_RE = re.compile(r"^/dashboard-api/devices/([A-Za-z0-9_-]{1,128})((?:/.+)?)$")
+
+# PATCH .../settings is allowlisted to these keys -- everything else in _default_device_settings
+# (rules, habits, blockedWebsites, vpnBypassApps, appBudgets, guardianPinHash, updatedAt) is either
+# managed through its own dedicated endpoint or server-computed, not client-settable via this route.
+SETTINGS_PATCH_ALLOWED_KEYS = {"device_name", "protections", "vpnFilter", "frictionDelay", "guardianEmail"}
+
+
+def _load_settings() -> dict:
+    try:
+        with open(SETTINGS_PATH, "r", encoding="utf-8") as fh:
+            return json.load(fh)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def _save_settings(settings: dict) -> None:
+    os.makedirs(DATA_DIR, exist_ok=True)
+    tmp_path = SETTINGS_PATH + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as fh:
+        json.dump(settings, fh, indent=2, sort_keys=True)
+    os.replace(tmp_path, SETTINGS_PATH)
+
+
+def _default_device_settings() -> dict:
+    return {
+        "device_name": "",
+        "protections": {
+            "safeMode": True,
+            "factoryReset": True,
+            "uninstallBlock": True,
+            "guestMode": True,
+            "usbDebugging": True,
+        },
+        "vpnFilter": {"enabled": True},
+        "vpnBypassApps": [],
+        "blockedWebsites": [],
+        "frictionDelay": {"enabled": True, "seconds": 30},
+        "habits": [],
+        "rules": [],
+        "appBudgets": [],
+        # Salted hash only (see _handle_dashboard_route's /pin route) -- never returned by GET
+        # .../settings. Metadata for a future phone-side sync, not a second web login: Caddy's
+        # Basic Auth in front of /dashboard/ is this dashboard's actual login.
+        "guardianPinHash": None,
+        "guardianEmail": "",
+        "updatedAt": None,
+    }
+
+
+def _device_settings(device_id: str, updates: dict | None = None) -> dict:
+    """Returns device_id's dashboard settings, creating defaults on first call (mirrors
+    _device_record's get-or-create shape above). `updates` merges one level deep -- a dict value
+    (e.g. `protections`, `vpnFilter`) is updated key-by-key, anything else is replaced wholesale --
+    then persists. Read-only calls (updates=None) on an already-existing record don't rewrite the
+    file."""
+    with _settings_lock:
+        settings = _load_settings()
+        record = settings.get(device_id)
+        created = record is None
+        if created:
+            record = _default_device_settings()
+        if updates:
+            for key, value in updates.items():
+                if isinstance(value, dict) and isinstance(record.get(key), dict):
+                    record[key].update(value)
+                else:
+                    record[key] = value
+            record["updatedAt"] = time.time()
+        if created or updates:
+            settings[device_id] = record
+            _save_settings(settings)
+        return record
+
+
+def _list_item_add(device_id: str, list_key: str, item: dict) -> dict:
+    with _settings_lock:
+        settings = _load_settings()
+        record = settings.get(device_id) or _default_device_settings()
+        record.setdefault(list_key, []).append(item)
+        record["updatedAt"] = time.time()
+        settings[device_id] = record
+        _save_settings(settings)
+        return record
+
+
+def _list_item_remove(device_id: str, list_key: str, match_field: str, match_value: str) -> dict:
+    with _settings_lock:
+        settings = _load_settings()
+        record = settings.get(device_id) or _default_device_settings()
+        items = record.get(list_key, [])
+        record[list_key] = [i for i in items if str(i.get(match_field)) != str(match_value)]
+        record["updatedAt"] = time.time()
+        settings[device_id] = record
+        _save_settings(settings)
+        return record
+
+
+def _list_item_update(device_id: str, list_key: str, item_id: str, updates: dict) -> dict | None:
+    """Returns the updated settings record, or None if item_id isn't found in list_key (caller
+    should 404 in that case)."""
+    with _settings_lock:
+        settings = _load_settings()
+        record = settings.get(device_id) or _default_device_settings()
+        found = False
+        for item in record.get(list_key, []):
+            if str(item.get("id")) == str(item_id):
+                item.update(updates)
+                found = True
+                break
+        if not found:
+            return None
+        record["updatedAt"] = time.time()
+        settings[device_id] = record
+        _save_settings(settings)
+        return record
+
+
+def _build_list_item(kind: str, body: dict) -> dict | None:
+    """Validates and shapes a POST body for one of LIST_ENDPOINTS into the stored item shape.
+    Returns None on a missing/blank required field -- caller sends 400."""
+    if kind == "websites":
+        domain = (body.get("domain") or "").strip().lower()
+        return {"domain": domain, "addedAt": time.time()} if domain else None
+    if kind == "bypass-apps":
+        name = (body.get("name") or "").strip()
+        return {"id": uuid.uuid4().hex, "name": name} if name else None
+    if kind == "habits":
+        name = (body.get("name") or "").strip()
+        return {"id": uuid.uuid4().hex, "name": name} if name else None
+    if kind == "rules":
+        app_name = (body.get("appName") or "").strip()
+        if not app_name:
+            return None
+        return {
+            "id": uuid.uuid4().hex,
+            "appId": body.get("appId", ""),
+            "appName": app_name,
+            "requiredHabitIds": body.get("requiredHabitIds") or [],
+            "schedule": body.get("schedule") or {},
+            "dailyBudgetMinutes": body.get("dailyBudgetMinutes"),
+            "createdAt": time.time(),
+        }
+    if kind == "app-budgets":
+        app_name = (body.get("appName") or "").strip()
+        if not app_name:
+            return None
+        return {
+            "id": uuid.uuid4().hex,
+            "appId": body.get("appId", ""),
+            "appName": app_name,
+            "dailyLimitMinutes": body.get("dailyLimitMinutes"),
+        }
+    return None
+
+
+def _list_known_device_ids() -> dict:
+    """{device_id: {device_name, updatedAt, alertCount24h}} for every device_id seen either in
+    device_settings.json or in alerts.jsonl -- a device can show up in tamper alerts long before a
+    guardian ever opens the dashboard for it, or vice versa (settings configured ahead of the phone
+    ever checking in), so the device list is the union of both sources rather than a separate
+    registry."""
+    devices: dict[str, dict] = {}
+    for device_id, record in _load_settings().items():
+        devices[device_id] = {
+            "device_name": record.get("device_name", ""),
+            "updatedAt": record.get("updatedAt"),
+            "alertCount24h": 0,
+        }
+    cutoff = time.time() - 86400
+    for event in _read_alerts_since(0):
+        device_id = event.get("device_id")
+        if not device_id:
+            continue
+        entry = devices.setdefault(device_id, {"device_name": "", "updatedAt": None, "alertCount24h": 0})
+        if event.get("received_at", 0) >= cutoff:
+            entry["alertCount24h"] += 1
+    return devices
 
 
 def _send_ntfy_notification(event: dict) -> None:
@@ -878,7 +1082,133 @@ class Handler(BaseHTTPRequestHandler):
             filename = _store_device_log(device_id, logs)
             return self._send_json(200, {"status": "ok", "filename": filename})
 
+        if self.path.startswith("/dashboard-api/"):
+            body = self._read_json_body()
+            if self._handle_dashboard_route("POST", self.path, urllib.parse.urlparse(self.path), body):
+                return
+
         return self._send_json(404, {"error": "not found"})
+
+    def do_PATCH(self):  # noqa: N802
+        if not self._authorized():
+            return self._send_json(401, {"error": "unauthorized"})
+        if self.path.startswith("/dashboard-api/"):
+            body = self._read_json_body()
+            if self._handle_dashboard_route("PATCH", self.path, urllib.parse.urlparse(self.path), body):
+                return
+        return self._send_json(404, {"error": "not found"})
+
+    def do_DELETE(self):  # noqa: N802
+        if not self._authorized():
+            return self._send_json(401, {"error": "unauthorized"})
+        if self.path.startswith("/dashboard-api/"):
+            if self._handle_dashboard_route("DELETE", self.path, urllib.parse.urlparse(self.path), None):
+                return
+        return self._send_json(404, {"error": "not found"})
+
+    # ─── Dashboard device settings (/dashboard-api/*) ──────────────────────────────────────────
+    # Shared by do_GET/do_POST/do_PATCH/do_DELETE above -- see the module-level "Dashboard device
+    # settings" section (LIST_ENDPOINTS, _device_settings, _list_item_*, _build_list_item,
+    # _list_known_device_ids) for the storage this dispatches to. Returns True once it has sent a
+    # response (any response, including an error), False only for "not a dashboard-api path I
+    # recognize" so the caller's own 404 fallback fires -- callers must not send anything themselves
+    # after a True return.
+    def _handle_dashboard_route(self, method: str, path: str, parsed, body: dict | None) -> bool:
+        if path == "/dashboard-api/devices" and method == "GET":
+            devices = [{"device_id": k, **v} for k, v in _list_known_device_ids().items()]
+            self._send_json(200, {"devices": devices})
+            return True
+
+        match = DASHBOARD_DEVICE_RE.match(path)
+        if not match:
+            return False
+        device_id = _safe_device_id(match.group(1))
+        if device_id is None:
+            self._send_json(400, {"error": "invalid device_id"})
+            return True
+        parts = [p for p in (match.group(2) or "").split("/") if p]
+
+        if parts == ["settings"] and method in ("GET", "PATCH"):
+            updates = None
+            if method == "PATCH":
+                if body is None:
+                    self._send_json(400, {"error": "bad json"})
+                    return True
+                # Allowlisted, not a raw pass-through: everything else (rules, habits,
+                # blockedWebsites, vpnBypassApps, appBudgets) has its own dedicated endpoint above,
+                # and guardianPinHash must only ever be set via the salted-hash /pin route below --
+                # letting an arbitrary PATCH body reach _device_settings unfiltered would let a
+                # caller overwrite guardianPinHash directly, bypassing that hashing entirely.
+                updates = {k: v for k, v in body.items() if k in SETTINGS_PATCH_ALLOWED_KEYS}
+            record = _device_settings(device_id, updates)
+            record = {k: v for k, v in record.items() if k != "guardianPinHash"}
+            self._send_json(200, record)
+            return True
+
+        if parts == ["activity"] and method == "GET":
+            query = urllib.parse.parse_qs(parsed.query)
+            try:
+                since_id = int(query.get("since_id", ["0"])[0])
+            except ValueError:
+                self._send_json(400, {"error": "since_id must be an integer"})
+                return True
+            events = [e for e in _read_alerts_since(since_id) if e.get("device_id") == device_id]
+            max_id = events[-1]["id"] if events else since_id
+            self._send_json(200, {"events": events, "max_id": max_id})
+            return True
+
+        if parts == ["pin"] and method == "POST":
+            pin = (body or {}).get("pin", "").strip()
+            if not pin:
+                self._send_json(400, {"error": "pin required"})
+                return True
+            salt = secrets.token_hex(16)
+            digest = hashlib.sha256((salt + pin).encode("utf-8")).hexdigest()
+            _device_settings(device_id, {"guardianPinHash": f"{salt}${digest}"})
+            self._send_json(200, {"status": "ok"})
+            return True
+
+        if len(parts) == 1 and parts[0] in LIST_ENDPOINTS and method in ("GET", "POST"):
+            list_key, _ = LIST_ENDPOINTS[parts[0]]
+            if method == "GET":
+                record = _device_settings(device_id)
+                self._send_json(200, {list_key: record.get(list_key, [])})
+                return True
+            if body is None:
+                self._send_json(400, {"error": "bad json"})
+                return True
+            item = _build_list_item(parts[0], body)
+            if item is None:
+                self._send_json(400, {"error": "invalid payload"})
+                return True
+            record = _list_item_add(device_id, list_key, item)
+            self._send_json(200, {list_key: record.get(list_key, [])})
+            return True
+
+        if len(parts) == 2 and parts[0] in LIST_ENDPOINTS and method in ("DELETE", "PATCH"):
+            list_key, id_field = LIST_ENDPOINTS[parts[0]]
+            item_id = urllib.parse.unquote(parts[1])
+            if method == "DELETE":
+                record = _list_item_remove(device_id, list_key, id_field, item_id)
+                self._send_json(200, {list_key: record.get(list_key, [])})
+                return True
+            # PATCH (in-place edit): only rules/app-budgets support this -- websites/bypass-apps/
+            # habits are add-only-with-guardian-remove per the design doc, no edit-in-place case.
+            if parts[0] not in ("rules", "app-budgets"):
+                self._send_json(405, {"error": "method not allowed"})
+                return True
+            if body is None:
+                self._send_json(400, {"error": "bad json"})
+                return True
+            record = _list_item_update(device_id, list_key, item_id, body)
+            if record is None:
+                self._send_json(404, {"error": "not found"})
+                return True
+            self._send_json(200, {list_key: record.get(list_key, [])})
+            return True
+
+        self._send_json(404, {"error": "not found"})
+        return True
 
     def do_GET(self):  # noqa: N802
         if not self._authorized():
@@ -928,6 +1258,10 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(content)
             return
+
+        if parsed.path.startswith("/dashboard-api/"):
+            if self._handle_dashboard_route("GET", parsed.path, parsed, None):
+                return
 
         return self._send_json(404, {"error": "not found"})
 

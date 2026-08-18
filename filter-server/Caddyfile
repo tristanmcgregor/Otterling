@@ -95,6 +95,28 @@
 		file_server
 	}
 
+	# Device-settings dashboard (filter-server/dashboard/, built from the Figma export) -- a
+	# guardian-facing console for per-device settings (protections, blocked websites, habit rules,
+	# app budgets), backed by lockprofile_service.py's /dashboard-api/* routes (see that file's
+	# "Dashboard device settings" section). Separate Basic Auth credentials from @review above --
+	# this guards different, more sensitive data (a household's actual device controls) than the
+	# AI-review dashboard. Same "browser only proves the Basic Auth password, Caddy injects the
+	# real bearer token" pattern as /device-logs/view/* above, so the dashboard's JS never learns
+	# LOCKPROFILE_TOKEN.
+	@dashboard path /dashboard /dashboard/* /dashboard-api/*
+	basic_auth @dashboard {
+		{$DASHBOARD_USER} {$DASHBOARD_PASSWORD_HASH}
+	}
+	handle /dashboard-api/* {
+		reverse_proxy 127.0.0.1:8091 {
+			header_up Authorization "Bearer {$LOCKPROFILE_TOKEN}"
+		}
+	}
+	handle_path /dashboard/* {
+		root * /srv/dashboard
+		file_server
+	}
+
 	encode gzip
 }
 
@@ -150,6 +172,20 @@ http://192.168.0.254 {
 	}
 	handle_path /review* {
 		root * /srv/review-dashboard
+		file_server
+	}
+
+	@dashboard path /dashboard /dashboard/* /dashboard-api/*
+	basic_auth @dashboard {
+		{$DASHBOARD_USER} {$DASHBOARD_PASSWORD_HASH}
+	}
+	handle /dashboard-api/* {
+		reverse_proxy 127.0.0.1:8091 {
+			header_up Authorization "Bearer {$LOCKPROFILE_TOKEN}"
+		}
+	}
+	handle_path /dashboard/* {
+		root * /srv/dashboard
 		file_server
 	}
 

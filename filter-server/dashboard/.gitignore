@@ -1,0 +1,7 @@
+node_modules/
+# Dev-only bearer token for the vite proxy -- see vite.config.ts and README.md. Never commit this.
+.env.local
+
+# dist/ is intentionally NOT ignored -- it ships in git and is what Caddy actually serves in
+# production (see docker-compose.yml's ./dashboard/dist:/srv/dashboard:ro mount). Rebuild with
+# `npm run build` and commit the result after any source change.

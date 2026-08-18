@@ -165,10 +165,14 @@ services:
       - UPDATE_HOST=${UPDATE_HOST:-vpn.bartholomew.help}
       - REVIEW_DASHBOARD_USER=${REVIEW_DASHBOARD_USER:-guardian}
       - REVIEW_DASHBOARD_PASSWORD_HASH=${REVIEW_DASHBOARD_PASSWORD_HASH:?set REVIEW_DASHBOARD_PASSWORD_HASH in .env, see review-dashboard/README.md}
-      # Injected onto outbound requests to lockprofile for the /device-logs/view/* routes below --
-      # same token as the lockprofile service itself (LOCKPROFILE_TOKEN in .env), so a browser
-      # authenticated only by the /review Basic Auth can view uploaded device logs without ever
-      # learning this token directly.
+      # Device-settings dashboard at /dashboard -- separate Basic Auth credentials from
+      # REVIEW_DASHBOARD_* above, see filter-server/dashboard/README.md.
+      - DASHBOARD_USER=${DASHBOARD_USER:-guardian}
+      - DASHBOARD_PASSWORD_HASH=${DASHBOARD_PASSWORD_HASH:?set DASHBOARD_PASSWORD_HASH in .env, see dashboard/README.md}
+      # Injected onto outbound requests to lockprofile for the /device-logs/view/* and
+      # /dashboard-api/* routes below -- same token as the lockprofile service itself
+      # (LOCKPROFILE_TOKEN in .env), so a browser authenticated only by Basic Auth can reach either
+      # dashboard without ever learning this token directly.
       - LOCKPROFILE_TOKEN=${LOCKPROFILE_TOKEN:?set LOCKPROFILE_TOKEN in .env}
       - FLEET_WEBHOOK_SECRET=${FLEET_WEBHOOK_SECRET:-}
       # Host CBLOCK blocks direct outbound 443; ACME renewals need the local forward proxy.
@@ -183,6 +187,10 @@ services:
       - /var/lib/otterling/review:/srv/review-data:ro
       # The dashboard page itself ships in git, unlike the two mounts above.
       - ./review-dashboard:/srv/review-dashboard:ro
+      # Device-settings dashboard's built static assets -- also ships in git (see
+      # filter-server/dashboard/README.md), rebuilt+recommitted on source changes, no Node needed
+      # on this host.
+      - ./dashboard/dist:/srv/dashboard:ro
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - ./caddy-data:/data
       - ./caddy-config:/config
