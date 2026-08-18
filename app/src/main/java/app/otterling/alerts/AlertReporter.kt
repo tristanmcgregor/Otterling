@@ -24,6 +24,7 @@ class AlertReporter(context: Context) {
     private val db = AppDatabase.getInstance(appContext)
     private val alertDao = db.alertEventDao()
     private val outboxDao = db.smsOutboxDao()
+    private val reportConfig = ReportConfigStore(appContext)
 
     suspend fun report(
         type: String,
@@ -32,6 +33,15 @@ class AlertReporter(context: Context) {
         debounceKey: String? = null,
         deviceName: String? = null,
     ) = withContext(Dispatchers.IO) {
+        // Fully suppressed -- no SMS, no local log entry -- for a type hand-disabled in
+        // report_types.json (see ReportConfigStore). Only meaningfully applies to this phone's own
+        // locally-triggered type strings (WATCHED_APP, ACCESSIBILITY_DISABLED, etc.); mac-relayed
+        // types are suppressed at the server before they're ever polled, so they don't reach here
+        // in the first place when disabled.
+        if (!reportConfig.isEnabled(type)) {
+            Log.d(TAG, "Suppressed (disabled in report_types.json): $type")
+            return@withContext
+        }
         val partnerNumbers = partnerSettings.partnerNumbers()
         val partnerWantsSms = shouldSms(severity) && partnerSettings.isEnabled() && partnerNumbers.isNotEmpty()
         val key = debounceKey ?: "$type|${details.take(80)}"

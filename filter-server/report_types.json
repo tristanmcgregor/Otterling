@@ -1,0 +1,243 @@
+{
+  "_readme": [
+    "Hand-editable master list of every accountability report/alert type Otterling can send.",
+    "Set \"enabled\": false on any entry to fully suppress that report -- for server/mac-origin",
+    "types this stops the event from ever being logged or pushed (checked in lockprofile_service.py's",
+    "_append_alert); for android-origin types the phone fetches this same file (GET /report-config)",
+    "and checks it in AlertReporter.report() before doing anything (no SMS, no local log entry).",
+    "A type NOT listed here defaults to enabled=true (fail toward reporting, not toward silence) --",
+    "so a newly-added report type in the code still reaches you even if this file is stale.",
+    "\"source\": mac = reported by the macOS daemon; server = reported by the filter-server itself",
+    "(Fleet webhook / dead-man's switch); android = reported directly from the phone, never touches",
+    "this server at all.",
+    "No restart needed after editing -- lockprofile_service.py re-reads this file on every event,",
+    "and the phone re-fetches it once per MacTamperPollWorker cycle (roughly every 15 minutes)."
+  ],
+  "types": {
+    "lock_profile_removed": {
+      "enabled": true,
+      "source": "mac",
+      "description": "The macOS configuration profile (DNS floor) was removed."
+    },
+    "lock_profile_installed": {
+      "enabled": true,
+      "source": "mac",
+      "description": "The macOS configuration profile was (re)installed."
+    },
+    "vpn_active": {
+      "enabled": true,
+      "source": "mac",
+      "description": "A VPN came up on the Mac, routing traffic around the content filter."
+    },
+    "vpn_cleared": {
+      "enabled": true,
+      "source": "mac",
+      "description": "The Mac's VPN went back down; filter is back in effect."
+    },
+    "trigger_word_detected": {
+      "enabled": true,
+      "source": "mac",
+      "description": "A trigger word was seen on a blocked page (mitmproxy) or on-screen (Mac accessibility scan)."
+    },
+    "daemon_unloaded_recovered": {
+      "enabled": true,
+      "source": "mac",
+      "description": "The macOS daemon had stopped running; the watchdog relaunched it."
+    },
+    "watchdog_or_daemon_reregistered": {
+      "enabled": true,
+      "source": "mac",
+      "description": "The daemon/watchdog needed re-registration with launchd on GUI app launch."
+    },
+    "mac_tamper_policy": {
+      "enabled": true,
+      "source": "server",
+      "description": "Fleet reports a failing tamper policy on the Mac (app removed / daemon stopped)."
+    },
+    "mac_silent": {
+      "enabled": true,
+      "source": "server",
+      "description": "Dead-man's switch: the Mac stopped checking in with Fleet entirely."
+    },
+    "mac_back": {
+      "enabled": true,
+      "source": "server",
+      "description": "Dead-man's switch: the Mac is checking in again after a mac_silent event."
+    },
+    "monitor_degraded": {
+      "enabled": true,
+      "source": "server",
+      "description": "The dead-man's switch itself can't reach Fleet (monitor is blind, not a tamper)."
+    },
+    "mac_code_tampered": {
+      "enabled": true,
+      "source": "mac",
+      "description": "The Mac's app binaries were built from an uncommitted, locally-modified source tree."
+    },
+    "dns_floor_disabled": {
+      "enabled": true,
+      "source": "mac",
+      "description": "The DNS floor filter was switched off from System Settings without removing the profile."
+    },
+    "dns_floor_reenabled": {
+      "enabled": true,
+      "source": "mac",
+      "description": "The DNS floor filter was switched back on."
+    },
+    "sudo_request_approved": {
+      "enabled": true,
+      "source": "mac",
+      "description": "An elevated (sudo) command on the Mac was approved (allowlist or AI review)."
+    },
+    "sudo_request_denied": {
+      "enabled": true,
+      "source": "mac",
+      "description": "An elevated (sudo) command on the Mac was denied."
+    },
+    "sudo_request_ai_reviewed": {
+      "enabled": true,
+      "source": "mac",
+      "description": "An elevated command went through AI review (approved or denied either way)."
+    },
+    "passcode_rejected": {
+      "enabled": true,
+      "source": "mac",
+      "description": "A wrong Guardian passcode was entered on the Mac."
+    },
+    "passcode_set": {
+      "enabled": true,
+      "source": "mac",
+      "description": "A Guardian passcode was set for the first time."
+    },
+    "passcode_changed": {
+      "enabled": true,
+      "source": "mac",
+      "description": "The Guardian passcode was changed."
+    },
+    "pending_action_requested": {
+      "enabled": true,
+      "source": "mac",
+      "description": "A cooldown-gated removal/disable action was requested on the Mac."
+    },
+    "pending_action_applied": {
+      "enabled": true,
+      "source": "mac",
+      "description": "A cooldown-gated action finished waiting and was applied."
+    },
+    "pending_action_cancelled": {
+      "enabled": true,
+      "source": "mac",
+      "description": "A pending cooldown action was cancelled before it applied."
+    },
+    "kill_switch_activated": {
+      "enabled": true,
+      "source": "mac",
+      "description": "The Mac's emergency kill switch was triggered (clears DNS/proxy/pf, stops both daemons)."
+    },
+    "VPN_BLOCK": {
+      "enabled": true,
+      "source": "android",
+      "description": "The phone's content filter VPN blocked a request."
+    },
+    "WATCHED_APP": {
+      "enabled": true,
+      "source": "android",
+      "description": "A watched app was opened on the phone."
+    },
+    "TRIGGER_WORD": {
+      "enabled": true,
+      "source": "android",
+      "description": "A trigger word was seen on-screen on the phone (accessibility scan)."
+    },
+    "UPDATE_REQUESTED": {
+      "enabled": true,
+      "source": "android",
+      "description": "An app update was requested from the phone's Settings."
+    },
+    "APP_UPDATE": {
+      "enabled": true,
+      "source": "android",
+      "description": "An app update finished installing on the phone."
+    },
+    "HABIT_UNLOCK": {
+      "enabled": true,
+      "source": "android",
+      "description": "Reserved for a future habit-based unlock feature -- not currently triggered anywhere."
+    },
+    "ACCESSIBILITY_DISABLED": {
+      "enabled": true,
+      "source": "android",
+      "description": "The Accessibility service (focus-guard) was turned off on the phone."
+    },
+    "ACCESSIBILITY_SERVICE_INTERRUPTED": {
+      "enabled": true,
+      "source": "android",
+      "description": "The Accessibility service was interrupted by the OS."
+    },
+    "ACCESSIBILITY_SERVICE_DESTROYED": {
+      "enabled": true,
+      "source": "android",
+      "description": "The Accessibility service process was destroyed."
+    },
+    "ADMIN_DISABLE_REQUESTED": {
+      "enabled": true,
+      "source": "android",
+      "description": "Removing Device Admin/Device Owner was requested on the phone."
+    },
+    "ADMIN_DISABLED": {
+      "enabled": true,
+      "source": "android",
+      "description": "Device Admin/Device Owner was actually disabled."
+    },
+    "PROTECTION_OFF": {
+      "enabled": true,
+      "source": "android",
+      "description": "Overall phone protection was turned off."
+    },
+    "ACCOUNTABILITY_ALERTS_DISABLED": {
+      "enabled": true,
+      "source": "android",
+      "description": "Accountability-partner alerts were turned off in Settings."
+    },
+    "ACCOUNTABILITY_PARTNER_REMOVED": {
+      "enabled": true,
+      "source": "android",
+      "description": "An accountability partner's number was removed."
+    },
+    "RESTRICTION_DISABLED_BY_USER": {
+      "enabled": true,
+      "source": "android",
+      "description": "A device restriction was turned off by the phone's user."
+    },
+    "UNINSTALL_PROTECTION_DISABLED_BY_USER": {
+      "enabled": true,
+      "source": "android",
+      "description": "Uninstall protection was turned off by the phone's user."
+    },
+    "CONTENT_FILTER_DISABLED_BY_USER": {
+      "enabled": true,
+      "source": "android",
+      "description": "The phone's content filter VPN was turned off by the user."
+    },
+    "APP_UNBLOCKED_BY_USER": {
+      "enabled": true,
+      "source": "android",
+      "description": "A blocked app was unblocked by the user."
+    },
+    "RESTRICTION_DRIFT": {
+      "enabled": true,
+      "source": "android",
+      "description": "A device restriction was found reverted and got re-applied."
+    },
+    "CONTENT_FILTER_DRIFT": {
+      "enabled": true,
+      "source": "android",
+      "description": "The content filter VPN was found off and got re-enabled."
+    },
+    "APP_BLOCK_DRIFT": {
+      "enabled": true,
+      "source": "android",
+      "description": "A blocked app was found unblocked and got re-blocked."
+    }
+  }
+}

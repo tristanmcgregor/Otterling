@@ -42,6 +42,10 @@ class MacTamperPollWorker(context: Context, params: WorkerParameters) : Coroutin
         }
 
         val host = CloudFilterSettings(applicationContext).host()
+        // Piggybacked on this same poll cadence -- see ReportConfigStore's doc comment. Best-effort
+        // and independent of the poll below: a failed refresh just leaves the existing cache in
+        // place, it never turns this into a Result.retry().
+        ReportConfigStore(applicationContext).refresh()
         val sinceId = settings.lastSeenAlertId()
         try {
             val response = httpGet("https://$host/alerts/poll?since_id=$sinceId", settings.token())

@@ -108,6 +108,14 @@ LISTEN_HOST = os.environ.get("LOCKPROFILE_LISTEN_HOST", "0.0.0.0")
 LISTEN_PORT = int(os.environ.get("LOCKPROFILE_LISTEN_PORT", "8091"))
 TOKEN = os.environ.get("LOCKPROFILE_TOKEN", "")
 
+# Hand-editable master list of every report/alert type (mac/server/android) -- see that file's
+# "_readme" for the full contract. Mounted read-only alongside the script (same pattern as
+# ai_classifier.py/domain_blocklist.py), not the gitignored DATA_DIR, because this is meant to be
+# tracked and hand-edited in the repo, not treated as generated runtime state.
+REPORT_TYPES_CONFIG_PATH = os.environ.get(
+    "REPORT_TYPES_CONFIG_PATH", os.path.join(os.path.dirname(os.path.abspath(__file__)), "report_types.json")
+)
+
 # Separate secret for the Fleet failing-policy webhook. Fleet's webhook can't send an Authorization
 # header, so that one route authenticates on a `?token=` query secret instead of the Bearer TOKEN
 # every other route requires -- see Handler._handle_fleet_webhook. Empty = the route is disabled
@@ -369,9 +377,33 @@ def _rotate_alerts_if_needed() -> None:
     os.replace(tmp_path, ALERTS_PATH)
 
 
-def _append_alert(event: dict) -> dict:
+def _load_report_config() -> dict:
+    """Re-read on every call (not cached) so hand-editing report_types.json takes effect
+    immediately, with no restart -- this file is tiny and events are infrequent enough that the
+    disk read is not worth caching. Missing/malformed file -> empty dict, so `_report_type_enabled`
+    below falls back to its "unlisted type defaults to enabled" behavior rather than this file's
+    absence silently going deaf on every report."""
+    try:
+        with open(REPORT_TYPES_CONFIG_PATH, "r", encoding="utf-8") as fh:
+            return json.load(fh).get("types", {})
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _report_type_enabled(report_type: str) -> bool:
+    entry = _load_report_config().get(report_type)
+    if entry is None:
+        return True
+    return entry.get("enabled", True) is not False
+
+
+def _append_alert(event: dict) -> dict | None:
     """Assigns `id` and appends. Returns the event including that id -- callers that need it (the
-    poll endpoint, ntfy) get it without a re-read."""
+    poll endpoint, ntfy) get it without a re-read. Returns None, and doesn't write anything at all,
+    if `event["type"]` is disabled in report_types.json -- see that file's "_readme" and
+    `_load_report_config` above. Callers must check for None before calling `_push_event`."""
+    if not _report_type_enabled(event.get("type", "")):
+        return None
     os.makedirs(os.path.dirname(ALERTS_PATH), exist_ok=True)
     with _state_lock:
         state = _load_state()
@@ -711,8 +743,9 @@ class Handler(BaseHTTPRequestHandler):
                 "reported_at": time.time(),
                 "received_at": time.time(),
             })
-            _push_event(event)
-            count += 1
+            if event:
+                _push_event(event)
+                count += 1
         return self._send_json(200, {"status": "ok", "events": count})
 
     def do_POST(self):  # noqa: N802 (http.server API)
@@ -759,8 +792,11 @@ class Handler(BaseHTTPRequestHandler):
             # Backgrounded so a slow/unreachable push channel can't delay this response -- the
             # daemon's own TamperReporter has just a 10s timeout and one retry, and the JSONL append
             # above (the actual source of truth) is already durable before this fires. Pushes to both
-            # ntfy and FCM (the phone's instant "poll now" wake).
-            _push_event(event)
+            # ntfy and FCM (the phone's instant "poll now" wake). `event` is None if this type is
+            # disabled in report_types.json -- still a 200 "ok" either way (the Mac shouldn't treat
+            # a muted report type as a failed request).
+            if event:
+                _push_event(event)
             return self._send_json(200, {"status": "ok"})
 
         if self.path == "/alerts/register-token":
@@ -787,7 +823,8 @@ class Handler(BaseHTTPRequestHandler):
                     "reported_at": body.get("ts", time.time()),
                     "received_at": time.time(),
                 })
-                _push_event(event)
+                if event:
+                    _push_event(event)
             # NOTE on what this does NOT verify: it does not confirm `git_sha` was ever pushed to, or
             # is reachable from, this repo's main branch -- that would need this server to hold live
             # GitHub credentials and keep a checkout in sync, which isn't set up (see SELF_LOCKOUT.md
@@ -818,7 +855,10 @@ class Handler(BaseHTTPRequestHandler):
                 "reported_at": time.time(),
                 "received_at": time.time(),
             })
-            _push_event(event)
+            # Verdict/explanation still return to the Mac regardless of whether this report type is
+            # muted -- disabling a report must never change the actual sudo decision.
+            if event:
+                _push_event(event)
             return self._send_json(200, {"verdict": verdict, "explanation": explanation})
 
         if self.path == "/ai-assistant/translate":
@@ -845,6 +885,14 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_json(401, {"error": "unauthorized"})
 
         parsed = urllib.parse.urlparse(self.path)
+        if parsed.path == "/report-config":
+            # Lets the phone's own AlertReporter (Android-origin types never touch this server --
+            # see report_types.json's "_readme") honor the same enabled/disabled list this file
+            # already enforces for mac/server-origin types. `{type: enabled}` only -- source/
+            # description are for humans editing the file, not needed on the wire.
+            config = _load_report_config()
+            return self._send_json(200, {"types": {k: v.get("enabled", True) is not False for k, v in config.items()}})
+
         if parsed.path == "/alerts/poll":
             query = urllib.parse.parse_qs(parsed.query)
             try:

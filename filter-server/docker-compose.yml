@@ -128,6 +128,7 @@ services:
       - "127.0.0.1:${LOCKPROFILE_PORT:-8091}:8091/tcp"
     volumes:
       - ./lockprofile_service.py:/opt/otterling/lockprofile_service.py:ro
+      - ./report_types.json:/opt/otterling/report_types.json:ro
       - ./lockprofile-data:/data
     # Lets this container reach the host-level sudo_review_server.py (see that file and
     # lockprofile_service.py's SUDO_REVIEW_URL) -- `host-gateway` is the Docker Engine special value

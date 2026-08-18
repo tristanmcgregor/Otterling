@@ -60,6 +60,11 @@
 	handle /ai-assistant/* {
 		reverse_proxy 127.0.0.1:8091
 	}
+	# Report-type enable/disable list (see report_types.json). Same bearer-token auth as /alerts/*
+	# above -- ReportConfigStore.kt fetches this on the phone's existing poll cadence.
+	handle /report-config {
+		reverse_proxy 127.0.0.1:8091
+	}
 
 	# AI review dashboard (filter-server/review-dashboard/) -- read-only view of the server-side
 	# release.sh pipeline's status/history, written to /var/lib/otterling/review/ (see
@@ -122,6 +127,11 @@ http://192.168.0.254 {
 		reverse_proxy 127.0.0.1:8091
 	}
 	handle /ai-assistant/* {
+		reverse_proxy 127.0.0.1:8091
+	}
+	# Report-type enable/disable list (see report_types.json). Same bearer-token auth as /alerts/*
+	# above -- ReportConfigStore.kt fetches this on the phone's existing poll cadence.
+	handle /report-config {
 		reverse_proxy 127.0.0.1:8091
 	}
 
