@@ -569,10 +569,16 @@ final class XPCService: NSObject, FocusLockXPCProtocol {
         }
         onStateChanged()
 
-        DNSEnforcer.remove()
-        ProxyEnforcer.remove()
-        PFBlocker.apply(active: false)
-        ProcessRunner.runSilently("/sbin/pfctl", ["-d"])
+        // Serialized onto EnforcementLoop's own queue so this is guaranteed to run AFTER any tick
+        // already in flight or queued right now -- see `runExclusive`'s doc comment for the exact
+        // race this closes (a stale tick's own un-synchronized ProxyEnforcer.apply silently
+        // reapplying the proxy after this teardown, confirmed live on 2026-08-18).
+        EnforcementLoop.shared.runExclusive {
+            DNSEnforcer.remove()
+            ProxyEnforcer.remove()
+            PFBlocker.apply(active: false)
+            ProcessRunner.runSilently("/sbin/pfctl", ["-d"])
+        }
 
         // Trigger-word scanner runs as a per-user LaunchAgent, not a system LaunchDaemon, so it
         // isn't covered by the daemon/watchdog bootout below -- unload it separately for whichever

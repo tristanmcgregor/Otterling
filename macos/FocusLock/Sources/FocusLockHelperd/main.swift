@@ -18,10 +18,16 @@ func installGracefulShutdownHandler() {
 
     func revertAndExit() {
         FileHandle.standardError.write("[shutdown] terminating -- reverting DNS/proxy/pf to safe defaults\n".data(using: .utf8)!)
-        DNSEnforcer.remove()
-        ProxyEnforcer.remove()
-        PFBlocker.apply(active: false)
-        ProcessRunner.runSilently("/sbin/pfctl", ["-d"])
+        // Serialized onto EnforcementLoop's own queue for the same reason XPCService.killSwitch's
+        // teardown is -- a tick already mid-flight (e.g. ProxyEnforcer.apply's own network probe)
+        // could otherwise finish AFTER this and silently reapply what this just cleared. See
+        // EnforcementLoop.runExclusive's doc comment.
+        EnforcementLoop.shared.runExclusive {
+            DNSEnforcer.remove()
+            ProxyEnforcer.remove()
+            PFBlocker.apply(active: false)
+            ProcessRunner.runSilently("/sbin/pfctl", ["-d"])
+        }
         exit(0)
     }
 

@@ -17,6 +17,21 @@ final class EnforcementLoop {
     private var timer: Timer?
     private let queue = DispatchQueue(label: "app.otterling.enforcement")
 
+    /// Runs `block` synchronously on this loop's own serial queue -- guaranteed to execute
+    /// strictly AFTER any tick already running or already queued at the moment this is called
+    /// (that's what a serial `DispatchQueue` FIFO's you into). This exists for exactly one
+    /// caller: `XPCService.killSwitch`'s DNS/proxy/pf teardown. Confirmed live on 2026-08-18: a
+    /// tick can be mid-flight in `ProxyEnforcer.apply` (which does a real network reachability
+    /// probe, up to a couple seconds) at the exact moment `killSwitch` fires; without this, that
+    /// tick's own un-synchronized `ProxyEnforcer.apply` call can finish AFTER killSwitch's direct,
+    /// unsynchronized `ProxyEnforcer.remove()` call and silently turn the proxy back on -- content
+    /// filtering (and its reporting) staying fully active even though the daemon is about to be
+    /// SIGKILL'd and every status check says everything is off. Calling this from `killSwitch`
+    /// makes its teardown the guaranteed LAST word instead of a same-priority racer.
+    func runExclusive(_ block: () -> Void) {
+        queue.sync(execute: block)
+    }
+
     // Tracks what's currently applied to /etc/hosts and pf so reapplyNow() (called on every XPC
     // mutation plus every timer tick) only touches the filesystem/pf when something changed.
     // Domain filtering is entirely server-side now; the daemon only ensures /etc/hosts holds none
