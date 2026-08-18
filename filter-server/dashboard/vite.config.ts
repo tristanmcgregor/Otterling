@@ -45,10 +45,13 @@ export default defineConfig(({ mode }) => {
 
     server: {
       proxy: {
+        // No path rewrite: production Caddy uses `handle /dashboard-api/*` (not `handle_path`),
+        // which forwards the full path unchanged to lockprofile_service.py -- its routes match on
+        // the literal "/dashboard-api/..." path (see DASHBOARD_DEVICE_RE etc). Stripping the
+        // prefix here would route dev requests differently than prod.
         '/dashboard-api': {
           target: env.VITE_DEV_API_TARGET || 'http://127.0.0.1:8091',
           changeOrigin: true,
-          rewrite: (p) => p.replace(/^\/dashboard-api/, ''),
           headers: env.VITE_DEV_TOKEN ? { Authorization: `Bearer ${env.VITE_DEV_TOKEN}` } : {},
         },
       },
