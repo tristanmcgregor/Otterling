@@ -26,13 +26,16 @@ class AppUidResolver(context: Context) {
     private val connectivityManager = context.applicationContext
         .getSystemService(ConnectivityManager::class.java)
 
-    fun ownerUid(localIp: String, localPort: Int, remoteIp: String, remotePort: Int): Int? {
+    /** [protocol] is an `OsConstants.IPPROTO_*` value -- defaults to TCP (this method's original,
+     *  only caller for a long time was [TcpRelayManager]); pass `OsConstants.IPPROTO_UDP` for a
+     *  UDP flow's tuple (e.g. a DNS query) instead. */
+    fun ownerUid(localIp: String, localPort: Int, remoteIp: String, remotePort: Int, protocol: Int = OsConstants.IPPROTO_TCP): Int? {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return null
         val cm = connectivityManager ?: return null
         return try {
             val local = InetSocketAddress(InetAddress.getByName(localIp), localPort)
             val remote = InetSocketAddress(InetAddress.getByName(remoteIp), remotePort)
-            cm.getConnectionOwnerUid(OsConstants.IPPROTO_TCP, local, remote)
+            cm.getConnectionOwnerUid(protocol, local, remote)
                 .takeIf { it != Process.INVALID_UID }
         } catch (error: Exception) {
             Log.w(TAG, "getConnectionOwnerUid($localIp:$localPort -> $remoteIp:$remotePort) failed", error)

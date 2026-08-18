@@ -8,6 +8,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.VpnService
 import android.os.ParcelFileDescriptor
+import android.system.OsConstants
 import android.util.Log
 import app.otterling.alerts.AlertReporter
 import app.otterling.alerts.AlertSeverity
@@ -382,7 +383,7 @@ class VpnFilterService : VpnService() {
                         // (this alone used to be enough to make apps that fire off many DNS
                         // lookups in quick succession, e.g. Spotify resolving several
                         // edge/access-point hostnames at once, see lookups time out).
-                        relayScope.launch { handleDnsPacket(packet, writeToTun, blocklist, cloudFilterSettings) }
+                        relayScope.launch { handleDnsPacket(packet, writeToTun, blocklist, cloudFilterSettings, ownerUidResolver, mitmExemptUids) }
                     } else if (proxyEnabled && packet.destinationPort == QUIC_PORT) {
                         // Silent drop: forces browsers/apps to fall back to TCP HTTPS instead of
                         // HTTP/3-over-QUIC, which would otherwise sail straight past the proxy
@@ -405,6 +406,8 @@ class VpnFilterService : VpnService() {
         writeToTun: suspend (ByteArray) -> Unit,
         blocklist: DomainBlocklistManager,
         cloudFilterSettings: CloudFilterSettings,
+        ownerUidResolver: AppUidResolver,
+        mitmExemptUids: Set<Int>,
     ) {
         val query = DnsMessage.parseQuery(packet.payload)
         if (query == null) {
@@ -429,8 +432,27 @@ class VpnFilterService : VpnService() {
                 }.onFailure { Log.w(TAG, "VPN block alert failed", it) }
             }
         }
+        // TEMPORARY 2026-08-18, alongside the MITM-scoped-to-Chrome change above: an app that
+        // isn't MITM'd gets NONE of mitm_nsfw_addon.py's page-content-level review, only whatever
+        // the DNS-level cloud filter decides from the domain name alone -- which is deliberately
+        // permissive about ambiguous-but-not-known-bad domains, because it normally trusts the
+        // MITM hop to catch a genuinely bad page on an otherwise-fine domain. Without that safety
+        // net, "less restrictive at the domain level" would just mean unfiltered for anything not
+        // already on a static blocklist -- exactly the loophole a non-MITM'd app becomes. So a
+        // MITM-exempt app's queries skip the smart cloud filter entirely and go straight to
+        // Cloudflare Family (blunter, but blocks known-bad categories with no page-content nuance
+        // needed) -- a real Chrome DNS query is unaffected. An unresolvable owner UID (older
+        // Android, or the lookup itself failing) fails toward the STRICT path too, not the lenient
+        // one, matching "assume unknown = discourage" rather than "assume unknown = safe".
+        val ownerUid = ownerUidResolver.ownerUid(
+            packet.sourceAddress, packet.sourcePort, packet.destinationAddress, packet.destinationPort,
+            protocol = OsConstants.IPPROTO_UDP,
+        )
+        val useStrictDns = !blocked && (ownerUid == null || ownerUid in mitmExemptUids)
         val response = if (blocked) {
             DnsMessage.buildBlockedResponse(packet.payload)
+        } else if (useStrictDns) {
+            forwardToHost(packet.payload, FAMILY_DNS, DNS_PORT)
         } else {
             forwardQuery(packet.payload, cloudFilterSettings)
         }
@@ -552,6 +574,12 @@ class VpnFilterService : VpnService() {
         // see the drop site in runPacketLoop for why.
         private const val QUIC_PORT = 443
         private const val UPSTREAM_DNS = "1.1.1.1"
+        // Cloudflare's "1.1.1.1 for Families" -- blocks malware + adult content at the DNS level
+        // with no page-content nuance needed, unlike the smart cloud filter. Used for MITM-exempt
+        // apps' DNS queries (see handleDnsPacket's useStrictDns) -- same resolver macOS's
+        // DNSEnforcer already uses as ITS stricter/no-cloud-filter-available fallback, so this is
+        // consistent with an already-established pattern in this project, not a new one.
+        private const val FAMILY_DNS = "1.1.1.3"
         private const val UPSTREAM_TIMEOUT_MS = 5_000
         // Real Ethernet/Wi-Fi framing never sees this value: these "packets" only ever travel
         // between our relay code and the local kernel over the virtual tun device, since real
