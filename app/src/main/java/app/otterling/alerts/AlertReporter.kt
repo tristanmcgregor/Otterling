@@ -210,6 +210,11 @@ class AlertReporter(context: Context) {
         val BENIGN_TYPES = setOf(
             "VPN_BLOCK", "WATCHED_APP", "UPDATE_REQUESTED", "APP_UPDATE", "HABIT_UNLOCK",
             "MAC_VPN_CLEARED", "MAC_LOCK_PROFILE_INSTALLED", "MAC_BACK", "MAC_DNS_FLOOR_REENABLED",
+            // Both already-clear, self-describing sentences from TamperReporter's own details text
+            // (see XPCService.killSwitch/.restoreFromKillSwitch) -- more useful shown verbatim than
+            // collapsed to the generic tamper line, and CRITICAL/INFO severity (set in
+            // MacTamperPollWorker.severityAndLabel) already carries the urgency either way.
+            "MAC_KILL_SWITCH_ACTIVATED", "MAC_KILL_SWITCH_RESTORED",
         )
 
         // Shared by every AlertReporter instance in the process (companion-object members are

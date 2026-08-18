@@ -184,6 +184,10 @@ NTFY_EVENT_STYLE = {
     "sudo_request_approved": ("Otterling Mac: elevated command APPROVED", "urgent", "warning"),
     "sudo_request_denied": ("Otterling Mac: elevated command denied", "default", "shield"),
     "sudo_request_ai_reviewed": ("Otterling Mac: AI reviewed an elevated command", "high", "robot"),
+    # XPCService.killSwitch/.restoreFromKillSwitch -- the emergency stop for the WHOLE app (DNS,
+    # proxy, pf, blocked/protected apps, the scanner, the GUI app itself), not just filtering.
+    "kill_switch_activated": ("Otterling Mac: KILL SWITCH -- everything disabled", "urgent", "rotating_light"),
+    "kill_switch_restored": ("Otterling Mac: kill switch undone, protection back on", "default", "white_check_mark"),
 }
 
 PROFILE_IDENTIFIER = "app.otterling.lockprofile"

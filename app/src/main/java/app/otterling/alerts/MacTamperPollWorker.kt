@@ -110,6 +110,11 @@ class MacTamperPollWorker(context: Context, params: WorkerParameters) : Coroutin
         "sudo_request_approved" -> AlertSeverity.CRITICAL to "MAC_SUDO_APPROVED"
         "sudo_request_denied" -> AlertSeverity.WARNING to "MAC_SUDO_DENIED"
         "sudo_request_ai_reviewed" -> AlertSeverity.WARNING to "MAC_SUDO_AI_REVIEWED"
+        // The Mac's emergency stop for the WHOLE app (DNS/proxy/pf/blocked-protected
+        // apps/scanner/GUI app), not just filtering -- see XPCService.killSwitch. Top severity:
+        // this is the single most protection-reducing event the Mac can report.
+        "kill_switch_activated" -> AlertSeverity.CRITICAL to "MAC_KILL_SWITCH_ACTIVATED"
+        "kill_switch_restored" -> AlertSeverity.INFO to "MAC_KILL_SWITCH_RESTORED"
         else -> AlertSeverity.WARNING to "MAC_TAMPER_${macType.uppercase()}"
     }
 

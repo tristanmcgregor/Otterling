@@ -40,15 +40,27 @@ func printUsage() {
       focuslockctl check-update
       focuslockctl install-update                         (passcode, no cooldown)
 
-      focuslockctl killswitch                              (emergency stop: clears DNS/proxy/pf and
-                                                            unloads both daemons. No passcode, not
-                                                            routed through the sudo broker -- always
+      focuslockctl killswitch                              (emergency stop for the WHOLE app: clears
+                                                            DNS/proxy/pf, stops the trigger-word
+                                                            scanner and the GUI app, then unloads
+                                                            both daemons. No passcode, not routed
+                                                            through the sudo broker -- always
                                                             reachable even after this account is
                                                             Standard, specifically so a real
                                                             enforcement-layer bug can never leave you
                                                             with no way back online. Reported to your
                                                             accountability partner the moment it
                                                             fires.)
+
+      focuslockctl restore                                 (undoes killswitch: re-bootstraps both
+                                                            daemons (needs sudo -- killswitch
+                                                            unloaded them, so there's no running
+                                                            daemon to ask), restores DNS/proxy to
+                                                            exactly what they were right before
+                                                            killswitch fired, and relaunches the GUI
+                                                            app -- which re-registers the scanner
+                                                            itself, same as any normal launch. No
+                                                            passcode, matching killswitch itself.)
 
       focuslockctl protect-user <username>                 (push the trigger-word scanner into a
                                                             DIFFERENT local user's session -- for
@@ -126,6 +138,9 @@ func formatHours(_ hours: Double) -> String {
 
 func formatState(_ state: FocusLockState) -> String {
     var lines: [String] = []
+    if !state.protectionEnabled {
+        lines.append("🛑 PROTECTION OFF -- killswitch was triggered. Run `sudo focuslockctl restore` to undo.")
+    }
     lines.append("Blocked apps (\(state.blockedApps.count)):")
     for app in state.blockedApps {
         lines.append("  - \(app.displayName) [\(app.executableName)]")
@@ -183,6 +198,102 @@ func printResult(_ result: FocusLockResult) {
         print("OK")
     } else {
         print("DENIED: \(result.message ?? "unknown reason")")
+    }
+}
+
+/// Writes a copy of `sourcePlist` under `/Library/LaunchDaemons` with its `Label` (and nothing
+/// else) changed to `<originalLabel>.direct`, `MachServices` left pointing at the ORIGINAL mach
+/// service name so XPC clients still connect to it under the name they already expect. This is
+/// the exact "stuck SMAppService/BTM registration" workaround this project has needed repeatedly
+/// (see the memory notes on it): `launchctl bootstrap` under the plist's own real label can fail
+/// with "Bootstrap failed: 5: Input/output error" even when nothing is currently registered under
+/// it, because Background Task Management's own database is what's actually stuck, not launchd's
+/// live state -- bootstrapping under a DIFFERENT label sidesteps that database entirely. Returns
+/// the path written, or nil if the source plist couldn't be read/parsed.
+func writeDirectLabelPlist(sourcePlistPath: String, originalLabel: String) -> String? {
+    guard let data = FileManager.default.contents(atPath: sourcePlistPath),
+          var plist = (try? PropertyListSerialization.propertyList(from: data, options: [], format: nil)) as? [String: Any] else {
+        return nil
+    }
+    plist["Label"] = "\(originalLabel).direct"
+    guard let newData = try? PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0) else {
+        return nil
+    }
+    let targetPath = "/Library/LaunchDaemons/\(originalLabel).direct.plist"
+    guard (try? newData.write(to: URL(fileURLWithPath: targetPath))) != nil else { return nil }
+    return targetPath
+}
+
+/// Bootstraps `label` from `plistPath` under the system domain, falling back to the `.direct`-label
+/// workaround (see `writeDirectLabelPlist`) if the real label is stuck. Prints what it did either
+/// way so a failure here is never silent.
+func bootstrapDaemon(label: String, plistPath: String) {
+    // bootout first is a no-op if it's already unloaded (the expected case right after
+    // killswitch) -- harmless either way, and guards against a half-registered leftover.
+    ProcessRunner.runSilently("/bin/launchctl", ["bootout", "system/\(label)"])
+    let result = ProcessRunner.run("/bin/launchctl", ["bootstrap", "system", plistPath])
+    if result.status == 0 {
+        print("  \(label): bootstrapped.")
+        return
+    }
+    print("  \(label): real-label bootstrap failed (exit \(result.status): \(result.output.trimmingCharacters(in: .whitespacesAndNewlines))) -- trying the `.direct`-label workaround...")
+    guard let directPlistPath = writeDirectLabelPlist(sourcePlistPath: plistPath, originalLabel: label) else {
+        print("  \(label): could not prepare the `.direct`-label plist. Daemon is NOT running -- see GUARDIAN_SETUP.md's SMAppService/BTM troubleshooting notes.")
+        return
+    }
+    ProcessRunner.runSilently("/bin/launchctl", ["bootout", "system/\(label).direct"])
+    let directResult = ProcessRunner.run("/bin/launchctl", ["bootstrap", "system", directPlistPath])
+    if directResult.status == 0 {
+        print("  \(label): bootstrapped under \(label).direct instead.")
+    } else {
+        print("  \(label): `.direct`-label bootstrap ALSO failed (exit \(directResult.status): \(directResult.output.trimmingCharacters(in: .whitespacesAndNewlines))). Daemon is NOT running.")
+    }
+}
+
+/// Undoes `killswitch`. Has to do real work `killswitch`'s own caller never needed to: that
+/// command runs against an already-live daemon over XPC, but killswitch UNLOADS both daemons as
+/// its last step, so by the time anyone runs `restore` there is no daemon to ask -- this has to
+/// re-bootstrap them itself via launchd first, wait for the XPC service to actually come back up,
+/// and only then call `restoreFromKillSwitch` (see that method's doc comment for what it restores
+/// and from where). Needs root for the same reason `sudo launchctl bootstrap system ...` always
+/// has throughout this project's session notes.
+func runRestore(client: FocusLockXPCClient) async {
+    guard geteuid() == 0 else {
+        print("Must run as root (sudo focuslockctl restore) -- killswitch unloaded both daemons, so this needs to re-bootstrap them directly via launchd.")
+        exit(1)
+    }
+
+    print("Re-bootstrapping daemons...")
+    bootstrapDaemon(label: FocusLockConstants.watchdogBundleIdentifier, plistPath: FocusLockConstants.watchdogLaunchDaemonPlistPath)
+    bootstrapDaemon(label: FocusLockConstants.helperBundleIdentifier, plistPath: FocusLockConstants.helperLaunchDaemonPlistPath)
+
+    print("Waiting for FocusLockHelperd to come up...")
+    var status: FocusLockState?
+    let pollDeadline = Date().addingTimeInterval(20)
+    while Date() < pollDeadline {
+        replyDeadline = Date().addingTimeInterval(30) // keep the outer watchdog from firing while this polls
+        status = await client.getStatus()
+        if status != nil { break }
+        try? await Task.sleep(nanoseconds: 500_000_000)
+    }
+    guard status != nil else {
+        print("FocusLockHelperd did not come back up within 20s. Check `sudo launchctl print system/\(FocusLockConstants.helperBundleIdentifier)` for details, then try again.")
+        exit(1)
+    }
+
+    print("Daemon is back up -- restoring protection...")
+    printResult(await client.restoreFromKillSwitch())
+
+    // The scanner is normally (re-)registered by the GUI app itself on every launch (see
+    // DaemonRegistrar.registerScannerAgentIfNeeded()) -- relaunching it here reuses that exact
+    // path instead of duplicating LaunchAgent-install logic. `launchctl asuser` is the same
+    // root-safe "launch a GUI app in someone else's session" pattern AppProtector already uses.
+    let uidOutput = ProcessRunner.runCapturingStdout("/usr/bin/stat", ["-f", "%u", "/dev/console"])
+    if let uid = UInt32(uidOutput.trimmingCharacters(in: .whitespacesAndNewlines)), uid != 0 {
+        ProcessRunner.runSilently("/bin/launchctl", ["asuser", String(uid), "/usr/bin/open", FocusLockConstants.installedAppBundlePath])
+        print("Relaunched Otterling.app -- it'll re-register the trigger-word scanner on its own.")
+    } else {
+        print("No console session detected -- open Otterling.app yourself once someone's logged in, to restore the trigger-word scanner.")
     }
 }
 
@@ -316,6 +427,9 @@ Task {
 
     case "killswitch":
         printResult(await client.killSwitch())
+
+    case "restore":
+        await runRestore(client: client)
 
     case "protect-user":
         guard arguments.count > 2 else {

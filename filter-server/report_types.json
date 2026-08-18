@@ -132,7 +132,12 @@
     "kill_switch_activated": {
       "enabled": true,
       "source": "mac",
-      "description": "The Mac's emergency kill switch was triggered (clears DNS/proxy/pf, stops both daemons)."
+      "description": "The Mac's emergency kill switch was triggered: the WHOLE app is disabled, not just filtering (DNS/proxy/pf cleared, scanner and GUI app stopped, both daemons unloaded)."
+    },
+    "kill_switch_restored": {
+      "enabled": true,
+      "source": "mac",
+      "description": "The kill switch was undone (`focuslockctl restore`) -- protection and DNS/proxy settings are back to how they were right before it fired."
     },
     "VPN_BLOCK": {
       "enabled": true,

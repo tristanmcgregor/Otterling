@@ -16,6 +16,13 @@ public enum FocusLockConstants {
     public static let pfAnchorName = "app.otterling"
     public static let pfAnchorFilePath = "/Library/Application Support/FocusLock/pf.anchor"
 
+    /// Written by `XPCService.killSwitch` just before it disables everything: a snapshot of the
+    /// DNS/proxy settings as they stood right before the kill switch fired, so
+    /// `restoreFromKillSwitch` can put them back exactly as they were rather than guessing a
+    /// default. Deleted once restore succeeds. Living outside `state.json` on purpose -- the kill
+    /// switch's whole point is working even if state.json's own fields can't be trusted mid-crisis.
+    public static let killSwitchSnapshotPath = "\(stateDirectory)/killswitch_snapshot.json"
+
     /// Marker comment so the daemon can find/replace only the lines it owns in /etc/hosts.
     public static let hostsMarkerBegin = "# Otterling BEGIN - do not edit, managed by FocusLockHelperd"
     public static let hostsMarkerEnd = "# Otterling END"

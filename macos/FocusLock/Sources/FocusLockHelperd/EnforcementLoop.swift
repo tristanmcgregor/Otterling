@@ -80,6 +80,15 @@ final class EnforcementLoop {
     private var lastProxyCheckAt: Date?
     private let proxyCheckInterval: TimeInterval = 15
 
+    // One-shot: if `state.protectionEnabled` is false when this daemon starts up (e.g. it got
+    // manually re-bootstrapped without going through `focuslockctl restore` after a kill switch),
+    // make sure DNS/proxy/pf are actually torn down rather than just skipped -- `killSwitch` itself
+    // already does this teardown directly, but a daemon starting fresh has no guarantee it's
+    // running on a machine `killSwitch` just cleaned up (e.g. a stale live proxy setting from
+    // before this specific process started). See `restoreFromKillSwitch` for the only normal path
+    // back to `protectionEnabled = true`.
+    private var didTearDownForDisabledProtection = false
+
     func start(stateStore: StateStore, interval: TimeInterval = 3) {
         self.stateStore = stateStore
         reapplyNow()
@@ -108,6 +117,26 @@ final class EnforcementLoop {
             }
 
             let state = stateStore.snapshot()
+
+            // Kill-switch state: `protectionEnabled` is only ever set false by
+            // `XPCService.killSwitch` and only ever set back to true by
+            // `XPCService.restoreFromKillSwitch` (see both for the full picture). Skips
+            // everything below -- DNS, proxy, pf, blocked-app kills, protected-app relaunch/lock,
+            // even the lock-profile/VPN/integrity monitoring calls -- matching "the whole app is
+            // off", not just content filtering. One-shot teardown covers the case where this
+            // daemon process started fresh with protection already off (e.g. manually
+            // re-bootstrapped outside `focuslockctl restore`) and live DNS/proxy settings from
+            // before this process existed are still sitting there unaddressed.
+            guard state.protectionEnabled else {
+                if !self.didTearDownForDisabledProtection {
+                    DNSEnforcer.remove()
+                    ProxyEnforcer.apply(host: state.proxyHost, port: state.proxyPort, enabled: false)
+                    PFBlocker.apply(active: false)
+                    self.didTearDownForDisabledProtection = true
+                }
+                return
+            }
+            self.didTearDownForDisabledProtection = false
 
             // All domain filtering now lives on the SERVER (the cloud filter DNS / AdGuard + the
             // dns-classifier). The local /etc/hosts layer is deliberately kept EMPTY: writing large

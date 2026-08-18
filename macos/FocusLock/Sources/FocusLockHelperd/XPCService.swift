@@ -535,19 +535,37 @@ final class XPCService: NSObject, FocusLockXPCProtocol {
     }
 
     func killSwitch(reply: @escaping (Data) -> Void) {
-        FileHandle.standardError.write("[killswitch] activated -- clearing DNS/proxy/pf and unloading both LaunchDaemons\n".data(using: .utf8)!)
-        TamperReporter.report(type: "kill_switch_activated", details: "Emergency stop invoked -- all enforcement cleared, daemons unloading.")
+        FileHandle.standardError.write("[killswitch] activated -- turning off the whole app, not just filtering\n".data(using: .utf8)!)
+        TamperReporter.report(type: "kill_switch_activated", details: "Emergency stop invoked -- whole app disabled, daemons unloading.")
+
+        let preKillState = stateStore.snapshot()
+        // Snapshot BEFORE flipping anything, so `restoreFromKillSwitch` can put DNS/proxy back
+        // exactly as they were (e.g. the proxy might already have been off) rather than defaulting
+        // everything back on just because it can. Best-effort: a failed write still lets the kill
+        // switch itself proceed (this must never be the thing that blocks an emergency stop), it
+        // just means restore later falls back to sensible defaults instead of exact prior state.
+        let snapshot = KillSwitchSnapshot(
+            dnsEnforcementEnabled: preKillState.dnsEnforcementEnabled,
+            proxyEnforcementEnabled: preKillState.proxyEnforcementEnabled,
+            forceProxyViaFirewall: preKillState.forceProxyViaFirewall
+        )
+        if let data = try? JSONEncoder().encode(snapshot) {
+            try? data.write(to: URL(fileURLWithPath: FocusLockConstants.killSwitchSnapshotPath))
+        }
 
         // Persist the disable, not just the live network settings -- if this process somehow
         // survives the bootout attempts below (e.g. a stuck SMAppService/BTM registration under a
         // workaround label `launchctl bootout` doesn't know about -- a real, recurring issue on this
         // project), its OWN next enforcement tick must not silently re-assert what this just cleared.
         // Confirmed necessary by hand: an earlier version of this only cleared live settings, and
-        // the still-running loop reasserted DNS within one tick.
+        // the still-running loop reasserted DNS within one tick. `protectionEnabled = false` is the
+        // broader "whole app off" switch `EnforcementLoop.reapplyNow` checks first, on top of the
+        // individual DNS/proxy flags -- see that field's doc comment.
         stateStore.mutate { state in
             state.dnsEnforcementEnabled = false
             state.proxyEnforcementEnabled = false
             state.forceProxyViaFirewall = false
+            state.protectionEnabled = false
         }
         onStateChanged()
 
@@ -556,7 +574,23 @@ final class XPCService: NSObject, FocusLockXPCProtocol {
         PFBlocker.apply(active: false)
         ProcessRunner.runSilently("/sbin/pfctl", ["-d"])
 
-        reply(FocusLockCodec.encode(FocusLockResult(success: true, message: "DNS, proxy, and pf cleared and disabled. Unloading daemons now.")))
+        // Trigger-word scanner runs as a per-user LaunchAgent, not a system LaunchDaemon, so it
+        // isn't covered by the daemon/watchdog bootout below -- unload it separately for whichever
+        // user is actually logged in right now. Best-effort: no console session (locked/logged-out)
+        // just means nothing to unload.
+        if let uid = consoleUserUID() {
+            ProcessRunner.runSilently("/bin/launchctl", [
+                "bootout", "gui/\(uid)/\(FocusLockConstants.scannerBundleIdentifier)",
+            ])
+        }
+        // Quit the GUI app if it's running -- "turn off the whole app" means the menu bar/window
+        // app stops too, not just the background daemons.
+        ProcessRunner.runSilently("/usr/bin/killall", ["FocusLock"])
+
+        reply(FocusLockCodec.encode(FocusLockResult(
+            success: true,
+            message: "Whole app disabled: DNS/proxy/pf cleared, scanner and GUI app stopped. Unloading daemons now. Run `focuslockctl restore` to undo."
+        )))
 
         // Delay so the reply above actually reaches the caller over the Mach port before this
         // process exits -- same reasoning as installAvailableUpdate's restart delay. Tries BOTH the
@@ -577,5 +611,46 @@ final class XPCService: NSObject, FocusLockXPCProtocol {
             // races or fails too.
             kill(getpid(), SIGKILL)
         }
+    }
+
+    /// See `FocusLockXPCProtocol.restoreFromKillSwitch`'s doc comment for the full picture. This
+    /// only ever runs on a daemon that's already back up (`focuslockctl restore` re-bootstraps it
+    /// first, since `killSwitch` unloads it and there's no XPC connection to call this over until
+    /// then) -- so unlike `killSwitch`, this doesn't need to touch launchd itself at all.
+    func restoreFromKillSwitch(reply: @escaping (Data) -> Void) {
+        let snapshotURL = URL(fileURLWithPath: FocusLockConstants.killSwitchSnapshotPath)
+        guard let data = try? Data(contentsOf: snapshotURL),
+              let snapshot = try? JSONDecoder().decode(KillSwitchSnapshot.self, from: data) else {
+            // No snapshot: either the kill switch was never actually triggered, or restore already
+            // ran once. Still make sure protection isn't stuck off, but there's nothing to restore
+            // DNS/proxy to specifically -- leave those exactly as `state.json` already has them.
+            stateStore.mutate { state in state.protectionEnabled = true }
+            onStateChanged()
+            FileHandle.standardError.write("[killswitch] restore: no snapshot found, protection re-enabled with existing DNS/proxy settings\n".data(using: .utf8)!)
+            reply(FocusLockCodec.encode(FocusLockResult(success: true, message: "No kill-switch snapshot found -- protection re-enabled, DNS/proxy settings unchanged.")))
+            return
+        }
+
+        stateStore.mutate { state in
+            state.dnsEnforcementEnabled = snapshot.dnsEnforcementEnabled
+            state.proxyEnforcementEnabled = snapshot.proxyEnforcementEnabled
+            state.forceProxyViaFirewall = snapshot.forceProxyViaFirewall
+            state.protectionEnabled = true
+        }
+        onStateChanged()
+        try? FileManager.default.removeItem(at: snapshotURL)
+
+        TamperReporter.report(type: "kill_switch_restored", details: "Protection re-enabled after emergency stop.")
+        FileHandle.standardError.write("[killswitch] restored: protection re-enabled from snapshot\n".data(using: .utf8)!)
+        reply(FocusLockCodec.encode(FocusLockResult(success: true, message: "Protection re-enabled. DNS/proxy restored to their pre-kill-switch settings.")))
+    }
+
+    /// Root-safe console-user lookup (no session to inherit a `$USER`/`whoami` from, since the
+    /// daemon runs headless) -- same `stat -f %u /dev/console` approach `LockProfileGuard` uses,
+    /// just returning the uid directly since that's all `launchctl bootout gui/<uid>/...` needs.
+    private func consoleUserUID() -> uid_t? {
+        let output = ProcessRunner.runCapturingStdout("/usr/bin/stat", ["-f", "%u", "/dev/console"])
+        guard let uid = UInt32(output.trimmingCharacters(in: .whitespacesAndNewlines)), uid != 0 else { return nil }
+        return uid
     }
 }

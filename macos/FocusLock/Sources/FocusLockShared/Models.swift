@@ -172,6 +172,15 @@ public struct FocusLockState: Codable, Sendable {
     /// Authorized-but-not-yet-matured actions, applied by `EnforcementLoop` once due.
     public var pendingActions: [PendingAction]
 
+    /// Master switch for the ENTIRE app, not just content filtering -- `EnforcementLoop` skips
+    /// everything (DNS, proxy, pf, blocked/protected apps, even lock-profile/VPN/integrity
+    /// monitoring) while this is false. Only ever set false by `XPCService.killSwitch` and only
+    /// ever set back to true by `XPCService.restoreFromKillSwitch`; nothing else touches it. Not
+    /// exposed anywhere else on purpose -- this isn't a Guardian setting, it's the kill switch's
+    /// own persisted record of "everything is supposed to be off", so a daemon that somehow gets
+    /// re-bootstrapped without going through `restoreFromKillSwitch` doesn't silently resume.
+    public var protectionEnabled: Bool
+
     public init(
         blockedApps: [BlockedApp] = [],
         blockedDomains: [String] = [],
@@ -197,7 +206,8 @@ public struct FocusLockState: Codable, Sendable {
         guardianPasscode: PasscodeRecord? = nil,
         passcodeConfigured: Bool = false,
         cooldownHours: Double = FocusLockConstants.defaultCooldownHours,
-        pendingActions: [PendingAction] = []
+        pendingActions: [PendingAction] = [],
+        protectionEnabled: Bool = true
     ) {
         self.blockedApps = blockedApps
         self.blockedDomains = blockedDomains
@@ -215,6 +225,7 @@ public struct FocusLockState: Codable, Sendable {
         self.passcodeConfigured = passcodeConfigured
         self.cooldownHours = cooldownHours
         self.pendingActions = pendingActions
+        self.protectionEnabled = protectionEnabled
     }
 
     // Custom decode so a state.json written before `dnsEnforcementEnabled` (or these newer cloud
@@ -252,6 +263,11 @@ public struct FocusLockState: Codable, Sendable {
         // which is the exact behaviour this field exists to prevent.
         cooldownHours = try container.decodeIfPresent(Double.self, forKey: .cooldownHours) ?? FocusLockConstants.defaultCooldownHours
         pendingActions = try container.decodeIfPresent([PendingAction].self, forKey: .pendingActions) ?? []
+        // Missing key defaults to true (protection ON) -- both for a state.json written before
+        // this field existed (must not retroactively look kill-switched) and for the ordinary
+        // case of a fresh install. The ONLY way this is ever actually false is `killSwitch`
+        // explicitly persisting it, so a missing/absent value never means "off".
+        protectionEnabled = try container.decodeIfPresent(Bool.self, forKey: .protectionEnabled) ?? true
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -259,6 +275,7 @@ public struct FocusLockState: Codable, Sendable {
         case cloudFilterHost, cloudFilterEnabled, lockProfileInstalled, vpnActive
         case proxyEnforcementEnabled, forceProxyViaFirewall, proxyHost, proxyPort
         case guardianPasscode, passcodeConfigured, cooldownHours, pendingActions
+        case protectionEnabled
     }
 
     /// The copy handed to callers of `getStatus`: same state minus the passcode digest, with
@@ -270,6 +287,22 @@ public struct FocusLockState: Codable, Sendable {
         copy.passcodeConfigured = guardianPasscode != nil
         copy.guardianPasscode = nil
         return copy
+    }
+}
+
+/// What `XPCService.killSwitch` snapshots right before it clears everything, so
+/// `restoreFromKillSwitch` can put DNS/proxy back exactly as they were rather than guessing a
+/// default (e.g. the proxy might have already been off before the kill switch, and restore
+/// shouldn't turn it on just because it CAN). See `FocusLockConstants.killSwitchSnapshotPath`.
+public struct KillSwitchSnapshot: Codable, Sendable {
+    public let dnsEnforcementEnabled: Bool
+    public let proxyEnforcementEnabled: Bool
+    public let forceProxyViaFirewall: Bool
+
+    public init(dnsEnforcementEnabled: Bool, proxyEnforcementEnabled: Bool, forceProxyViaFirewall: Bool) {
+        self.dnsEnforcementEnabled = dnsEnforcementEnabled
+        self.proxyEnforcementEnabled = proxyEnforcementEnabled
+        self.forceProxyViaFirewall = forceProxyViaFirewall
     }
 }
 
