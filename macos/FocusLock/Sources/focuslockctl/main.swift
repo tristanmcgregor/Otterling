@@ -201,53 +201,11 @@ func printResult(_ result: FocusLockResult) {
     }
 }
 
-/// Writes a copy of `sourcePlist` under `/Library/LaunchDaemons` with its `Label` (and nothing
-/// else) changed to `<originalLabel>.direct`, `MachServices` left pointing at the ORIGINAL mach
-/// service name so XPC clients still connect to it under the name they already expect. This is
-/// the exact "stuck SMAppService/BTM registration" workaround this project has needed repeatedly
-/// (see the memory notes on it): `launchctl bootstrap` under the plist's own real label can fail
-/// with "Bootstrap failed: 5: Input/output error" even when nothing is currently registered under
-/// it, because Background Task Management's own database is what's actually stuck, not launchd's
-/// live state -- bootstrapping under a DIFFERENT label sidesteps that database entirely. Returns
-/// the path written, or nil if the source plist couldn't be read/parsed.
-func writeDirectLabelPlist(sourcePlistPath: String, originalLabel: String) -> String? {
-    guard let data = FileManager.default.contents(atPath: sourcePlistPath),
-          var plist = (try? PropertyListSerialization.propertyList(from: data, options: [], format: nil)) as? [String: Any] else {
-        return nil
-    }
-    plist["Label"] = "\(originalLabel).direct"
-    guard let newData = try? PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0) else {
-        return nil
-    }
-    let targetPath = "/Library/LaunchDaemons/\(originalLabel).direct.plist"
-    guard (try? newData.write(to: URL(fileURLWithPath: targetPath))) != nil else { return nil }
-    return targetPath
-}
-
-/// Bootstraps `label` from `plistPath` under the system domain, falling back to the `.direct`-label
-/// workaround (see `writeDirectLabelPlist`) if the real label is stuck. Prints what it did either
-/// way so a failure here is never silent.
+/// Bootstraps `label` from `plistPath`, falling back to the `.direct`-label workaround if the real
+/// label is stuck (see `DirectLabelBootstrap`, shared with `FocusLockWatchdog`'s own recovery
+/// loop). Prints what happened so a failure here is never silent.
 func bootstrapDaemon(label: String, plistPath: String) {
-    // bootout first is a no-op if it's already unloaded (the expected case right after
-    // killswitch) -- harmless either way, and guards against a half-registered leftover.
-    ProcessRunner.runSilently("/bin/launchctl", ["bootout", "system/\(label)"])
-    let result = ProcessRunner.run("/bin/launchctl", ["bootstrap", "system", plistPath])
-    if result.status == 0 {
-        print("  \(label): bootstrapped.")
-        return
-    }
-    print("  \(label): real-label bootstrap failed (exit \(result.status): \(result.output.trimmingCharacters(in: .whitespacesAndNewlines))) -- trying the `.direct`-label workaround...")
-    guard let directPlistPath = writeDirectLabelPlist(sourcePlistPath: plistPath, originalLabel: label) else {
-        print("  \(label): could not prepare the `.direct`-label plist. Daemon is NOT running -- see GUARDIAN_SETUP.md's SMAppService/BTM troubleshooting notes.")
-        return
-    }
-    ProcessRunner.runSilently("/bin/launchctl", ["bootout", "system/\(label).direct"])
-    let directResult = ProcessRunner.run("/bin/launchctl", ["bootstrap", "system", directPlistPath])
-    if directResult.status == 0 {
-        print("  \(label): bootstrapped under \(label).direct instead.")
-    } else {
-        print("  \(label): `.direct`-label bootstrap ALSO failed (exit \(directResult.status): \(directResult.output.trimmingCharacters(in: .whitespacesAndNewlines))). Daemon is NOT running.")
-    }
+    print("  \(DirectLabelBootstrap.bootstrapWithFallback(label: label, plistPath: plistPath))")
 }
 
 /// Undoes `killswitch`. Has to do real work `killswitch`'s own caller never needed to: that

@@ -111,12 +111,55 @@ enum SudoBroker {
         return regex.firstMatch(in: text, options: [], range: range) != nil
     }
 
+    /// Homebrew refuses outright to run as root ("Running Homebrew as root is extremely
+    /// dangerous") -- no environment variable overrides that, by design on their end. Confirmed
+    /// live 2026-08-18: an allowlisted `brew install wget` failed with "Error: $HOME must be set
+    /// to run brew" because a LaunchDaemon's bare environment has no HOME at all, and even fixing
+    /// that alone wouldn't be enough -- brew would then hit its root check next. Since `brew` is
+    /// one of this broker's own explicit allowlist entries (not an edge case), this has to
+    /// actually work, not just fail more descriptively.
+    private static func isBrewCommand(_ command: String) -> Bool {
+        command.hasPrefix("brew ") || command == "brew"
+    }
+
+    /// Root-safe console-user lookup, same `stat -f %u /dev/console` approach used elsewhere in
+    /// this daemon (e.g. `XPCService.consoleUserUID`) -- duplicated locally rather than shared
+    /// since it's a two-line call, not worth a new shared type for.
+    private static func consoleUsername() -> String? {
+        let output = ProcessRunner.runCapturingStdout("/usr/bin/stat", ["-f", "%Su", "/dev/console"])
+        let user = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        return (user.isEmpty || user == "root") ? nil : user
+    }
+
     private static func execute(command: String, decision: ElevatedCommandResult) -> ElevatedCommandResult {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/bash")
-        // `-l` (login shell) so approved commands see a normal PATH (Homebrew, etc.) -- a
-        // LaunchDaemon's default environment is minimal and wouldn't find `brew` otherwise.
-        process.arguments = ["-l", "-c", command]
+        var environment = ProcessInfo.processInfo.environment
+
+        if isBrewCommand(command), let username = consoleUsername() {
+            // Runs as the logged-in console user instead of root -- `sudo -u <user> -i` gives a
+            // real login shell with THEIR actual HOME/PATH/brew ownership, exactly how brew
+            // expects to be invoked normally (nobody types `sudo brew install` even with real
+            // sudo access). Root can `sudo -u` to any user with no password prompt, so this still
+            // requires no interaction. Only brew gets this treatment -- everything else in the
+            // allowlist/AI-review tiers is a genuine root-elevation request, which is the whole
+            // point of this broker, and shouldn't be silently downgraded to the user's own
+            // (post-Standard-conversion, non-admin) privilege level.
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
+            process.arguments = ["-u", username, "-i", "--", "/bin/bash", "-l", "-c", command]
+        } else {
+            process.executableURL = URL(fileURLWithPath: "/bin/bash")
+            // `-l` (login shell) so approved commands see a normal PATH -- a LaunchDaemon's
+            // default environment is minimal. HOME/USER/LOGNAME aren't set by `-l` alone (those
+            // come from the environment a real login session populates, which this process never
+            // had), so they're set explicitly here for tools (like brew, before the check above
+            // routes it elsewhere) that read them directly rather than deriving from getpwuid.
+            environment["HOME"] = "/var/root"
+            environment["USER"] = "root"
+            environment["LOGNAME"] = "root"
+            process.arguments = ["-l", "-c", command]
+        }
+        process.environment = environment
+
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
         process.standardOutput = stdoutPipe

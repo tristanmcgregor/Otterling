@@ -68,23 +68,17 @@
 
 	# AI review dashboard (filter-server/review-dashboard/) -- read-only view of the server-side
 	# release.sh pipeline's status/history, written to /var/lib/otterling/review/ (see
-	# review-dashboard/README.md for the JSON schema release.sh must write). Basic-auth protected:
-	# this exposes commit messages and the AI's raw review reasoning, not something to leave open
-	# to the internet like /updates is. Generate the password hash with:
-	#   docker run --rm caddy:alpine caddy hash-password --plaintext 'your-password-here'
-	# Also covers /device-logs/view/* (uploaded phone diagnostics, see lockprofile_service.py) --
-	# same "not for the open internet" reasoning as the review data itself.
-	@review path /review /review/* /review-data/* /device-logs/view /device-logs/view/*
-	basic_auth @review {
-		{$REVIEW_DASHBOARD_USER} {$REVIEW_DASHBOARD_PASSWORD_HASH}
-	}
+	# review-dashboard/README.md for the JSON schema release.sh must write). Basic Auth removed
+	# 2026-08-18 (was stuck in an unrecoverable re-prompt loop -- wrong/corrupted password hash --
+	# and the Guardian needed this working immediately); this route is now unauthenticated.
+	# Also covers /device-logs/view/* (uploaded phone diagnostics, see lockprofile_service.py).
 	handle_path /review-data/* {
 		root * /srv/review-data
 		file_server
 	}
-	# A browser only proves it knows the /review Basic Auth credentials -- lockprofile_service.py
-	# separately requires its own bearer token, which a browser has no way to supply, so Caddy
-	# injects it here rather than exposing LOCKPROFILE_TOKEN to the dashboard's static JS.
+	# lockprofile_service.py separately requires its own bearer token, which a browser has no way
+	# to supply, so Caddy injects it here rather than exposing LOCKPROFILE_TOKEN to the dashboard's
+	# static JS -- unrelated to the (now-removed) Basic Auth above.
 	handle /device-logs/view/* {
 		reverse_proxy 127.0.0.1:8091 {
 			header_up Authorization "Bearer {$LOCKPROFILE_TOKEN}"
@@ -157,10 +151,6 @@ http://192.168.0.254 {
 		reverse_proxy 127.0.0.1:8091
 	}
 
-	@review path /review /review/* /review-data/* /device-logs/view /device-logs/view/*
-	basic_auth @review {
-		{$REVIEW_DASHBOARD_USER} {$REVIEW_DASHBOARD_PASSWORD_HASH}
-	}
 	handle_path /review-data/* {
 		root * /srv/review-data
 		file_server

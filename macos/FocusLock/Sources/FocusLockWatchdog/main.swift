@@ -29,33 +29,35 @@ final class Watchdog {
     }
 
     private func recover() {
-        // First attempt: bootstrap, for the case where the job was fully unloaded (`bootout` or
-        // never loaded this boot). If that fails because it's already loaded but just hung/wedged,
-        // fall back to `kickstart -k`, which force-restarts an existing job.
-        let bootstrapResult = ProcessRunner.run(
-            "/bin/launchctl", ["bootstrap", "system", FocusLockConstants.helperLaunchDaemonPlistPath]
-        )
-        if bootstrapResult.status == 0 {
-            TamperReporter.report(
-                type: "daemon_unloaded_recovered",
-                details: "FocusLockHelperd was unreachable; watchdog re-bootstrapped it"
-            )
-            return
+        // First attempt: kickstart under whichever label is CURRENTLY registered -- covers the
+        // common case where a previous recovery (this watchdog's own, or `focuslockctl restore`)
+        // already registered `.direct` and the daemon is just hung/wedged, not unloaded. Tries the
+        // real label first, then `.direct`; either succeeding is a normal force-restart, not a
+        // fresh bootstrap, so it's reported the same way either way.
+        for label in [FocusLockConstants.helperBundleIdentifier, "\(FocusLockConstants.helperBundleIdentifier).direct"] {
+            let kickstartResult = ProcessRunner.run("/bin/launchctl", ["kickstart", "-k", "system/\(label)"])
+            if kickstartResult.status == 0 {
+                TamperReporter.report(
+                    type: "daemon_unloaded_recovered",
+                    details: "FocusLockHelperd was unreachable; watchdog force-restarted it via kickstart (\(label))"
+                )
+                return
+            }
         }
 
-        let kickstartResult = ProcessRunner.run(
-            "/bin/launchctl", ["kickstart", "-k", "system/\(FocusLockConstants.helperBundleIdentifier)"]
+        // Nothing registered under either label at all (fully unloaded, e.g. after `bootout`) --
+        // bootstrap fresh, automatically falling back to the `.direct`-label workaround if the
+        // real label's own SMAppService/BTM registration is stuck (see DirectLabelBootstrap's doc
+        // comment; this project has hit that repeatedly, and previously left the watchdog with no
+        // way to recover from it at all).
+        let summary = DirectLabelBootstrap.bootstrapWithFallback(
+            label: FocusLockConstants.helperBundleIdentifier,
+            plistPath: FocusLockConstants.helperLaunchDaemonPlistPath
         )
-        if kickstartResult.status == 0 {
-            TamperReporter.report(
-                type: "daemon_unloaded_recovered",
-                details: "FocusLockHelperd was unreachable; watchdog force-restarted it via kickstart"
-            )
+        if summary.contains("bootstrapped") {
+            TamperReporter.report(type: "daemon_unloaded_recovered", details: "FocusLockHelperd was unreachable; watchdog re-bootstrapped it (\(summary))")
         } else {
-            FileHandle.standardError.write(
-                ("[FocusLockWatchdog] recovery failed -- bootstrap: \(bootstrapResult.output.trimmingCharacters(in: .whitespacesAndNewlines)); " +
-                 "kickstart: \(kickstartResult.output.trimmingCharacters(in: .whitespacesAndNewlines))\n").data(using: .utf8)!
-            )
+            FileHandle.standardError.write("[FocusLockWatchdog] recovery failed -- \(summary)\n".data(using: .utf8)!)
         }
     }
 }
