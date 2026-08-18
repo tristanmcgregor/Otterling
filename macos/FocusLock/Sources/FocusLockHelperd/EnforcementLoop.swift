@@ -160,17 +160,20 @@ final class EnforcementLoop {
                 self.lastVPNCheckAt = vpnNow
             }
 
-            // Proxy enforcement DISABLED as of 2026-08-17 (maintainer kill switch, not the Guardian
-            // passcode path -- this is fixing a design flaw, not weakening protection): routing this
-            // Mac's web traffic through a proxy that lives on the same home LAN means every
-            // downloaded byte crosses the home WiFi/LAN link TWICE (Mac->router->home-server, then
-            // home-server->router->Mac again for the same data coming back from the internet).
-            // Under real load (video, several tabs) that can saturate the LAN link itself, degrading
-            // -- and delaying -- everything sharing it, including traffic that never touches the
-            // proxy at all. Reported the same day as a severe, escalating "no internet" incident.
-            // DNS-based category filtering (DNSEnforcer, below) has no such doubling and stays on.
-            // Re-enabling this needs a real fix for the bandwidth doubling, not just a flag flip.
-            let proxyEnforcementEnabled = false
+            // Proxy enforcement was hardcoded off from 2026-08-17 to 2026-08-18 on suspicion that
+            // routing this Mac's web traffic through a proxy on the same home LAN made every
+            // downloaded byte cross the home WiFi/LAN link twice (Mac->router->home-server, then
+            // home-server->router->Mac again), saturating the link under real load. Investigated
+            // with `Scripts/test_proxy_filtering.sh` on 2026-08-18: the theory doesn't hold up.
+            // The home server's uplink is wired Gigabit Ethernet (not WiFi), so there's no shared-
+            // spectrum contention to begin with; measured Mac-NIC wire/downloaded ratios stayed
+            // ~1.0-1.4x with the proxy both on and off (no 2x jump when it turned on); mitmproxy's
+            // own CPU stayed low throughout; and download throughput was equal-or-better with the
+            // proxy on in every round tested. The severe latency spikes seen during testing showed
+            // up in proxy-off phases too, pointing at general home-network variability rather than
+            // the proxy. Reverted back to the real Guardian-controlled `state.proxyEnforcementEnabled`
+            // (GUI/`focuslockctl enable-proxy`/`disable-proxy`) rather than a maintainer override.
+            let proxyEnforcementEnabled = state.proxyEnforcementEnabled
             if proxyEnforcementEnabled {
                 let proxyNow = Date()
                 if self.lastProxyCheckAt == nil || proxyNow.timeIntervalSince(self.lastProxyCheckAt!) >= self.proxyCheckInterval {
