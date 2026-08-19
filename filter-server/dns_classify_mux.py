@@ -73,9 +73,17 @@ log = logging.getLogger("dns_classify_mux")
 # (e.g. one ad-heavy page load resolving a dozen distinct tracker domains at once -- much easier to
 # hit now that `claude -p` is far slower to start than the old raw API call), later queries queued
 # up behind them for a *fast, non-blocking* check that had no business sharing a pool with slow I/O
-# in the first place -- stalling every device's DNS, not just the one hitting new domains. Sized
-# generously since these threads spend nearly all their time blocked on I/O, not CPU.
-_CLASSIFY_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=64, thread_name_prefix="classify")
+# in the first place -- stalling every device's DNS, not just the one hitting new domains.
+#
+# Small on purpose, NOT sized generously: unlike a plain network fetch, `claude -p` startup is
+# real CPU work (Node.js/V8 init), not just I/O wait. At the old value of 64 a single ad-heavy page
+# load -- resolving a dozen-plus distinct tracker/CDN domains at once -- could spawn a dozen-plus
+# concurrent `claude -p` processes with no cap, saturating this host's 8 cores at once. That
+# starved everything else on the box, including interactive SSH: a logged-in session's cgroup gets
+# none of ssh.service's own CPU-priority boost (see 99-priority.conf on the host), so it stalled
+# right along with everything else during a burst. Kept low enough that a worst-case simultaneous
+# burst still leaves most cores free.
+_CLASSIFY_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=4, thread_name_prefix="classify")
 
 
 def parse_query_domain(data: bytes) -> str | None:

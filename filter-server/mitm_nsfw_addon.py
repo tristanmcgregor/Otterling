@@ -27,6 +27,7 @@ pages never do), and both outcomes are cached by exact host+path for a day, so r
 the same page never re-pay the classification cost.
 """
 import asyncio
+import concurrent.futures
 import re
 import threading
 import time
@@ -39,6 +40,16 @@ import domain_blocklist
 import trigger_words
 
 DENY_CACHE_TTL_SECONDS = 24 * 60 * 60
+
+# Dedicated pool for classify_with_ai's `claude -p` subprocess call, deliberately *not* the
+# default run_in_executor pool (also used by the cheap, non-blocking refresh_if_stale() check
+# below) -- and deliberately small. `claude -p` startup is real CPU work (Node.js/V8 init), not
+# just I/O wait, so an uncapped burst of these (e.g. several tabs each escalating a borderline page
+# around the same time) can saturate the host's CPU. That starves everything else on the box,
+# including interactive SSH sessions -- a logged-in session's cgroup gets none of ssh.service's own
+# CPU-priority boost (see 99-priority.conf on the host). Same fix, same reasoning, as
+# dns_classify_mux.py's own _CLASSIFY_EXECUTOR.
+_CLASSIFY_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=3, thread_name_prefix="classify")
 
 # Strong-signal path/query tokens only -- deliberately narrow (a handful of unambiguous
 # adult-content path fragments/site-brand names) rather than a broad keyword list, to keep false
@@ -262,7 +273,7 @@ class NsfwFilter:
         # Blocking (up to ANTHROPIC_TIMEOUT_SECONDS) -- same reasoning as the refresh_if_stale()
         # off-load in request() above.
         verdict = await asyncio.get_running_loop().run_in_executor(
-            None, ai_classifier.classify_with_ai, flow.request.pretty_url, title, excerpt
+            _CLASSIFY_EXECUTOR, ai_classifier.classify_with_ai, flow.request.pretty_url, title, excerpt
         )
         if verdict is True:
             self.deny_cache.deny(path_key)
