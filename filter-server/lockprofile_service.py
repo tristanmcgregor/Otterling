@@ -78,6 +78,7 @@ Caddy puts these behind the `/review` dashboard's Basic Auth and injects the bea
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import os
 import plistlib
@@ -122,6 +123,18 @@ REPORT_TYPES_CONFIG_PATH = os.environ.get(
 # every other route requires -- see Handler._handle_fleet_webhook. Empty = the route is disabled
 # (returns 403), so an unconfigured deployment can't be poked with unauthenticated Fleet payloads.
 FLEET_WEBHOOK_SECRET = os.environ.get("FLEET_WEBHOOK_SECRET", "")
+
+# Device-settings dashboard's OWN login (a custom page, see filter-server/dashboard-login/), not
+# Caddy's basic_auth -- that native browser dialog was confusing/unreliable enough in practice
+# (stuck re-prompt loops, silent stale-credential caching) that it got replaced outright. Plaintext
+# password compared via secrets.compare_digest (not a bcrypt hash like Caddy's basic_auth used --
+# Python's stdlib has no bcrypt, and this server already carries plaintext-secret-plus-
+# compare_digest as its established pattern for LOCKPROFILE_TOKEN/FLEET_WEBHOOK_SECRET). Session
+# tokens are self-verifying (HMAC'd with TOKEN as the key, see _dashboard_session_* below) rather
+# than server-stored, so there's no session store to lose on a restart.
+DASHBOARD_USER = os.environ.get("DASHBOARD_USER", "")
+DASHBOARD_LOGIN_PASSWORD = os.environ.get("DASHBOARD_LOGIN_PASSWORD", "")
+DASHBOARD_SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60  # 30 days
 
 NTFY_SERVER = os.environ.get("NTFY_SERVER", "https://ntfy.sh").rstrip("/")
 NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "")
@@ -407,6 +420,37 @@ def _report_type_enabled(report_type: str) -> bool:
     if entry is None:
         return True
     return entry.get("enabled", True) is not False
+
+
+# ─── Dashboard session cookie (custom login, replacing Caddy basic_auth) ───────────────────────
+# Self-verifying token, `<expiry>.<hmac>` -- no server-side session store to lose on a restart or
+# keep in sync across a future second instance. `expiry` is a plain unix timestamp; `hmac` is
+# HMAC-SHA256 of that timestamp keyed on TOKEN (LOCKPROFILE_TOKEN), so a token can only have been
+# minted by this server (which is the only thing that knows TOKEN) and can't be forged or extended
+# by a client tampering with the expiry.
+def _dashboard_session_create() -> str:
+    expiry = str(int(time.time()) + DASHBOARD_SESSION_MAX_AGE_SECONDS)
+    signature = hmac.new(TOKEN.encode("utf-8"), expiry.encode("utf-8"), hashlib.sha256).hexdigest()
+    return f"{expiry}.{signature}"
+
+
+def _dashboard_session_valid(token: str) -> bool:
+    if not token or "." not in token:
+        return False
+    expiry, _, signature = token.partition(".")
+    if not expiry.isdigit() or int(expiry) < time.time():
+        return False
+    expected = hmac.new(TOKEN.encode("utf-8"), expiry.encode("utf-8"), hashlib.sha256).hexdigest()
+    return secrets.compare_digest(signature, expected)
+
+
+def _dashboard_cookie_from_headers(headers) -> str | None:
+    raw = headers.get("Cookie", "")
+    for part in raw.split(";"):
+        name, _, value = part.strip().partition("=")
+        if name == "otterling_dashboard_session":
+            return value
+    return None
 
 
 def _append_alert(event: dict) -> dict | None:
@@ -956,12 +1000,70 @@ class Handler(BaseHTTPRequestHandler):
                 count += 1
         return self._send_json(200, {"status": "ok", "events": count})
 
+    def _set_dashboard_session_cookie(self, token: str | None) -> None:
+        """`token=None` clears the cookie (logout) by writing one that's already expired.
+        `HttpOnly` so the dashboard's own JS can never read it (nothing to steal via XSS);
+        `SameSite=Strict` since this cookie should never be sent cross-site; `Secure` because this
+        server is only ever reached over HTTPS (Caddy) or the LAN vhost, never plain HTTP with
+        anything sensitive riding along."""
+        if token is None:
+            value = "deleted; Max-Age=0"
+        else:
+            value = f"{token}; Max-Age={DASHBOARD_SESSION_MAX_AGE_SECONDS}"
+        self.send_header(
+            "Set-Cookie",
+            f"otterling_dashboard_session={value}; Path=/; HttpOnly; Secure; SameSite=Strict",
+        )
+
+    def _handle_dashboard_login(self) -> None:
+        if not DASHBOARD_USER or not DASHBOARD_LOGIN_PASSWORD:
+            return self._send_json(503, {"error": "dashboard login not configured -- set DASHBOARD_USER/DASHBOARD_LOGIN_PASSWORD"})
+        body = self._read_json_body()
+        username = (body or {}).get("username", "")
+        password = (body or {}).get("password", "")
+        if not (secrets.compare_digest(username, DASHBOARD_USER) and secrets.compare_digest(password, DASHBOARD_LOGIN_PASSWORD)):
+            return self._send_json(401, {"error": "invalid username or password"})
+        token = _dashboard_session_create()
+        payload = json.dumps({"status": "ok"}).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self._set_dashboard_session_cookie(token)
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def _handle_dashboard_logout(self) -> None:
+        payload = json.dumps({"status": "ok"}).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self._set_dashboard_session_cookie(None)
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def _handle_dashboard_verify(self) -> None:
+        """Backs Caddy's `forward_auth` in front of `/dashboard/*` and `/dashboard-api/*` -- Caddy
+        calls this on every request to those paths and only lets the real request through on 2xx.
+        Deliberately checks nothing but the cookie (no Bearer token): a browser has no way to send
+        one, and the cookie itself is what proves the login happened."""
+        cookie = _dashboard_cookie_from_headers(self.headers)
+        if cookie and _dashboard_session_valid(cookie):
+            return self._send_json(200, {"status": "ok"})
+        return self._send_json(401, {"error": "not logged in"})
+
     def do_POST(self):  # noqa: N802 (http.server API)
         parsed = urllib.parse.urlparse(self.path)
         # This one route authenticates on a query secret (Fleet can't send a Bearer header), so it
         # is dispatched BEFORE the Bearer gate that every other route below still passes through.
         if parsed.path == "/alerts/fleet-webhook":
             return self._handle_fleet_webhook(parsed)
+        # Dashboard login/logout authenticate on the dashboard's own username/password or session
+        # cookie, not the Bearer TOKEN -- a browser has neither, so these too must run before the
+        # Bearer gate below.
+        if parsed.path == "/dashboard-auth/login":
+            return self._handle_dashboard_login()
+        if parsed.path == "/dashboard-auth/logout":
+            return self._handle_dashboard_logout()
 
         if not self._authorized():
             return self._send_json(401, {"error": "unauthorized"})
@@ -1215,10 +1317,16 @@ class Handler(BaseHTTPRequestHandler):
         return True
 
     def do_GET(self):  # noqa: N802
+        parsed = urllib.parse.urlparse(self.path)
+        # Caddy's forward_auth calls this on every /dashboard*/ request; a browser has no Bearer
+        # token to send, so this has to run before the Bearer gate below (same reasoning as the
+        # login/logout routes in do_POST).
+        if parsed.path == "/dashboard-auth/verify":
+            return self._handle_dashboard_verify()
+
         if not self._authorized():
             return self._send_json(401, {"error": "unauthorized"})
 
-        parsed = urllib.parse.urlparse(self.path)
         if parsed.path == "/report-config":
             # Lets the phone's own AlertReporter (Android-origin types never touch this server --
             # see report_types.json's "_readme") honor the same enabled/disabled list this file
