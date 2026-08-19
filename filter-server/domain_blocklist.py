@@ -33,10 +33,15 @@ class DomainList:
         # everyone else just uses the current (possibly still-stale) cached set and moves on.
         self._refreshing = threading.Lock()
 
-    def refresh_if_stale(self):
+    def is_stale(self) -> bool:
+        """Cheap, non-blocking check -- just a lock + time comparison, no I/O -- so callers can
+        call this directly from an asyncio event loop without needing run_in_executor, unlike
+        refresh_if_stale() itself which may do a real ~40s network fetch."""
         with self._lock:
-            stale = (time.time() - self._last_refresh) >= DOMAIN_REFRESH_SECONDS
-        if not stale:
+            return (time.time() - self._last_refresh) >= DOMAIN_REFRESH_SECONDS
+
+    def refresh_if_stale(self):
+        if not self.is_stale():
             return
         if not self._refreshing.acquire(blocking=False):
             return

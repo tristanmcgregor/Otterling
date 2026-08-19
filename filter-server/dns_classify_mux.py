@@ -37,6 +37,7 @@ ordinary A-record lookups, but a real, named gap, not silently dropped).
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import http.client
 import ipaddress
 import logging
@@ -64,6 +65,17 @@ UPSTREAM_TIMEOUT_SECONDS = 5
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("dns_classify_mux")
+
+# Dedicated pool for the slow fetch+classify work (homepage fetch + a `claude -p` subprocess call,
+# together up to ~30s per domain). Deliberately *not* asyncio's default executor (run_in_executor's
+# implicit pool, sized off CPU count -- min(32, cpu_count+4), 12 on this host): that pool used to
+# also carry the per-query refresh_if_stale() check, so once enough of these slow calls piled up
+# (e.g. one ad-heavy page load resolving a dozen distinct tracker domains at once -- much easier to
+# hit now that `claude -p` is far slower to start than the old raw API call), later queries queued
+# up behind them for a *fast, non-blocking* check that had no business sharing a pool with slow I/O
+# in the first place -- stalling every device's DNS, not just the one hitting new domains. Sized
+# generously since these threads spend nearly all their time blocked on I/O, not CPU.
+_CLASSIFY_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=64, thread_name_prefix="classify")
 
 
 def parse_query_domain(data: bytes) -> str | None:
@@ -237,11 +249,13 @@ class _DnsMuxProtocol(asyncio.DatagramProtocol):
 
     async def _handle_query(self, data: bytes, addr):
         loop = asyncio.get_running_loop()
-        # Blocking (up to ~40s on a real refresh, once/day) -- run off the event loop so it can't
-        # stall every other concurrent lookup on this single-threaded mux. refresh_if_stale()
+        # is_stale() itself is non-blocking (no I/O), so it's cheap to call directly on the event
+        # loop for every query. Only actually dispatch to an executor -- and pay a thread-pool
+        # round-trip -- on the rare (~once/day) occasion a real refresh is needed; refresh_if_stale()
         # itself de-dupes concurrent refreshes, so this is cheap for all but one caller even when
         # many queries land at once right as the cache goes stale.
-        await loop.run_in_executor(None, self.domains.refresh_if_stale)
+        if self.domains.is_stale():
+            await loop.run_in_executor(None, self.domains.refresh_if_stale)
         domain = parse_query_domain(data)
         if not domain:
             await self._forward(data, addr)
@@ -290,7 +304,7 @@ class _DnsMuxProtocol(asyncio.DatagramProtocol):
         self._inflight[domain] = future
         try:
             verdict = await asyncio.wait_for(
-                loop.run_in_executor(None, _fetch_and_classify, domain),
+                loop.run_in_executor(_CLASSIFY_EXECUTOR, _fetch_and_classify, domain),
                 timeout=CLASSIFY_BUDGET_SECONDS,
             )
         except asyncio.TimeoutError:
