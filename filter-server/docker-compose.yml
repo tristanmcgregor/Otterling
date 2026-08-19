@@ -19,7 +19,14 @@ services:
       - ./conf:/opt/adguardhome/conf
 
   mitmproxy:
-    image: mitmproxy/mitmproxy:latest
+    # Built from mitmproxy.Dockerfile (stock mitmproxy/mitmproxy:latest + the Claude Code CLI) so
+    # ai_classifier.py can shell out to `claude -p` -- see that Dockerfile's header comment. Image
+    # is tagged and built via `docker compose build`; deploy_filter_server.sh runs `up -d --no-build`
+    # so a normal deploy reuses the already-built tag rather than rebuilding on every push.
+    image: otterling-mitmproxy-claude:latest
+    build:
+      context: .
+      dockerfile: mitmproxy.Dockerfile
     container_name: otterling-mitmproxy
     restart: unless-stopped
     # `./mitm-ca` on the host MUST stay owned by uid:gid 1000:1000 (the image's own built-in
@@ -71,10 +78,12 @@ services:
       # separated; update if the household's public IP changes. Empty = auth required for everyone
       # (safe default -- an unset/misconfigured value never accidentally opens the proxy).
       - PROXY_AUTH_EXEMPT_IPS=${PROXY_AUTH_EXEMPT_IPS:-}
-      # Used by mitm_nsfw_addon.py's third-tier AI classifier -- same key already deployed for
-      # the release-review pipeline (/var/lib/otterling/ci/secrets.env), reused here rather than
-      # provisioning a second one. Addon fails open (no block) if this is unset.
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      # Used by mitm_nsfw_addon.py's third-tier AI classifier (ai_classifier.py) -- a subscription
+      # OAuth token from `claude setup-token`, not a metered API key (see mitmproxy.Dockerfile).
+      # Deliberately NOT also setting ANTHROPIC_API_KEY here: it outranks this token in Claude
+      # Code's credential precedence, so leaving both set would silently defeat the switch.
+      # Addon fails open (no block) if this is unset.
+      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
       # block_reporter.py POSTs trigger-word alerts here. This container's DNS is overridden to
       # public resolvers (see `dns:` above), so it can't resolve the internal `lockprofile` service
       # name -- it reports to the PUBLIC /alerts/tamper the same way phones do, back through Caddy.
@@ -103,7 +112,14 @@ services:
       -s /home/mitmproxy/mitm_nsfw_addon.py
 
   dns-classifier:
-    image: python:3.12-slim
+    # Built from dns-classifier.Dockerfile (stock python:3.12-slim + the Claude Code CLI + an
+    # unprivileged claude-runner account) -- see that Dockerfile's header comment. Image is tagged
+    # and built via `docker compose build`; deploy_filter_server.sh runs `up -d --no-build` so a
+    # normal deploy reuses the already-built tag rather than rebuilding on every push.
+    image: otterling-dns-classifier-claude:latest
+    build:
+      context: .
+      dockerfile: dns-classifier.Dockerfile
     container_name: otterling-dns-classifier
     restart: unless-stopped
     depends_on:
@@ -118,10 +134,10 @@ services:
       - ./ai_classifier.py:/opt/otterling/ai_classifier.py:ro
       - ./domain_blocklist.py:/opt/otterling/domain_blocklist.py:ro
     environment:
-      # Same key already deployed for the release-review pipeline and mitm_nsfw_addon.py's own
-      # third-tier classifier -- reused here rather than provisioning a third one. Fails open (no
-      # block, domain resolves normally) if unset.
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      # Same subscription OAuth token as mitm_nsfw_addon.py's classifier -- see its docker-compose
+      # comment for why ANTHROPIC_API_KEY is deliberately NOT also set here. Fails open (no block,
+      # domain resolves normally) if unset.
+      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
       - DNS_MUX_LISTEN_HOST=0.0.0.0
       - DNS_MUX_LISTEN_PORT=53
       - UPSTREAM_DNS_HOST=adguardhome

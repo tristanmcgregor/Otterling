@@ -57,9 +57,9 @@ UPSTREAM_DNS_PORT = int(os.environ.get("UPSTREAM_DNS_PORT", "53"))
 CLASSIFY_CACHE_TTL_SECONDS = 24 * 60 * 60
 HOMEPAGE_FETCH_TIMEOUT_SECONDS = 5
 # Overall budget for fetch + AI classification together (ai_classifier's own call already caps at
-# ANTHROPIC_TIMEOUT_SECONDS) -- past this, fail open rather than let one slow domain hang a lookup
-# indefinitely.
-CLASSIFY_BUDGET_SECONDS = 15
+# CLAUDE_TIMEOUT_SECONDS -- higher than the old raw-API timeout since `claude -p` has real startup
+# overhead) -- past this, fail open rather than let one slow domain hang a lookup indefinitely.
+CLASSIFY_BUDGET_SECONDS = 35
 UPSTREAM_TIMEOUT_SECONDS = 5
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -214,6 +214,13 @@ class _DnsMuxProtocol(asyncio.DatagramProtocol):
         self.domains = domains
         self.cache = cache
         self.transport: asyncio.DatagramTransport | None = None
+        # De-dupes concurrent classification requests for the same not-yet-cached domain --
+        # without this, N simultaneous queries for a brand-new domain (e.g. several analytics/CDN
+        # subdomains an app hits in a burst) each independently pay the full fetch+AI-classify
+        # cost, piling redundant blocking work onto the shared executor pool and stalling every
+        # other device's DNS lookups behind it. Confirmed live: duplicate concurrent
+        # classification calls for the same domain within the same second.
+        self._inflight: dict[str, asyncio.Future] = {}
 
     def connection_made(self, transport):
         self.transport = transport
@@ -231,7 +238,9 @@ class _DnsMuxProtocol(asyncio.DatagramProtocol):
     async def _handle_query(self, data: bytes, addr):
         loop = asyncio.get_running_loop()
         # Blocking (up to ~40s on a real refresh, once/day) -- run off the event loop so it can't
-        # stall every other concurrent lookup on this single-threaded mux.
+        # stall every other concurrent lookup on this single-threaded mux. refresh_if_stale()
+        # itself de-dupes concurrent refreshes, so this is cheap for all but one caller even when
+        # many queries land at once right as the cache goes stale.
         await loop.run_in_executor(None, self.domains.refresh_if_stale)
         domain = parse_query_domain(data)
         if not domain:
@@ -251,17 +260,7 @@ class _DnsMuxProtocol(asyncio.DatagramProtocol):
             await self._forward(data, addr)
             return
 
-        try:
-            verdict = await asyncio.wait_for(
-                loop.run_in_executor(None, _fetch_and_classify, domain),
-                timeout=CLASSIFY_BUDGET_SECONDS,
-            )
-        except asyncio.TimeoutError:
-            log.info("classification budget exceeded for %s -- failing open", domain)
-            verdict = None
-        except Exception as error:
-            log.warning("classification failed for %s: %s", domain, error)
-            verdict = None
+        verdict = await self._classify_domain(domain)
 
         if verdict is True:
             self.cache.set(domain, True)
@@ -274,6 +273,37 @@ class _DnsMuxProtocol(asyncio.DatagramProtocol):
         # verdict is None -- classification itself failed or ran out of budget; fail open and
         # don't cache, so the next lookup gets a fresh attempt instead of being stuck on it.
         await self._forward(data, addr)
+
+    async def _classify_domain(self, domain: str) -> bool | None:
+        """Runs (or joins an already-running) fetch+AI-classify for `domain`. The first caller
+        for a given domain does the real work; any concurrent callers for the same domain just
+        await that same in-flight result instead of starting their own redundant fetch."""
+        loop = asyncio.get_running_loop()
+        existing = self._inflight.get(domain)
+        if existing is not None:
+            try:
+                return await asyncio.wait_for(asyncio.shield(existing), timeout=CLASSIFY_BUDGET_SECONDS)
+            except asyncio.TimeoutError:
+                return None
+
+        future: asyncio.Future = loop.create_future()
+        self._inflight[domain] = future
+        try:
+            verdict = await asyncio.wait_for(
+                loop.run_in_executor(None, _fetch_and_classify, domain),
+                timeout=CLASSIFY_BUDGET_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            log.info("classification budget exceeded for %s -- failing open", domain)
+            verdict = None
+        except Exception as error:
+            log.warning("classification failed for %s: %s", domain, error)
+            verdict = None
+        finally:
+            self._inflight.pop(domain, None)
+            if not future.done():
+                future.set_result(verdict)
+        return verdict
 
     async def _forward(self, data: bytes, addr):
         loop = asyncio.get_running_loop()
