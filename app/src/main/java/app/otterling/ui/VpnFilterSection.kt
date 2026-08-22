@@ -425,18 +425,27 @@ fun VpnFilterSection(context: Context) {
         if (exemptPackages.isEmpty()) {
             Text("No apps exempted.", style = MaterialTheme.typography.bodySmall)
         } else {
+            // Dashboard-sourced entries can't be removed from here -- see
+            // MitmExemptManager.dashboardExemptPackages's doc comment: remove() only ever touches
+            // local storage, so offering a working-looking Remove button for one of these would
+            // silently do nothing (it'd just reappear on the next exemptPackages() merge).
+            val dashboardManaged = exemptManager.dashboardExemptPackages()
             exemptPackages.forEach { pkg ->
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
                     Text(appLabel(pkg), modifier = Modifier.weight(1f))
-                    OutlinedButton(onClick = {
-                        exemptManager.remove(pkg)
-                        exemptPackages = exemptManager.exemptPackages()
-                        if (enabled) VpnFilterService.reestablish(context)
-                    }) {
-                        Text("Remove")
+                    if (pkg in dashboardManaged) {
+                        Text("Managed by dashboard", style = MaterialTheme.typography.bodySmall)
+                    } else {
+                        OutlinedButton(onClick = {
+                            exemptManager.remove(pkg)
+                            exemptPackages = exemptManager.exemptPackages()
+                            if (enabled) VpnFilterService.reestablish(context)
+                        }) {
+                            Text("Remove")
+                        }
                     }
                 }
             }

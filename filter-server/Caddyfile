@@ -24,6 +24,10 @@
 		}
 	}
 
+	# Bare host with nothing else in the URL -- send guardians straight to the dashboard instead of
+	# a blank/404 root. `redir`'s path match is exact, so this only fires for "/" itself.
+	redir / /dashboard/ 308
+
 	handle /hooks/github* {
 		# network_mode: host — webhook listens on the host, not host.docker.internal.
 		reverse_proxy 127.0.0.1:9070
@@ -109,18 +113,60 @@
 		root * /srv/dashboard-login
 		file_server
 	}
-	@dashboard path /dashboard /dashboard/* /dashboard-api/*
-	forward_auth @dashboard 127.0.0.1:8091 {
-		uri /dashboard-auth/verify
-	}
-	handle /dashboard-api/* {
-		reverse_proxy 127.0.0.1:8091 {
-			header_up Authorization "Bearer {$LOCKPROFILE_TOKEN}"
+	# Bare "/dashboard" (no trailing slash) needs the same explicit redirect as
+	# "/dashboard-login" above -- handle_path's prefix-strip below only matches
+	# "/dashboard/..." paths, so the bare form would otherwise fall through to a 404.
+	redir /dashboard /dashboard/ 308
+	# Deterministic top-to-bottom evaluation, not Caddy's usual directive-priority sorting --
+	# needed because the bearer-passthrough check below MUST run before forward_auth, and mixing
+	# a bare `forward_auth` with `handle` blocks otherwise leaves that ordering to chance.
+	route {
+		# Devices (phone/Mac) call a handful of specific /dashboard-api/* routes with their OWN
+		# LOCKPROFILE_TOKEN bearer already attached -- these must reach the backend directly,
+		# WITHOUT the browser-session forward_auth gate below, since a phone/Mac has no way to
+		# hold a dashboard login session cookie. Confirmed missing 2026-08-19: every dashboard-api
+		# call from a device was silently rejected 401 by forward_auth before ever reaching the
+		# backend's own _authorized() bearer check -- the only reason this went unnoticed for a
+		# while is that every test of these routes went straight to 127.0.0.1:8091, bypassing
+		# Caddy entirely.
+		#
+		# Deliberately scoped to an exact path+method allowlist, NOT "any /dashboard-api/* request
+		# carrying an Authorization header" (that broader form shipped once and was caught by the
+		# release pipeline's AI review before publishing: LOCKPROFILE_TOKEN is embedded in shipped
+		# client binaries, so the person being filtered can extract it and call ANY dashboard-api
+		# route with it -- a bare "has a bearer" match would let that same token POST a new
+		# Guardian PIN or PATCH this device's own settings, bypassing the guardian entirely with no
+		# admin-group/passcode check). Only the specific reads/writes the phone and Mac's own
+		# DashboardConfigStore/DashboardConfigSync/HabitCompletionReporter code actually make it
+		# through here (see those files); every guardian-authoring route -- PIN POST, settings
+		# PATCH, add/remove endpoints, device removal, poll-now -- still requires the browser
+		# session cookie via forward_auth below, same as before this device bypass existed at all.
+		@dashboardApiDeviceGet {
+			path /dashboard-api/devices/*/settings /dashboard-api/pin /dashboard-api/habits
+			method GET
+			header Authorization *
 		}
-	}
-	handle_path /dashboard/* {
-		root * /srv/dashboard
-		file_server
+		@dashboardApiDeviceComplete {
+			path /dashboard-api/habits/*/complete
+			method POST
+			header Authorization *
+		}
+		reverse_proxy @dashboardApiDeviceGet 127.0.0.1:8091
+		reverse_proxy @dashboardApiDeviceComplete 127.0.0.1:8091
+
+		@dashboard path /dashboard /dashboard/* /dashboard-api/*
+		forward_auth @dashboard 127.0.0.1:8091 {
+			uri /dashboard-auth/verify
+		}
+		handle /dashboard-api/* {
+			reverse_proxy 127.0.0.1:8091 {
+				header_up Authorization "Bearer {$LOCKPROFILE_TOKEN}"
+			}
+		}
+		handle_path /dashboard/* {
+			root * /srv/dashboard
+			file_server
+		}
 	}
 
 	encode gzip
@@ -188,18 +234,37 @@ http://192.168.0.254 {
 		root * /srv/dashboard-login
 		file_server
 	}
-	@dashboard path /dashboard /dashboard/* /dashboard-api/*
-	forward_auth @dashboard 127.0.0.1:8091 {
-		uri /dashboard-auth/verify
-	}
-	handle /dashboard-api/* {
-		reverse_proxy 127.0.0.1:8091 {
-			header_up Authorization "Bearer {$LOCKPROFILE_TOKEN}"
+	redir /dashboard /dashboard/ 308
+	# See the matching block in the main vhost above for why this is wrapped in an explicit
+	# route{} and why the bearer-passthrough check has to run before forward_auth -- including why
+	# it's a tight path+method allowlist rather than "any request with an Authorization header".
+	route {
+		@dashboardApiDeviceGet {
+			path /dashboard-api/devices/*/settings /dashboard-api/pin /dashboard-api/habits
+			method GET
+			header Authorization *
 		}
-	}
-	handle_path /dashboard/* {
-		root * /srv/dashboard
-		file_server
+		@dashboardApiDeviceComplete {
+			path /dashboard-api/habits/*/complete
+			method POST
+			header Authorization *
+		}
+		reverse_proxy @dashboardApiDeviceGet 127.0.0.1:8091
+		reverse_proxy @dashboardApiDeviceComplete 127.0.0.1:8091
+
+		@dashboard path /dashboard /dashboard/* /dashboard-api/*
+		forward_auth @dashboard 127.0.0.1:8091 {
+			uri /dashboard-auth/verify
+		}
+		handle /dashboard-api/* {
+			reverse_proxy 127.0.0.1:8091 {
+				header_up Authorization "Bearer {$LOCKPROFILE_TOKEN}"
+			}
+		}
+		handle_path /dashboard/* {
+			root * /srv/dashboard
+			file_server
+		}
 	}
 
 	handle {

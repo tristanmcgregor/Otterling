@@ -45,9 +45,27 @@ data class BlocklistEntry(
     }
 }
 
-/** Parent-managed block rules added locally, independently of the downloaded blocklist. */
+/**
+ * Parent-managed block rules, independently of the downloaded blocklist.
+ *
+ * ## Dashboard-driven entries (Phase 2 of `dashboard/SERVER_DRIVEN_CONFIG_PLAN.md`)
+ *
+ * [entries] is the union of [localEntries] (seeded defaults + anything added via this device's
+ * own Settings UI, see [app.otterling.ui.DashboardScreen]) with `blockedWebsites` from
+ * [DashboardConfigStore]'s cached `device_settings.json` record -- additive for now, matching
+ * Phase 1's [MitmExemptManager] stance: this device's own Settings UI isn't removed until Phase
+ * 8, once dashboard-driven enforcement is proven stable. [add]/[remove]/[seedDefaultsIfNeeded]
+ * all read/write [localEntries] specifically, never the merged [entries] -- same reasoning as
+ * [MitmExemptManager.localPackages]'s doc comment: baking a dashboard-sourced entry into local
+ * storage would survive a guardian later removing it from the dashboard.
+ *
+ * Each dashboard `domain` value is run through the same [normalize] a locally-typed entry goes
+ * through (see [parseStored]), so `youtube.com/shorts`-style path rules typed into the
+ * dashboard's website field work identically to one typed on-device -- no separate wire format.
+ */
 class CustomBlocklistManager(context: Context) {
-    private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    private val appContext = context.applicationContext
+    private val prefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
     init {
         seedDefaultsIfNeeded()
@@ -64,17 +82,31 @@ class CustomBlocklistManager(context: Context) {
      */
     private fun seedDefaultsIfNeeded() {
         val removedDefaults = prefs.getStringSet(KEY_REMOVED_DEFAULTS, emptySet()).orEmpty()
-        val current = entries().map { it.display() }.toSet()
+        val current = localEntries().map { it.display() }.toSet()
         val missing = DEFAULT_ENTRIES - current - removedDefaults
         if (missing.isEmpty()) return
         prefs.edit().putStringSet(KEY_ENTRIES, current + missing).remove(KEY_DOMAINS).apply()
     }
 
     fun entries(): List<BlocklistEntry> =
-        prefs.getStringSet(KEY_ENTRIES, null)
-            ?.mapNotNull { parseStored(it) }
-            ?.sortedBy { it.display() }
-            ?: legacyDomainsAsEntries()
+        (localEntries() + dashboardEntries()).distinctBy { it.display() }.sortedBy { it.display() }
+
+    private fun localEntries(): List<BlocklistEntry> =
+        prefs.getStringSet(KEY_ENTRIES, null)?.mapNotNull { parseStored(it) } ?: legacyDomainsAsEntries()
+
+    /** `blockedWebsites` entries from [DashboardConfigStore]'s cache. Public (not just folded
+     *  into [entries]) so [app.otterling.ui.DashboardScreen] can tell dashboard-sourced entries
+     *  apart from local ones -- [remove] is a no-op against these, same reasoning as
+     *  [MitmExemptManager.dashboardExemptPackages]. */
+    fun dashboardEntries(): List<BlocklistEntry> {
+        val websites = DashboardConfigStore(appContext).snapshot()?.optJSONArray("blockedWebsites") ?: return emptyList()
+        return buildList {
+            for (i in 0 until websites.length()) {
+                val domain = websites.optJSONObject(i)?.optString("domain")?.trim()
+                if (!domain.isNullOrEmpty()) parseStored(domain)?.let { add(it) }
+            }
+        }
+    }
 
     /** Domain-only rules (no path) -- what the VPN DNS filter should NXDOMAIN. */
     fun domainOnlyHosts(): Set<String> =
@@ -89,7 +121,7 @@ class CustomBlocklistManager(context: Context) {
 
     fun add(input: String): Result<String> = runCatching {
         val entry = normalize(input)
-        val updated = (entries().map { it.display() }.toSet() + entry.display())
+        val updated = (localEntries().map { it.display() }.toSet() + entry.display())
         prefs.edit()
             .putStringSet(KEY_ENTRIES, updated)
             .remove(KEY_DOMAINS) // drop legacy key once we've written the new format
@@ -100,7 +132,7 @@ class CustomBlocklistManager(context: Context) {
     fun remove(displayOrInput: String): Boolean {
         val key = runCatching { normalize(displayOrInput).display() }.getOrNull()
             ?: displayOrInput.trim().lowercase(Locale.US)
-        val current = entries().map { it.display() }.toSet()
+        val current = localEntries().map { it.display() }.toSet()
         if (key !in current) return false
         val editor = prefs.edit().putStringSet(KEY_ENTRIES, current - key).remove(KEY_DOMAINS)
         if (key in DEFAULT_ENTRIES) {

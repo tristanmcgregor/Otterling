@@ -98,40 +98,12 @@ final class XPCService: NSObject, FocusLockXPCProtocol {
 
     /// Queues an authorized protection-reducing action for the cooldown, or applies it inline when
     /// the cooldown is zero. Reports the request immediately either way -- the point of the paper
-    /// trail is that it exists at *request* time, well before the change lands.
+    /// trail is that it exists at *request* time, well before the change lands. Delegates to
+    /// `PendingActionScheduler` (shared with `DashboardConfigSync`'s dashboard-authorized removal
+    /// path) -- see that file's doc comment.
     private func schedule(_ kind: PendingActionKind, target: String = "") -> FocusLockResult {
-        let state = stateStore.snapshot()
-
-        if state.pendingActions.contains(where: { $0.kind == kind && $0.target == target }) {
-            return .denied("That change is already scheduled. Check `focuslockctl status` for when it takes effect.")
-        }
-
-        let now = Date()
-        let action = PendingAction(
-            kind: kind,
-            target: target,
-            requestedAt: now,
-            effectiveAt: now.addingTimeInterval(state.cooldownHours * 3600)
-        )
-
-        TamperReporter.report(type: "pending_action_requested", details: action.describedFully)
-
-        guard state.cooldownHours > 0 else {
-            PendingActionApplier.apply(action, stateStore: stateStore)
-            onStateChanged()
-            return .ok
-        }
-
-        stateStore.mutate { $0.pendingActions.append(action) }
-        onStateChanged()
-
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .short
-        return FocusLockResult(
-            success: true,
-            message: "Scheduled: \(action.describedFully). Takes effect \(formatter.string(from: action.effectiveAt)). "
-                + "Anyone can cancel it before then with `focuslockctl cancel \(action.id)`."
+        PendingActionScheduler.schedule(
+            kind, target: target, source: "local_admin", stateStore: stateStore, onScheduled: onStateChanged
         )
     }
 
@@ -150,11 +122,7 @@ final class XPCService: NSObject, FocusLockXPCProtocol {
             reply(FocusLockCodec.encode(FocusLockResult.denied("Invalid app payload")))
             return
         }
-        stateStore.mutate { state in
-            if !state.blockedApps.contains(where: { $0.executableName == app.executableName }) {
-                state.blockedApps.append(app)
-            }
-        }
+        ImmediateActionApplier.addBlockedApp(app, stateStore: stateStore)
         onStateChanged()
         reply(FocusLockCodec.encode(FocusLockResult.ok))
     }
@@ -211,16 +179,10 @@ final class XPCService: NSObject, FocusLockXPCProtocol {
             reply(FocusLockCodec.encode(FocusLockResult.denied("Invalid app payload")))
             return
         }
-        guard FileManager.default.fileExists(atPath: app.bundlePath) else {
+        guard ImmediateActionApplier.addProtectedApp(app, stateStore: stateStore) else {
             reply(FocusLockCodec.encode(FocusLockResult.denied("No app bundle found at \(app.bundlePath)")))
             return
         }
-        stateStore.mutate { state in
-            if !state.protectedApps.contains(where: { $0.executableName == app.executableName }) {
-                state.protectedApps.append(app)
-            }
-        }
-        AppProtector.lock(bundlePath: app.bundlePath)
         onStateChanged()
         reply(FocusLockCodec.encode(FocusLockResult.ok))
     }
@@ -240,12 +202,7 @@ final class XPCService: NSObject, FocusLockXPCProtocol {
     }
 
     func enableDNSEnforcement(reply: @escaping (Data) -> Void) {
-        stateStore.mutate { state in
-            state.dnsEnforcementEnabled = true
-        }
-        // Apply immediately -- don't wait for the enforcement loop's 15s DNS cadence.
-        let state = stateStore.snapshot()
-        DNSEnforcer.apply(cloudHost: state.cloudFilterHost, cloudEnabled: state.cloudFilterEnabled)
+        ImmediateActionApplier.enableDNSEnforcement(stateStore: stateStore)
         onStateChanged()
         reply(FocusLockCodec.encode(FocusLockResult.ok))
     }
@@ -326,10 +283,7 @@ final class XPCService: NSObject, FocusLockXPCProtocol {
     func setCloudFilterEnabled(_ enabled: Bool, passcode: String, reply: @escaping (Data) -> Void) {
         // Turning it ON is protection-increasing: immediate, no gate, no cooldown.
         if enabled {
-            stateStore.mutate { state in
-                state.cloudFilterEnabled = true
-            }
-            reapplyDNSIfEnforcing()
+            ImmediateActionApplier.enableCloudFilter(stateStore: stateStore)
             onStateChanged()
             reply(FocusLockCodec.encode(FocusLockResult.ok))
             return
@@ -439,15 +393,6 @@ final class XPCService: NSObject, FocusLockXPCProtocol {
         TamperReporter.report(type: "pending_action_cancelled", details: existing.describedFully)
         onStateChanged()
         reply(FocusLockCodec.encode(FocusLockResult(success: true, message: "Cancelled: \(existing.describedFully)")))
-    }
-
-    /// Re-resolves and re-asserts DNS immediately (rather than waiting for the enforcement loop's
-    /// 15s cadence) whenever the cloud filter host/toggle changes while DNS enforcement is
-    /// already on -- otherwise a host edit wouldn't visibly take effect for up to 15s.
-    private func reapplyDNSIfEnforcing() {
-        let state = stateStore.snapshot()
-        guard state.dnsEnforcementEnabled else { return }
-        DNSEnforcer.apply(cloudHost: state.cloudFilterHost, cloudEnabled: state.cloudFilterEnabled)
     }
 
     func checkForUpdate(reply: @escaping (Data) -> Void) {

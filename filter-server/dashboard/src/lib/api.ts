@@ -24,9 +24,14 @@ export interface BlockedWebsite {
   addedAt: number;
 }
 
+// Global, shared across every device (see lockprofile_service.py's HABITS_PATH) -- a rule on
+// ANY device can reference a habit verified on a different one. doneToday/verifiedAt are
+// computed server-side from whichever device most recently reported this habit's completion.
 export interface Habit {
   id: string;
   name: string;
+  doneToday: boolean;
+  verifiedAt: number | null;
 }
 
 export interface RuleSchedule {
@@ -52,18 +57,61 @@ export interface AppBudget {
   dailyLimitMinutes: number | null;
 }
 
+export interface TriggerWord {
+  word: string;
+  addedAt: number;
+}
+
+// appId's meaning is platform-dependent: an Android package name (e.g. com.example.app) for an
+// "android" device, or a process/executable name (e.g. "Safari", matching what AppBlockEnforcer.swift
+// matches running processes on, not a bundle identifier or display name) for a "macos" device.
+export interface BlockedApp {
+  appId: string;
+  addedAt: number;
+}
+
+// macos-only: an app kept running and undeletable (filesystem-locked via schg), the inverse of
+// BlockedApp -- see ProtectedApp in macos/FocusLock/Sources/FocusLockShared/Models.swift.
+export interface ProtectedApp {
+  displayName: string;
+  executableName: string;
+  bundlePath: string;
+  addedAt: number;
+}
+
+// Computed server-side from device_id shape (see lockprofile_service.py's _detect_platform) --
+// not stored, not client-settable. protections/vpnBypassApps/blockedWebsites/rules/habits/
+// appBudgets/triggerWords are Android-only (consumed exclusively by the Android app's
+// DashboardConfigStore); vpnFilter/blockedApps are shared with platform-dependent meaning (see
+// their own doc comments); protectedApps/cooldownHours/proxyFilter/cloudFilterHost/
+// cloudFilterEnabled are macos-only (consumed by DashboardConfigSync.swift). The dashboard UI
+// uses this field to show/hide each section per selected device.
+export type DevicePlatform = "macos" | "android";
+
 export interface DeviceSettings {
   device_name: string;
+  platform: DevicePlatform;
   protections: Protections;
   vpnFilter: { enabled: boolean };
   vpnBypassApps: BypassApp[];
   blockedWebsites: BlockedWebsite[];
   frictionDelay: { enabled: boolean; seconds: number };
-  habits: Habit[];
+  // habits is NOT here -- moved to the global library, see api.getHabits() below.
   rules: Rule[];
   appBudgets: AppBudget[];
+  triggerWords: TriggerWord[];
+  blockedApps: BlockedApp[];
   guardianEmail: string;
   updatedAt: number | null;
+  // macos-only -- null means "no opinion yet" (see lockprofile_service.py's
+  // _default_device_settings comment). The dashboard UI only shows these controls when
+  // platform === "macos"; a null value there just means the guardian hasn't touched that
+  // control yet.
+  protectedApps: ProtectedApp[];
+  cooldownHours: number | null;
+  proxyFilter: { enabled: boolean; forceViaFirewall: boolean } | null;
+  cloudFilterHost: string | null;
+  cloudFilterEnabled: boolean | null;
 }
 
 export interface DeviceSummary {
@@ -71,6 +119,7 @@ export interface DeviceSummary {
   device_name: string;
   updatedAt: number | null;
   alertCount24h: number;
+  platform: DevicePlatform;
 }
 
 export interface ActivityEvent {
@@ -114,6 +163,8 @@ const enc = encodeURIComponent;
 
 export const api = {
   listDevices: () => request<{ devices: DeviceSummary[] }>("/devices"),
+  removeDevice: (deviceId: string) =>
+    request<{ status: string }>(`/devices/${enc(deviceId)}`, { method: "DELETE" }),
 
   getSettings: (deviceId: string) => request<DeviceSettings>(`/devices/${enc(deviceId)}/settings`),
 
@@ -150,15 +201,15 @@ export const api = {
       { method: "DELETE" }
     ),
 
-  addHabit: (deviceId: string, name: string) =>
-    request<{ habits: Habit[] }>(`/devices/${enc(deviceId)}/habits`, {
+  // Global, shared across every device -- NOT scoped under /devices/<id>, see Habit's doc comment.
+  getHabits: () => request<{ habits: Habit[] }>("/habits"),
+  addHabit: (name: string) =>
+    request<{ habits: Habit[] }>("/habits", {
       method: "POST",
       body: JSON.stringify({ name }),
     }),
-  removeHabit: (deviceId: string, id: string) =>
-    request<{ habits: Habit[] }>(`/devices/${enc(deviceId)}/habits/${enc(id)}`, {
-      method: "DELETE",
-    }),
+  removeHabit: (id: string) =>
+    request<{ habits: Habit[] }>(`/habits/${enc(id)}`, { method: "DELETE" }),
 
   addRule: (deviceId: string, rule: Partial<Rule>) =>
     request<{ rules: Rule[] }>(`/devices/${enc(deviceId)}/rules`, {
@@ -186,11 +237,65 @@ export const api = {
       { method: "DELETE" }
     ),
 
-  setPin: (deviceId: string, pin: string) =>
-    request<{ status: string }>(`/devices/${enc(deviceId)}/pin`, {
+  addTriggerWord: (deviceId: string, word: string) =>
+    request<{ triggerWords: TriggerWord[] }>(`/devices/${enc(deviceId)}/trigger-words`, {
+      method: "POST",
+      body: JSON.stringify({ word }),
+    }),
+  removeTriggerWord: (deviceId: string, word: string) =>
+    request<{ triggerWords: TriggerWord[] }>(
+      `/devices/${enc(deviceId)}/trigger-words/${enc(word)}`,
+      { method: "DELETE" }
+    ),
+
+  addBlockedApp: (deviceId: string, appId: string) =>
+    request<{ blockedApps: BlockedApp[] }>(`/devices/${enc(deviceId)}/blocked-apps`, {
+      method: "POST",
+      body: JSON.stringify({ appId }),
+    }),
+  removeBlockedApp: (deviceId: string, appId: string) =>
+    request<{ blockedApps: BlockedApp[] }>(
+      `/devices/${enc(deviceId)}/blocked-apps/${enc(appId)}`,
+      { method: "DELETE" }
+    ),
+
+  // macos-only. Removal is delayed by the Mac's own cooldown, unlike removeBlockedApp above --
+  // see PendingActionScheduler.swift.
+  addProtectedApp: (deviceId: string, app: Omit<ProtectedApp, "addedAt">) =>
+    request<{ protectedApps: ProtectedApp[] }>(`/devices/${enc(deviceId)}/protected-apps`, {
+      method: "POST",
+      body: JSON.stringify(app),
+    }),
+  removeProtectedApp: (deviceId: string, executableName: string) =>
+    request<{ protectedApps: ProtectedApp[] }>(
+      `/devices/${enc(deviceId)}/protected-apps/${enc(executableName)}`,
+      { method: "DELETE" }
+    ),
+
+  // One shared PIN for the whole fleet, not per-device -- every phone syncs the same value from
+  // here (see lockprofile_service.py's GUARDIAN_PIN_PATH).
+  getPin: () => request<{ pin: string | null; updatedAt: number | null }>("/pin"),
+  setPin: (pin: string) =>
+    request<{ pin: string; updatedAt: number }>("/pin", {
       method: "POST",
       body: JSON.stringify({ pin }),
     }),
+
+  // Wakes every registered phone via FCM right now instead of waiting out
+  // MacTamperPollWorker's 15-minute WorkManager floor (see lockprofile_service.py's
+  // _send_fcm_wake). notified is how many tokens the push actually went to -- 0 with
+  // fcmConfigured: true usually means no phone has registered a token yet.
+  pollNow: () =>
+    request<{ status: string; notified: number; fcmConfigured: boolean }>("/poll-now", {
+      method: "POST",
+    }),
 };
+
+// Not under BASE ("/dashboard-api") -- this is one of the two /dashboard-auth/* routes Caddy lets
+// through without the forward_auth session gate (the gate itself lives behind this route). See
+// lockprofile_service.py's _handle_dashboard_logout.
+export function logout(): Promise<void> {
+  return fetch("/dashboard-auth/logout", { method: "POST" }).then(() => undefined);
+}
 
 export { ApiError };

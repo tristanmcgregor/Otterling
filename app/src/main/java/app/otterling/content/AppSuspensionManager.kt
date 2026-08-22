@@ -8,11 +8,29 @@ import app.otterling.admin.DeviceAdminReceiverImpl
 import app.otterling.data.AppDatabase
 import app.otterling.data.BlockedApp
 import app.otterling.restrictions.PackageBlockEnforcer
+import app.otterling.restrictions.PackageDisableStore
 import app.otterling.tamper.TamperEventLogger
 
 /**
  * Blocks apps via package suspend (or disable-user fallback for device-admin apps) and persists
  * the chosen list so it can be re-applied after a reboot. Requires Device Owner.
+ *
+ * ## Dashboard-driven blocks (Phase 7 of `dashboard/SERVER_DRIVEN_CONFIG_PLAN.md`)
+ *
+ * [blockedApps] additively merges the dashboard's `blockedApps` list (keyed by `appId`, the
+ * Android package name -- there's no separate synthetic id, since [BlockedApp.packageName] is
+ * already the Room primary key) into whatever's in Room, dashboard winning on `blocked` for a
+ * package present on both sides (there's no on-device production UI for this list today --
+ * [app.otterling.monitoring.DebugUnsuspendReceiver] is the only other writer, debug-only -- so
+ * this conflict case is mostly theoretical, but "server wins" stays consistent with every other
+ * phase). [setBlocked]/[remove] only ever touch Room, same as [app.otterling.focus.AppTimeBudgetManager]'s
+ * Phase 4 pattern -- no risk of a merged read leaking into a local write.
+ *
+ * [reapplyAll] additionally clears a dashboard-managed package's [PackageDisableStore] exemption
+ * before reasserting the block, so tapping "Undisable" in the on-device "Disabled apps" screen
+ * doesn't permanently defeat a guardian's dashboard block the way it would a local/debug one --
+ * confirmed as the intended behavior when this phase was built, matching decision #1's "server
+ * always wins" and how dashboard-driven protections (Phase 3) already survive a local override.
  */
 class AppSuspensionManager(private val context: Context) {
     private val dao = AppDatabase.getInstance(context).blockedAppDao()
@@ -20,7 +38,29 @@ class AppSuspensionManager(private val context: Context) {
     private val dpm = context.getSystemService(DevicePolicyManager::class.java)
     private val admin = ComponentName(context, DeviceAdminReceiverImpl::class.java)
 
-    suspend fun blockedApps(): List<BlockedApp> = dao.getAll()
+    suspend fun blockedApps(): List<BlockedApp> {
+        val local = dao.getAll()
+        val dashboardPackages = dashboardBlockedPackages()
+        if (dashboardPackages.isEmpty()) return local
+
+        val localByPackage = local.associateBy { it.packageName }
+        val packages = localByPackage.keys + dashboardPackages
+        return packages.map { pkg ->
+            if (pkg in dashboardPackages) BlockedApp(packageName = pkg, blocked = true) else localByPackage.getValue(pkg)
+        }
+    }
+
+    /** True if [packageName]'s block currently comes from the dashboard -- lets on-device UI hide
+     *  or relabel an Undisable button that wouldn't stick past the next [reapplyAll]. */
+    fun isDashboardManaged(packageName: String): Boolean = packageName in dashboardBlockedPackages()
+
+    private fun dashboardBlockedPackages(): Set<String> {
+        val entries = DashboardConfigStore(context).snapshot()?.optJSONArray("blockedApps") ?: return emptySet()
+        return (0 until entries.length())
+            .mapNotNull { entries.optJSONObject(it)?.optString("appId") }
+            .filter { it.isNotBlank() }
+            .toSet()
+    }
 
     /** Persists the choice and applies it immediately. Returns true if the system accepted it. */
     suspend fun setBlocked(packageName: String, blocked: Boolean): Boolean {
@@ -41,7 +81,8 @@ class AppSuspensionManager(private val context: Context) {
      * someone getting around a block, not just routine reapplication, so it alerts.
      */
     suspend fun reapplyAll() {
-        dao.getAll().forEach { entry ->
+        val dashboardPackages = dashboardBlockedPackages()
+        blockedApps().forEach { entry ->
             if (entry.blocked && !isCurrentlyBlocked(entry.packageName)) {
                 runCatching {
                     TamperEventLogger(context).log(
@@ -51,12 +92,19 @@ class AppSuspensionManager(private val context: Context) {
                     )
                 }
             }
+            // A dashboard-managed block must survive an on-device Undisable tap -- see this
+            // class's Phase 7 doc. Clearing the exemption here (before setBlocked) is what makes
+            // the immediately-following call actually re-suspend instead of silently no-op'ing on
+            // PackageBlockEnforcer's isExempt() check.
+            if (entry.blocked && entry.packageName in dashboardPackages) {
+                PackageDisableStore(context).markBlocked(entry.packageName)
+            }
             PackageBlockEnforcer.setBlocked(context, entry.packageName, entry.blocked)
         }
     }
 
     suspend fun releaseAll() {
-        dao.getAll().forEach { PackageBlockEnforcer.setBlocked(context, it.packageName, blocked = false) }
+        blockedApps().forEach { PackageBlockEnforcer.setBlocked(context, it.packageName, blocked = false) }
     }
 
     private fun isCurrentlyBlocked(packageName: String): Boolean {

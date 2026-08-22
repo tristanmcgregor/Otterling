@@ -5,12 +5,18 @@ import android.os.UserManager
 /**
  * Stock Android Device Owner restrictions — no Knox SDK required.
  * See https://developer.android.com/reference/android/os/UserManager for each key.
+ *
+ * [dashboardKey], where non-null, is the matching field name in the dashboard's `protections`
+ * object (see `filter-server/dashboard/SERVER_DRIVEN_CONFIG_PLAN.md`'s Phase 3) -- consumed by
+ * [RestrictionPreferences.isDesired] to let the dashboard drive this restriction's desired state.
+ * Null for the two restrictions below with no dashboard field yet (not part of the plan's mapped
+ * schema).
  */
-enum class Restriction(val userManagerKey: String, val displayName: String) {
-    SAFE_BOOT(UserManager.DISALLOW_SAFE_BOOT, "Block Safe Mode boot"),
-    FACTORY_RESET(UserManager.DISALLOW_FACTORY_RESET, "Block factory reset"),
-    DEBUGGING_FEATURES(UserManager.DISALLOW_DEBUGGING_FEATURES, "Block USB debugging"),
-    ADD_USER(UserManager.DISALLOW_ADD_USER, "Block guest mode / additional users"),
+enum class Restriction(val userManagerKey: String, val displayName: String, val dashboardKey: String? = null) {
+    SAFE_BOOT(UserManager.DISALLOW_SAFE_BOOT, "Block Safe Mode boot", "safeMode"),
+    FACTORY_RESET(UserManager.DISALLOW_FACTORY_RESET, "Block factory reset", "factoryReset"),
+    DEBUGGING_FEATURES(UserManager.DISALLOW_DEBUGGING_FEATURES, "Block USB debugging", "usbDebugging"),
+    ADD_USER(UserManager.DISALLOW_ADD_USER, "Block guest mode / additional users", "guestMode"),
 
     // Closes the "build a custom APK to game the MITM-exemption heuristic" gap: the auto-exemption
     // heuristic (PinningFailureTracker) reacts to *observed connection shape*, not real cryptographic

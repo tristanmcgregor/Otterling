@@ -170,6 +170,11 @@ services:
       - LOCKPROFILE_TOKEN=${LOCKPROFILE_TOKEN:?set LOCKPROFILE_TOKEN in .env}
       - FLEET_WEBHOOK_SECRET=${FLEET_WEBHOOK_SECRET:-}
       - LOCKPROFILE_LISTEN_PORT=8091
+      # Maps hostname/IP-based device_ids (Fleet webhook display names, block_reporter's client
+      # IPs) onto the one canonical IOPlatformUUID-based id TamperReporter.swift/
+      # install_lock_profile.py already use for the same physical Mac -- see
+      # lockprofile_service.py's DEVICE_ID_ALIASES doc for why this exists.
+      - DEVICE_ID_ALIASES=${DEVICE_ID_ALIASES:-}
       # Device-settings dashboard's own login (see lockprofile_service.py's dashboard-session
       # section and Caddyfile's /dashboard-auth/*) -- blank DASHBOARD_LOGIN_PASSWORD means the
       # login route always rejects, matching the project's fail-closed stance for anything gating

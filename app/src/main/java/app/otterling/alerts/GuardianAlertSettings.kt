@@ -1,6 +1,7 @@
 package app.otterling.alerts
 
 import android.content.Context
+import app.otterling.content.DashboardConfigStore
 
 /**
  * Shared alert-detection settings: what counts as a flagged event (trigger words, watched apps),
@@ -8,6 +9,15 @@ import android.content.Context
  * recipient/number/cap. Kept under this name (rather than renamed) so the existing on-device
  * SharedPreferences file -- and whatever trigger words/watched apps a user already configured --
  * isn't silently reset by a rename.
+ *
+ * ## Dashboard-driven trigger words (Phase 6 of `dashboard/SERVER_DRIVEN_CONFIG_PLAN.md`)
+ *
+ * [triggerWords] additively merges the dashboard's `triggerWords` list into whatever's stored
+ * locally, same union approach as the other list managers (Phase 1/2). [localTriggerWords] is the
+ * local-only value the on-device bulk-edit dialog reads/writes and [seedDefaultTriggerWordsIfNeeded]
+ * seeds -- both must stay local-only, not the merged accessor, or a guardian's dashboard-added
+ * words would get silently baked into local storage and outlive their removal from the dashboard
+ * (the same bug class fixed in [app.otterling.content.MitmExemptManager] during Phase 1).
  */
 class GuardianAlertSettings(context: Context) {
     private val appContext = context.applicationContext
@@ -17,12 +27,25 @@ class GuardianAlertSettings(context: Context) {
         seedDefaultTriggerWordsIfNeeded()
     }
 
-    fun triggerWords(): List<String> =
+    fun triggerWords(): List<String> = (localTriggerWords() + dashboardTriggerWords()).distinct()
+
+    /** The raw local-only list, as edited by the on-device bulk-edit dialog. Excludes
+     *  dashboard-sourced words -- see this class's Phase 6 doc. */
+    fun localTriggerWords(): List<String> =
         prefs.getString(KEY_TRIGGERS, "")
             .orEmpty()
             .lines()
             .map { it.trim() }
             .filter { it.isNotEmpty() }
+
+    /** Words currently coming from the dashboard -- exposed so on-device UI can list them
+     *  read-only instead of letting the bulk-edit dialog silently drop and re-add them. */
+    fun dashboardTriggerWords(): List<String> {
+        val entries = DashboardConfigStore(appContext).snapshot()?.optJSONArray("triggerWords") ?: return emptyList()
+        return (0 until entries.length())
+            .mapNotNull { entries.optJSONObject(it)?.optString("word") }
+            .filter { it.isNotBlank() }
+    }
 
     fun setTriggerWords(raw: String) {
         prefs.edit().putString(KEY_TRIGGERS, raw).apply()
@@ -66,7 +89,7 @@ class GuardianAlertSettings(context: Context) {
      */
     private fun seedDefaultTriggerWordsIfNeeded() {
         if (prefs.getBoolean(KEY_SEEDED_DEFAULT_TRIGGERS, false)) return
-        val merged = (triggerWords().toSet() + DEFAULT_TRIGGER_WORDS).sorted()
+        val merged = (localTriggerWords().toSet() + DEFAULT_TRIGGER_WORDS).sorted()
         prefs.edit()
             .putString(KEY_TRIGGERS, merged.joinToString("\n"))
             .putBoolean(KEY_SEEDED_DEFAULT_TRIGGERS, true)

@@ -47,6 +47,7 @@ import androidx.compose.ui.unit.dp
 import app.otterling.admin.DeviceOwnerManager
 import app.otterling.alerts.FcmTokenRegistrar
 import app.otterling.alerts.MacTamperPollWorker
+import app.otterling.content.AppSuspensionManager
 import app.otterling.content.BlocklistRefreshWorker
 import app.otterling.data.ProtectedApp
 import app.otterling.knox.KnoxLicenseManager
@@ -63,6 +64,7 @@ import app.otterling.restrictions.DeviceRestrictionsManager
 import app.otterling.restrictions.PackageDisableStore
 import app.otterling.restrictions.Restriction
 import app.otterling.restrictions.RestrictionEnforcementWorker
+import app.otterling.restrictions.RestrictionPreferences
 import app.otterling.tamper.TamperEvent
 import app.otterling.tamper.TamperEventLogger
 import app.otterling.ui.AccessibilityServiceSection
@@ -276,10 +278,6 @@ class MainActivity : ComponentActivity() {
                         )
                         Screen.Settings -> SettingsScreen(
                             onBack = { screen = Screen.Home },
-                            onChangePin = {
-                                pinAuthManager.clearPin()
-                                screen = Screen.PinEntry
-                            },
                         ) {
                             ProtectionControlSection()
                             AccountabilityPartnerSection(applicationContext)
@@ -560,6 +558,7 @@ class MainActivity : ComponentActivity() {
             Restriction.entries.associateWith { restrictionsManager.isEnabled(it) }
         }
         val uninstallBlocked = remember(refreshTrigger) { restrictionsManager.isUninstallBlocked() }
+        val restrictionPreferences = remember { RestrictionPreferences(applicationContext) }
         val batteryExempt = remember(refreshTrigger) { batteryManager.isExempt() }
         LaunchedEffect(refreshTrigger) {
             recentEvents = tamperLogger.recent(5)
@@ -604,7 +603,11 @@ class MainActivity : ComponentActivity() {
                     restrictionsManager.setUninstallBlocked(it)
                     refreshTrigger++
                 },
-                description = "Require Device Owner to remove protected apps",
+                description = if (restrictionPreferences.isUninstallBlockDashboardManaged()) {
+                    "Managed by dashboard — a change here reverts automatically within 5 minutes"
+                } else {
+                    "Require Device Owner to remove protected apps"
+                },
                 emphasizeLabel = true,
             )
 
@@ -615,6 +618,11 @@ class MainActivity : ComponentActivity() {
                     onCheckedChange = {
                         restrictionsManager.setEnabled(restriction, it)
                         refreshTrigger++
+                    },
+                    description = if (restrictionPreferences.isDashboardManaged(restriction)) {
+                        "Managed by dashboard — a change here reverts automatically within 5 minutes"
+                    } else {
+                        null
                     },
                 )
             }
@@ -711,11 +719,16 @@ class MainActivity : ComponentActivity() {
     private fun DisabledAppsSection() {
         val coroutineScope = rememberCoroutineScope()
         val disableStore = remember { PackageDisableStore(applicationContext) }
+        val suspensionManager = remember { AppSuspensionManager(applicationContext) }
         var refreshTrigger by remember { mutableIntStateOf(0) }
         var entries by remember { mutableStateOf<List<PackageDisableStore.Entry>>(emptyList()) }
+        var dashboardManaged by remember { mutableStateOf<Set<String>>(emptySet()) }
 
         LaunchedEffect(refreshTrigger) {
             entries = withContext(Dispatchers.IO) { disableStore.visibleEntries() }
+            dashboardManaged = entries.map { it.packageName }
+                .filter { suspensionManager.isDashboardManaged(it) }
+                .toSet()
         }
 
         SectionCard(
@@ -744,34 +757,42 @@ class MainActivity : ComponentActivity() {
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        Button(
-                            onClick = {
-                                coroutineScope.launch {
-                                    withContext(Dispatchers.IO) {
-                                        disableStore.undisable(entry.packageName)
-                                    }
-                                    refreshTrigger++
-                                }
-                            },
+                    if (entry.packageName in dashboardManaged) {
+                        Text(
+                            "Managed by dashboard -- Undisable won't stick past the next check-in",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    } else {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
-                            Text("Undisable")
-                        }
-                        if (!entry.blocked) {
-                            OutlinedButton(
+                            Button(
                                 onClick = {
                                     coroutineScope.launch {
                                         withContext(Dispatchers.IO) {
-                                            disableStore.disable(entry.packageName)
+                                            disableStore.undisable(entry.packageName)
                                         }
                                         refreshTrigger++
                                     }
                                 },
                             ) {
-                                Text("Disable again")
+                                Text("Undisable")
+                            }
+                            if (!entry.blocked) {
+                                OutlinedButton(
+                                    onClick = {
+                                        coroutineScope.launch {
+                                            withContext(Dispatchers.IO) {
+                                                disableStore.disable(entry.packageName)
+                                            }
+                                            refreshTrigger++
+                                        }
+                                    },
+                                ) {
+                                    Text("Disable again")
+                                }
                             }
                         }
                     }

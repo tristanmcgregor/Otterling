@@ -209,6 +209,7 @@ fun TimeBudgetsSection(context: Context) {
     var installedApps by remember { mutableStateOf<List<InstalledAppInfo>>(emptyList()) }
     var showAppPicker by remember { mutableStateOf(false) }
     var pendingPackage by remember { mutableStateOf<String?>(null) }
+    val dashboardManaged = remember(refreshTrigger) { budgetManager.dashboardManagedPackages() }
 
     LaunchedEffect(refreshTrigger) {
         budgets = budgetManager.budgets()
@@ -288,13 +289,17 @@ fun TimeBudgetsSection(context: Context) {
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(budget.packageName, modifier = Modifier.weight(1f))
-                    TextButton(onClick = {
-                        coroutineScope.launch {
-                            budgetManager.removeBudget(budget.packageName)
-                            refreshTrigger++
+                    if (budget.packageName in dashboardManaged) {
+                        Text("Managed by dashboard", style = MaterialTheme.typography.bodySmall)
+                    } else {
+                        TextButton(onClick = {
+                            coroutineScope.launch {
+                                budgetManager.removeBudget(budget.packageName)
+                                refreshTrigger++
+                            }
+                        }) {
+                            Text("Remove")
                         }
-                    }) {
-                        Text("Remove")
                     }
                 }
                 val subText = budget.subLimitMinutes?.let { " (${budget.subLimitLabel ?: "sub-limit"}: ${it} min)" } ?: ""
@@ -1164,6 +1169,7 @@ fun HabitRulesSection(context: Context) {
                         triggerLabel = appLabel(rule.triggerPackageName),
                         targetLabel = rule.targetPackageNames().joinToString(", ") { appLabel(it) },
                         now = now,
+                        dashboardManaged = habitRuleManager.isDashboardManaged(rule),
                         onEdit = {
                             wizardRule = rule
                             wizardOpen = true
@@ -1430,6 +1436,7 @@ private fun HabitRuleRow(
     triggerLabel: String,
     targetLabel: String,
     now: Long,
+    dashboardManaged: Boolean,
     onEdit: () -> Unit,
     onEnabledChange: (Boolean) -> Unit,
     onRemove: () -> Unit,
@@ -1482,20 +1489,24 @@ private fun HabitRuleRow(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(if (rule.enabled) "Enabled" else "Disabled", style = MaterialTheme.typography.bodySmall)
-                    Switch(checked = rule.enabled, onCheckedChange = onEnabledChange)
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(0.dp)) {
-                    IconButton(onClick = onEdit) {
-                        Icon(Icons.Default.Edit, contentDescription = "Edit rule")
+                if (dashboardManaged) {
+                    Text("Managed by dashboard", style = MaterialTheme.typography.bodySmall)
+                } else {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(if (rule.enabled) "Enabled" else "Disabled", style = MaterialTheme.typography.bodySmall)
+                        Switch(checked = rule.enabled, onCheckedChange = onEnabledChange)
                     }
-                    IconButton(onClick = onRemove) {
-                        Icon(
-                            Icons.Default.Delete,
-                            contentDescription = "Remove rule",
-                            tint = MaterialTheme.colorScheme.error,
-                        )
+                    Row(horizontalArrangement = Arrangement.spacedBy(0.dp)) {
+                        IconButton(onClick = onEdit) {
+                            Icon(Icons.Default.Edit, contentDescription = "Edit rule")
+                        }
+                        IconButton(onClick = onRemove) {
+                            Icon(
+                                Icons.Default.Delete,
+                                contentDescription = "Remove rule",
+                                tint = MaterialTheme.colorScheme.error,
+                            )
+                        }
                     }
                 }
             }

@@ -22,7 +22,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -31,7 +30,6 @@ import androidx.compose.ui.unit.dp
 @Composable
 fun SettingsScreen(
     onBack: () -> Unit,
-    onChangePin: () -> Unit,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     Column(
@@ -72,9 +70,6 @@ fun SettingsScreen(
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             content()
-            TextButton(onClick = onChangePin) {
-                Text("Change PIN")
-            }
             Spacer(Modifier.height(16.dp))
         }
     }

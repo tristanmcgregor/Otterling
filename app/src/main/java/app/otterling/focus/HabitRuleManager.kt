@@ -1,6 +1,7 @@
 package app.otterling.focus
 
 import android.content.Context
+import app.otterling.content.DashboardConfigStore
 import app.otterling.data.AppDatabase
 import app.otterling.restrictions.PackageBlockEnforcer
 import app.otterling.tamper.TamperEventLogger
@@ -29,6 +30,32 @@ import kotlinx.coroutines.sync.withLock
  * so it's safe (and expected) to call it periodically for drift recovery, exactly like the other
  * enforcement managers -- this is also what makes time-windowed rules transition on time even
  * without the trigger app being reopened, since it's called every few minutes regardless.
+ *
+ * ## Dashboard-driven rules (Phase 5 of `dashboard/SERVER_DRIVEN_CONFIG_PLAN.md`)
+ *
+ * [rules] additively merges the dashboard's `rules` list (see [dashboardRules]) alongside whatever
+ * is in Room, same union approach as Phase 1/2's list managers. Every dashboard rule is modeled as
+ * a *time-windowed* rule -- the dashboard wizard always sets a schedule, but the on-device model
+ * can't combine a time window with a "daily budget" unlock duration on the same rule, so the
+ * dashboard's `dailyBudgetMinutes` field is intentionally not enforced here (it's stored
+ * server-side only; revisit if this needs tightening later). Being windowed means these synthetic
+ * rules need no persisted grant state ([HabitRule.lastGrantedEpochDay]/[unlockUntilMillis]) --
+ * [isTargetUnlocked] re-derives their windowed verdict fresh every call, so there's nothing to
+ * write back and no Room row is ever created for them. [evaluateTrigger] already excludes
+ * time-windowed rules from its (Room-only, `dao.forTrigger`) grant path, so it needs no changes.
+ * A dashboard rule's synthetic [HabitRule.id] is always `<= 0` (Room's autoGenerate primary keys
+ * start at 1) -- [isDashboardManaged] and the on-device rule-list UI rely on that to hide
+ * edit/enable/remove controls that wouldn't do anything (there's no Room row for them to act on).
+ *
+ * ## Cross-device rules: global habits + completion reporting
+ *
+ * Habits themselves are no longer part of this (or any) device's own settings record -- they're
+ * a single library shared across the whole fleet (see [DashboardConfigStore.globalHabitsSnapshot],
+ * `lockprofile_service.py`'s `HABITS_PATH`), so a rule stored under a DIFFERENT device (e.g. a
+ * Mac rule gating an app on that Mac) can reference the exact same habit this phone verifies via
+ * HabitShare. [evaluateTrigger] reports every habit HabitShare confirms done today to the server
+ * (see [HabitCompletionReporter]) regardless of whether any of THIS phone's own local rules
+ * reference it -- the other device's rule evaluation has no other way to see it.
  */
 class HabitRuleManager(private val context: Context) {
     private val dao = AppDatabase.getInstance(context).habitRuleDao()
@@ -47,7 +74,81 @@ class HabitRuleManager(private val context: Context) {
     // call on every scan" guarantee this class already documents.
     private val evaluationMutex = Mutex()
 
-    suspend fun rules(): List<HabitRule> = dao.getAll()
+    suspend fun rules(): List<HabitRule> = dao.getAll() + dashboardRules()
+
+    /** True if [rule] came from [dashboardRules] rather than Room -- see this class's Phase 5 doc. */
+    fun isDashboardManaged(rule: HabitRule): Boolean = rule.id <= 0L
+
+    /** Parses the dashboard's `rules` list into synthetic, always-windowed [HabitRule]s. Never
+     *  persisted -- see this class's Phase 5 doc for why that's safe. Skips any entry missing a
+     *  package name (older rules saved before the dashboard collected one) or a valid schedule. */
+    private fun dashboardRules(): List<HabitRule> {
+        val snapshot = DashboardConfigStore(context).snapshot() ?: return emptyList()
+        val entries = snapshot.optJSONArray("rules") ?: return emptyList()
+        // Habits moved to a global library shared across every device (see
+        // lockprofile_service.py's LIST_ENDPOINTS comment) -- no longer part of this device's own
+        // settings snapshot, so this reads DashboardConfigStore's separate global-habits cache
+        // instead of `snapshot.optJSONArray("habits")`.
+        val habitNamesById = DashboardConfigStore(context).globalHabitsSnapshot()
+            ?.optJSONArray("habits")?.let { habits ->
+                (0 until habits.length()).mapNotNull { habits.optJSONObject(it) }
+                    .associate { it.optString("id") to it.optString("name") }
+            } ?: emptyMap()
+
+        val result = mutableListOf<HabitRule>()
+        for (i in 0 until entries.length()) {
+            val entry = entries.optJSONObject(i) ?: continue
+            val appId = entry.optString("appId").takeIf { it.isNotBlank() } ?: continue
+            val schedule = entry.optJSONObject("schedule") ?: continue
+            val start = parseTimeToMinuteOfDay(schedule.optString("startTime"))
+            val end = parseTimeToMinuteOfDay(schedule.optString("endTime"))
+            if (start == null || end == null) continue
+
+            val habitIds = entry.optJSONArray("requiredHabitIds")
+            val habitNames = habitIds?.let { ids ->
+                (0 until ids.length()).mapNotNull { habitNamesById[ids.optString(it)] }
+            } ?: emptyList()
+
+            val daysOfWeek = schedule.optJSONArray("daysOfWeek")?.let { days ->
+                (0 until days.length()).mapNotNull { jsDayOfWeekToJava(days.optInt(it, -1)) }.toSet()
+            }?.takeIf { it.isNotEmpty() } ?: DayOfWeek.entries.toSet()
+
+            result += HabitRule(
+                id = dashboardRuleSyntheticId(entry.optString("id")),
+                triggerPackageName = HabitTrackerScanner.HABITSHARE_PACKAGE_NAME,
+                targetPackageName = appId,
+                unlockMinutes = 0,
+                habitName = encodeRequiredHabitNames(habitNames),
+                windowStartMinute = start,
+                windowEndMinute = end,
+                daysOfWeekMask = encodeDaysOfWeek(daysOfWeek),
+            )
+        }
+        return result
+    }
+
+    /** Room's autoGenerate primary keys start at 1, so any id `<= 0` is guaranteed to never
+     *  collide with a real local rule -- see [isDashboardManaged]. */
+    private fun dashboardRuleSyntheticId(dashboardId: String): Long =
+        -(1L + (dashboardId.hashCode().toLong() and 0x7FFFFFFFL))
+
+    /** "HH:MM" -> minutes since midnight, or null if malformed. */
+    private fun parseTimeToMinuteOfDay(text: String): Int? {
+        val parts = text.split(":")
+        if (parts.size != 2) return null
+        val hour = parts[0].toIntOrNull() ?: return null
+        val minute = parts[1].toIntOrNull() ?: return null
+        if (hour !in 0..23 || minute !in 0..59) return null
+        return hour * 60 + minute
+    }
+
+    /** JS `Date.getDay()` convention (0=Sunday..6=Saturday, used by the dashboard) to
+     *  [DayOfWeek] (1=Monday..7=Sunday). Null for an out-of-range value. */
+    private fun jsDayOfWeekToJava(jsDay: Int): DayOfWeek? = when (jsDay) {
+        0 -> DayOfWeek.SUNDAY
+        in 1..6 -> DayOfWeek.of(jsDay)
+        else -> null
+    }
 
     /**
      * [requiredHabitNames] empty means "any/all habits complete" (the original whole-tracker
@@ -142,11 +243,13 @@ class HabitRuleManager(private val context: Context) {
 
     /** Any package in [oldTargets] that no longer has any rule pointing at it should no longer be
      * blocked -- reapplyAll() only visits packages that still have at least one rule, so a package
-     * that just lost its last (or only, now-dropped) rule would otherwise stay suspended forever. */
+     * that just lost its last (or only, now-dropped) rule would otherwise stay suspended forever.
+     * Checks against [rules] (Room + dashboard), not just Room, so a target still governed by a
+     * dashboard rule doesn't get unsuspended out from under it by an unrelated local edit. */
     private suspend fun unsuspendOrphanedTargets(oldTargets: Collection<String>, newTargets: Collection<String>) {
         val removed = oldTargets.toSet() - newTargets.toSet()
         if (removed.isEmpty()) return
-        val stillGoverned = dao.getAll().flatMap { it.targetPackageNames() }.toSet()
+        val stillGoverned = rules().flatMap { it.targetPackageNames() }.toSet()
         removed.forEach { pkg -> if (pkg !in stillGoverned) setSuspended(pkg, suspended = false) }
     }
 
@@ -164,12 +267,19 @@ class HabitRuleManager(private val context: Context) {
         detectedHabitRows: List<Pair<String, Boolean>>,
     ): Int = evaluationMutex.withLock {
         val today = LocalDate.now().toEpochDay()
-        val candidates = dao.forTrigger(triggerPackageName)
-            .filter { it.lastGrantedEpochDay != today && !it.isTimeWindowed() }
-        if (candidates.isEmpty()) return@withLock 0
 
         val rawDoneNames = detectedHabitRows.filter { it.second }.map { it.first.lowercase() }.toSet()
         val doneHabitNames = proofManager.filterSatisfied(rawDoneNames)
+        // Reported regardless of whether any of THIS phone's own local (Room) rules reference
+        // these habits -- a dashboard rule gating a different device (e.g. a Mac rule) has no
+        // local representation here to condition this on. See HabitCompletionReporter's doc
+        // comment. Must run before the early return below, which only applies to the
+        // local-rule-granting logic that follows.
+        HabitCompletionReporter(context).reportDoneToday(doneHabitNames)
+
+        val candidates = dao.forTrigger(triggerPackageName)
+            .filter { it.lastGrantedEpochDay != today && !it.isTimeWindowed() }
+        if (candidates.isEmpty()) return@withLock 0
         // "All habits complete" (a non-windowed rule with no named habits) is derived directly from
         // the API rows: it fires only when there's at least one detected habit and every detected
         // row is both done and proof-satisfied.
@@ -203,9 +313,10 @@ class HabitRuleManager(private val context: Context) {
         grantedCount
     }
 
-    /** Unsuspends every target app referenced by any rule -- used when protection is turned off. */
+    /** Unsuspends every target app referenced by any rule (Room + dashboard) -- used when
+     *  protection is turned off. */
     suspend fun unsuspendAllTargets() {
-        dao.getAll()
+        rules()
             .flatMap { it.targetPackageNames() }
             .distinct()
             .forEach { setSuspended(it, suspended = false) }
@@ -225,7 +336,7 @@ class HabitRuleManager(private val context: Context) {
         val doneHabitNamesToday = proofManager.filterSatisfied(rawDoneHabitNamesToday)
 
         val rulesByPackage = mutableMapOf<String, MutableList<HabitRule>>()
-        dao.getAll().forEach { rule ->
+        rules().forEach { rule ->
             rule.targetPackageNames().forEach { packageName ->
                 rulesByPackage.getOrPut(packageName) { mutableListOf() }.add(rule)
             }

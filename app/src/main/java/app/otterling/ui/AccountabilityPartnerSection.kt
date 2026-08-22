@@ -2,8 +2,10 @@ package app.otterling.ui
 
 import android.content.Context
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material3.AlertDialog
@@ -24,6 +26,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import app.otterling.alerts.AccountabilityPartnerSettings
 import app.otterling.alerts.AlertReporter
 import app.otterling.alerts.GuardianAlertSettings
@@ -53,6 +56,7 @@ fun AccountabilityPartnerSection(context: Context) {
     var numbers by remember { mutableStateOf<List<String>>(emptyList()) }
     var newNumber by remember { mutableStateOf("") }
     var triggers by remember { mutableStateOf("") }
+    var dashboardTriggers by remember { mutableStateOf<List<String>>(emptyList()) }
     var smsInfo by remember { mutableStateOf(false) }
     var watched by remember { mutableStateOf<Set<String>>(emptySet()) }
     var status by remember { mutableStateOf("") }
@@ -64,6 +68,7 @@ fun AccountabilityPartnerSection(context: Context) {
         enabled = settings.isEnabled()
         numbers = settings.partnerNumbers()
         triggers = detectionSettings.triggerWords().joinToString("\n")
+        dashboardTriggers = detectionSettings.dashboardTriggerWords()
         smsInfo = detectionSettings.smsInfoEvents()
         watched = detectionSettings.watchedPackages()
         SmsPermissionGranter.grantSendSms(context)
@@ -84,23 +89,32 @@ fun AccountabilityPartnerSection(context: Context) {
     // Kept behind an explicit dialog, not inline in the main list, so the trigger-word list isn't
     // sitting in plain sight the moment someone opens Settings.
     if (showTriggerWordsDialog) {
-        var draft by remember { mutableStateOf(triggers) }
+        var draft by remember { mutableStateOf(detectionSettings.localTriggerWords().joinToString("\n")) }
         AlertDialog(
             onDismissRequest = { showTriggerWordsDialog = false },
             title = { Text("Trigger words") },
             text = {
-                OutlinedTextField(
-                    value = draft,
-                    onValueChange = { draft = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("One per line") },
-                    minLines = 5,
-                )
+                Column {
+                    OutlinedTextField(
+                        value = draft,
+                        onValueChange = { draft = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("One per line") },
+                        minLines = 5,
+                    )
+                    if (dashboardTriggers.isNotEmpty()) {
+                        Text(
+                            "Also managed by dashboard: ${dashboardTriggers.joinToString(", ")}",
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(top = 8.dp),
+                        )
+                    }
+                }
             },
             confirmButton = {
                 TextButton(onClick = {
                     detectionSettings.setTriggerWords(draft)
-                    triggers = draft
+                    triggers = detectionSettings.triggerWords().joinToString("\n")
                     status = "Trigger words saved"
                     showTriggerWordsDialog = false
                 }) {

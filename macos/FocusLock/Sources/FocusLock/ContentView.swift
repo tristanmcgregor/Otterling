@@ -302,6 +302,17 @@ struct ContentView: View {
                          hue: viewModel.state.passcodeConfigured ? .success : .warning)
             }
 
+            // Confirms the dashboard-driven config (blocked/protected apps, DNS/proxy/cloud
+            // filter, cooldown -- see DashboardConfigSync.swift) is actually reaching this Mac,
+            // not just configured server-side.
+            if let lastSynced = viewModel.state.dashboardConfigLastFetchedAt {
+                Text("Dashboard sync: last synced \(lastSynced.formatted(.relative(presentation: .named)))")
+                    .font(.system(size: 11)).foregroundStyle(Otter.onSurfaceVariant)
+            } else {
+                Text("Dashboard sync: never synced yet")
+                    .font(.system(size: 11)).foregroundStyle(Otter.onSurfaceVariant)
+            }
+
             if !viewModel.state.pendingActions.isEmpty {
                 pendingActionsCard
             }

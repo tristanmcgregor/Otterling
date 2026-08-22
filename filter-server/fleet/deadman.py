@@ -16,7 +16,17 @@ Env:
   FLEET_URL                e.g. http://fleet:8080 (internal, TLS off)
   FLEET_API_EMAIL          a read-only Fleet API-only user
   FLEET_API_PASSWORD
-  FLEET_HOST_IDENTIFIER    the Mac's hostname/uuid/serial as Fleet knows it
+  FLEET_HOST_IDENTIFIER    the Mac's hostname/uuid/serial as Fleet knows it (used ONLY to query
+                            Fleet's API for seen_time -- NOT reused as the alert device_id, since
+                            Fleet's identifier can change on rename/re-enrollment while the alert
+                            device_id must stay the one stable id every other reporter uses for
+                            this same Mac)
+  DEVICE_ID                canonical device_id to report alerts under. Defaults to
+                            FLEET_HOST_IDENTIFIER if unset (old behavior), but should be set
+                            explicitly to the same IOPlatformUUID-derived id
+                            TamperReporter.swift/install_lock_profile.py use for this Mac, so this
+                            doesn't mint its own fragment in the dashboard's device list (see
+                            lockprofile_service.py's DEVICE_ID_ALIASES doc)
   ALERTS_URL               lockprofile /alerts/tamper, e.g. http://host.docker.internal:8091/alerts/tamper
   LOCKPROFILE_TOKEN        Bearer token /alerts/tamper requires
   DEADMAN_THRESHOLD_MINUTES  silence longer than this = alert (default 2880 = 48h)
@@ -35,6 +45,7 @@ FLEET_URL = os.environ["FLEET_URL"].rstrip("/")
 FLEET_API_EMAIL = os.environ["FLEET_API_EMAIL"]
 FLEET_API_PASSWORD = os.environ["FLEET_API_PASSWORD"]
 HOST_ID = os.environ["FLEET_HOST_IDENTIFIER"]
+DEVICE_ID = os.environ.get("DEVICE_ID") or HOST_ID
 ALERTS_URL = os.environ["ALERTS_URL"]
 LOCKPROFILE_TOKEN = os.environ["LOCKPROFILE_TOKEN"]
 THRESHOLD_MIN = float(os.environ.get("DEADMAN_THRESHOLD_MINUTES", "2880"))
@@ -90,7 +101,7 @@ def get_seen_time(cached_token):
 
 def raise_alert(kind, details):
     _post(ALERTS_URL,
-          {"device_id": HOST_ID, "type": kind, "details": details, "ts": time.time()},
+          {"device_id": DEVICE_ID, "type": kind, "details": details, "ts": time.time()},
           {"Content-Type": "application/json", "Authorization": f"Bearer {LOCKPROFILE_TOKEN}"}).close()
     print(f"[deadman] alert sent: {kind} -- {details}", flush=True)
 

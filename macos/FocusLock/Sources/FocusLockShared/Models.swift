@@ -37,6 +37,113 @@ public struct ProtectedApp: Codable, Hashable, Identifiable, Sendable {
     }
 }
 
+/// A dashboard-authored rule targeting THIS device (see `filter-server/lockprofile_service.py`'s
+/// per-device `rules` list) -- "block `executableName` unless every habit in `requiredHabitIds`
+/// is done today, and only during this schedule window." Always windowed: the dashboard wizard
+/// always sets a schedule (see Android's `HabitRuleManager`'s own "Phase 5" doc comment, which
+/// this mirrors), so there's no non-windowed/grant-duration case to handle here at all -- unlike
+/// Android, which also has locally-authored non-windowed rules with no Mac equivalent.
+/// `windowStartMinute`/`windowEndMinute` are minutes-since-midnight (0...1439); `daysOfWeek` uses
+/// the dashboard's own JS `Date.getDay()` convention (0=Sunday...6=Saturday), NOT `Calendar`'s.
+/// Never persisted -- `RuleBlockEnforcer` re-derives the live block/unblock verdict fresh on
+/// every tick from this plus `FocusLockState.globalHabitsCache`, the same way Android's
+/// `isTargetUnlocked` does for its own synthetic dashboard rules.
+public struct MacRule: Codable, Sendable {
+    public let id: String
+    public let executableName: String
+    public let requiredHabitIds: [String]
+    public let windowStartMinute: Int
+    public let windowEndMinute: Int
+    public let daysOfWeek: Set<Int>
+
+    public init(id: String, executableName: String, requiredHabitIds: [String], windowStartMinute: Int, windowEndMinute: Int, daysOfWeek: Set<Int>) {
+        self.id = id
+        self.executableName = executableName
+        self.requiredHabitIds = requiredHabitIds
+        self.windowStartMinute = windowStartMinute
+        self.windowEndMinute = windowEndMinute
+        self.daysOfWeek = daysOfWeek
+    }
+}
+
+/// One entry from the global habit library shared across every device (see
+/// `filter-server/lockprofile_service.py`'s `HABITS_PATH`) -- `doneToday` is computed
+/// server-side from whichever device most recently reported this habit's completion (see
+/// `GET /dashboard-api/habits`), so this Mac never needs to know who verified it or how.
+public struct GlobalHabit: Codable, Sendable {
+    public let id: String
+    public let name: String
+    public let doneToday: Bool
+
+    public init(id: String, name: String, doneToday: Bool) {
+        self.id = id
+        self.name = name
+        self.doneToday = doneToday
+    }
+}
+
+/// Flattened, decode-only-relevant subset of what `GET /dashboard-api/devices/<id>/settings`
+/// returns (see `filter-server/lockprofile_service.py`), cached on `FocusLockState` by
+/// `DashboardConfigSync` (Phase 1 of extending `SERVER_DRIVEN_CONFIG_PLAN.md`-style dashboard
+/// control to the Mac -- see that doc, originally written for the Android app). Deliberately flat
+/// (not a re-declaration of the server's nested JSON shape) so this round-trips through
+/// `FocusLockCodec`'s ordinary synthesized Codable when `state.json` is saved/loaded, the same as
+/// every other field on `FocusLockState` -- the server's own nested/list-of-objects shape is
+/// parsed and flattened once, in `DashboardConfigSync.fetch`'s own raw decode type, not here.
+public struct DashboardDeviceSettingsCache: Codable, Sendable {
+    public let platform: String?
+    public let updatedAt: Double?
+    /// From the server's `vpnFilter.enabled` -- see `DashboardConfigSync`'s doc comment for why
+    /// this maps to `dnsEnforcementEnabled` specifically, not a DNS+proxy composite.
+    public let contentFilterEnabled: Bool?
+    /// Extracted `appId` values from the server's `blockedApps: [{appId, addedAt}]` -- executable
+    /// names on this platform (see `BlockedApp`'s doc comment on `executableName`).
+    public let blockedApps: [String]
+    /// From the server's `protectedApps: [{displayName, executableName, bundlePath, addedAt}]`
+    /// -- macos-only, no Android equivalent. Reuses `ProtectedApp` directly rather than another
+    /// flattened representation since its shape already matches one-to-one.
+    public let protectedApps: [ProtectedApp]
+    /// macos-only fields below -- all nil ("no opinion yet") unless the server explicitly has a
+    /// value (see `_default_device_settings`'s comment on why these default to `None`/null
+    /// server-side rather than a concrete value).
+    public let cooldownHours: Double?
+    public let proxyFilterEnabled: Bool?
+    public let proxyFilterForceViaFirewall: Bool?
+    public let cloudFilterHost: String?
+    public let cloudFilterEnabled: Bool?
+    /// This device's own dashboard-authored rules -- see `MacRule`'s doc comment. Empty if none
+    /// configured (not distinguished from "no opinion yet" the way the scalar fields above are,
+    /// since an empty rule list is unambiguous: no rules means nothing is rule-blocked, which is
+    /// exactly correct behavior, unlike an empty `blockedApps` colliding with "clear everything").
+    public let rules: [MacRule]
+
+    public init(
+        platform: String?,
+        updatedAt: Double?,
+        contentFilterEnabled: Bool?,
+        blockedApps: [String],
+        protectedApps: [ProtectedApp],
+        cooldownHours: Double?,
+        proxyFilterEnabled: Bool?,
+        proxyFilterForceViaFirewall: Bool?,
+        cloudFilterHost: String?,
+        cloudFilterEnabled: Bool?,
+        rules: [MacRule]
+    ) {
+        self.platform = platform
+        self.updatedAt = updatedAt
+        self.contentFilterEnabled = contentFilterEnabled
+        self.blockedApps = blockedApps
+        self.protectedApps = protectedApps
+        self.cooldownHours = cooldownHours
+        self.proxyFilterEnabled = proxyFilterEnabled
+        self.proxyFilterForceViaFirewall = proxyFilterForceViaFirewall
+        self.cloudFilterHost = cloudFilterHost
+        self.cloudFilterEnabled = cloudFilterEnabled
+        self.rules = rules
+    }
+}
+
 /// The protection-reducing operations that can't be applied immediately. Everything here either
 /// takes a block off the list or weakens the filter; the protection-*increasing* mirror of each
 /// (adding a block, enabling DNS enforcement, raising the cooldown) stays immediate and ungated,
@@ -181,6 +288,34 @@ public struct FocusLockState: Codable, Sendable {
     /// re-bootstrapped without going through `restoreFromKillSwitch` doesn't silently resume.
     public var protectionEnabled: Bool
 
+    /// Best-effort cache of the last successfully-fetched dashboard config for this device (see
+    /// `DashboardConfigSync`), surfaced by `focuslockctl status`/the GUI so a guardian can
+    /// confirm connectivity ("last synced: Xm ago"). Not sensitive, so unlike `guardianPasscode`
+    /// it's left untouched by `redactedForStatus()`.
+    public var dashboardConfigCache: DashboardDeviceSettingsCache?
+    public var dashboardConfigLastFetchedAt: Date?
+
+    /// Executable names `DashboardConfigSync.reconcile` itself has added to `blockedApps`/
+    /// `protectedApps` -- NOT entries a guardian added locally via the GUI/CLI. `reconcile` only
+    /// ever schedules REMOVAL for a name already in these sets; a local-only addition it doesn't
+    /// recognize as its own is left alone even once it's absent from the dashboard's list.
+    /// Without this, a guardian adding e.g. "Steam" to `blockedApps` via the local GUI (which
+    /// never pushes to the server) would look identical, on the next sync, to "the dashboard no
+    /// longer wants this blocked" -- and get silently scheduled for removal by a system the
+    /// guardian never even opened. Cleared for a name the moment its removal is scheduled (not
+    /// only once the removal matures), and populated the moment `reconcile` adds a name -- so
+    /// this always reflects "did dashboard sync add the CURRENTLY-blocked/protected entry with
+    /// this name," not a historical record.
+    public var dashboardManagedBlockedApps: Set<String>
+    public var dashboardManagedProtectedApps: Set<String>
+
+    /// Best-effort cache of the global habit library + live completion state (see
+    /// `GlobalHabit`), fetched separately from `dashboardConfigCache` (a different endpoint --
+    /// `GET /dashboard-api/habits`, not per-device). `RuleBlockEnforcer` reads this alongside
+    /// `dashboardConfigCache?.rules` to compute which apps are currently rule-blocked; never
+    /// written anywhere else.
+    public var globalHabitsCache: [GlobalHabit]
+
     public init(
         blockedApps: [BlockedApp] = [],
         blockedDomains: [String] = [],
@@ -207,7 +342,12 @@ public struct FocusLockState: Codable, Sendable {
         passcodeConfigured: Bool = false,
         cooldownHours: Double = FocusLockConstants.defaultCooldownHours,
         pendingActions: [PendingAction] = [],
-        protectionEnabled: Bool = true
+        protectionEnabled: Bool = true,
+        dashboardConfigCache: DashboardDeviceSettingsCache? = nil,
+        dashboardConfigLastFetchedAt: Date? = nil,
+        dashboardManagedBlockedApps: Set<String> = [],
+        dashboardManagedProtectedApps: Set<String> = [],
+        globalHabitsCache: [GlobalHabit] = []
     ) {
         self.blockedApps = blockedApps
         self.blockedDomains = blockedDomains
@@ -226,6 +366,11 @@ public struct FocusLockState: Codable, Sendable {
         self.cooldownHours = cooldownHours
         self.pendingActions = pendingActions
         self.protectionEnabled = protectionEnabled
+        self.dashboardConfigCache = dashboardConfigCache
+        self.dashboardConfigLastFetchedAt = dashboardConfigLastFetchedAt
+        self.dashboardManagedBlockedApps = dashboardManagedBlockedApps
+        self.dashboardManagedProtectedApps = dashboardManagedProtectedApps
+        self.globalHabitsCache = globalHabitsCache
     }
 
     // Custom decode so a state.json written before `dnsEnforcementEnabled` (or these newer cloud
@@ -268,6 +413,19 @@ public struct FocusLockState: Codable, Sendable {
         // case of a fresh install. The ONLY way this is ever actually false is `killSwitch`
         // explicitly persisting it, so a missing/absent value never means "off".
         protectionEnabled = try container.decodeIfPresent(Bool.self, forKey: .protectionEnabled) ?? true
+        // Absent from a state.json written before this landed, and equally fine to default to
+        // "never synced" on a fresh install -- there's no meaningful default to invent here, and
+        // a missing/nil pair just means "confirm status not yet known" wherever it's displayed.
+        dashboardConfigCache = try container.decodeIfPresent(DashboardDeviceSettingsCache.self, forKey: .dashboardConfigCache)
+        dashboardConfigLastFetchedAt = try container.decodeIfPresent(Date.self, forKey: .dashboardConfigLastFetchedAt)
+        // Missing key defaults to empty -- correct both for a pre-existing state.json (nothing
+        // was ever dashboard-managed before this field existed) and a fresh install (nothing has
+        // synced yet). An empty set here just means reconcile treats every existing blockedApps/
+        // protectedApps entry as local-only until it re-adds them itself, which is the safe
+        // direction (never remove something it doesn't recognize as its own).
+        dashboardManagedBlockedApps = try container.decodeIfPresent(Set<String>.self, forKey: .dashboardManagedBlockedApps) ?? []
+        dashboardManagedProtectedApps = try container.decodeIfPresent(Set<String>.self, forKey: .dashboardManagedProtectedApps) ?? []
+        globalHabitsCache = try container.decodeIfPresent([GlobalHabit].self, forKey: .globalHabitsCache) ?? []
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -275,7 +433,8 @@ public struct FocusLockState: Codable, Sendable {
         case cloudFilterHost, cloudFilterEnabled, lockProfileInstalled, vpnActive
         case proxyEnforcementEnabled, forceProxyViaFirewall, proxyHost, proxyPort
         case guardianPasscode, passcodeConfigured, cooldownHours, pendingActions
-        case protectionEnabled
+        case protectionEnabled, dashboardConfigCache, dashboardConfigLastFetchedAt
+        case dashboardManagedBlockedApps, dashboardManagedProtectedApps, globalHabitsCache
     }
 
     /// The copy handed to callers of `getStatus`: same state minus the passcode digest, with

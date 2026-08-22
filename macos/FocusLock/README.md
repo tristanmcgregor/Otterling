@@ -106,6 +106,17 @@ assuming otherwise.
   pinned code-signing Team Identifier before installing -- same trust chain as the Android app's
   `ApprovedUpdateManager`. See [`RELEASE.md`](RELEASE.md) for publishing a release (a manual/local
   step for now -- no macOS build agent in the existing CI pipeline).
+- **Dashboard-driven configuration**: `DashboardConfigSync` (in `FocusLockHelperd`) polls the
+  guardian dashboard's `/dashboard-api/devices/<id>/settings` every ~60s and reconciles blocked
+  apps, protected apps, DNS/proxy/cloud-filter enforcement, the cloud filter host, and the
+  removal cooldown against it -- the same web console the Android app already reads its own
+  config from (see `filter-server/dashboard/`). Same asymmetry as everything else above:
+  additions/enables from the dashboard apply immediately, removals/disables go through the same
+  passcode-free-but-cooldown-gated queue local removals use (authorized by possession of the
+  server's bearer token instead of the local passcode -- see `PendingActionScheduler.swift`'s
+  doc comment for why). The Guardian passcode itself is never dashboard-settable. A local-only
+  change made via this GUI/CLI (never touched from the dashboard) is left alone by dashboard
+  sync -- it only ever removes something it added itself.
 
 ## Requirements
 
@@ -225,9 +236,9 @@ RELEASE.md             Publishing an update -- signing identity, manifest, the C
   terminal, who can unload both LaunchDaemons, delete `/Applications/Otterling.app`, or edit
   `/etc/hosts` directly, none of which goes through XPC at all. Combined with the watchdog and
   `TamperReporter` that becomes loud rather than impossible. **The tamper reports are the load-bearing
-  part, and right now they're ingestion-only** -- `TamperReporter`'s own doc comment notes that
-  nothing on the server side notifies anyone, so a report nobody reads deters nobody. Wire up an
-  alert on `/alerts/tamper` before treating this as accountability rather than self-discipline.
+  part** -- `/alerts/tamper` fans out to ntfy push + the phone's `/alerts/poll` → SMS relay (see
+  `filter-server/lockprofile_service.py`'s module docstring and `MacTamperPollWorker.kt`), so a
+  report does reach the accountability partner, not just a log file.
 - Passcode brute-forcing over XPC is bounded by PBKDF2 (210k iterations) plus an exponential
   backoff after three consecutive failures. The backoff is in-memory, so it resets if the daemon
   restarts -- restarting the daemon is itself watchdog-reported, but it does mean a short passcode

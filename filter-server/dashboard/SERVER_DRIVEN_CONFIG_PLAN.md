@@ -1,8 +1,22 @@
 # Plan: make the dashboard the single source of truth for phone configuration
 
-**Status:** not started. Written 2026-08-19 as a handoff document for a dedicated session —
-do not start this mid-session alongside other firefighting; it touches most of the Android
-app's settings surface and needs room to test each phase properly.
+**Status (updated 2026-08-22): shipped**, for both platforms. Everything below "Current state"
+describes the state as of 2026-08-19, when this doc was written -- kept as-is for historical
+context on the original design decisions, but do not trust it as a description of what's built
+today. As of 2026-08-22:
+- Android: `DashboardConfigStore.kt` pulls `/dashboard-api/devices/<id>/settings` and every
+  manager listed in the mapping table below (`RestrictionPreferences`, `MitmExemptManager`,
+  `CustomBlocklistManager`, `AppTimeBudgetManager`, `AppSuspensionManager`, `HabitRuleManager`,
+  `GuardianAlertSettings`) reads from it. Phases 0-7 below are all done; only Phase 8 (deciding
+  whether to remove the on-device Settings UI for migrated items) remains open.
+- macOS: `DashboardConfigSync.swift` (macos/FocusLock/Sources/FocusLockHelperd/) does the Mac
+  equivalent -- blocked/protected apps, DNS/proxy/cloud-filter enforcement, the cloud filter
+  host, and the removal cooldown are all dashboard-driven there too, following the same
+  additions-immediate/removals-cooldown-gated shape as the Mac's own local XPC handlers already
+  used. This was never part of the original plan below (Android-only) -- see
+  `/home/admin/.claude/plans/inherited-beaming-church.md` for that design's own decisions
+  (notably: `guardianPasscode` is deliberately NOT dashboard-settable, and per-device website
+  blocking was dropped as dead code on the Mac in favor of a future shared/global blocklist).
 
 ## Goal
 

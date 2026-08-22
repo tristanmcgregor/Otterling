@@ -215,9 +215,56 @@ MAX_BODY_BYTES = 16 * 1024
 # device stuck retrying uploads can't fill the disk.
 MAX_LOG_BODY_BYTES = 2 * 1024 * 1024
 MAX_LOG_FILES_PER_DEVICE = 20
-# Device ids come from Settings.Secure.ANDROID_ID on the phone -- always a 16-char lowercase hex
-# string in practice, but validated here anyway since it becomes part of a filesystem path below.
-DEVICE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+# Phone device ids come from Settings.Secure.ANDROID_ID -- always a 16-char lowercase hex string
+# in practice -- but _list_known_device_ids() also surfaces ids from non-phone reporters sharing
+# this same alerts/settings storage (e.g. IntegrityReporter.swift's Mac hostnames/IPs), which
+# legitimately contain dots. Allowed here so the dashboard can actually fetch settings for every
+# id it lists (a dotted id 404ing through DASHBOARD_DEVICE_RE previously left the dashboard stuck
+# on "Loading..." with the error silently swallowed). Still excludes "/" and any ".." substring,
+# since this becomes part of a filesystem path below (_store_device_log) -- a single "." is inert
+# with os.path.join, but ".." would let device_id escape LOGS_DIR.
+DEVICE_ID_RE = re.compile(r"^(?!.*\.\.)[A-Za-z0-9_.-]{1,128}$")
+
+# Neither client sends an explicit platform field today, so this is inferred purely from
+# device_id shape: the Mac's canonical id (TamperReporter.swift/install_lock_profile.py's
+# IOPlatformUUID) is always a dashed UUID; Android's ANDROID_ID (see comment above) is always a
+# bare hex token with no dashes. The two never collide for this fleet. Used to decide which
+# dashboard-api settings sections actually apply to a device -- most of device_settings.json
+# (protections, vpnFilter/vpnBypassApps, blockedWebsites, rules, habits, appBudgets,
+# triggerWords, blockedApps) is consumed ONLY by the Android app's DashboardConfigStore
+# consumers; nothing on the Mac reads dashboard-api at all today.
+_UUID_RE = re.compile(r"^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$")
+
+
+def _detect_platform(device_id: str) -> str:
+    return "macos" if _UUID_RE.match(device_id) else "android"
+
+# The Mac has no single canonical identity across every reporter: TamperReporter.swift/
+# install_lock_profile.py use IOPlatformUUID (the real, stable identity per-device settings are
+# provisioned under), but deadman.py's Fleet lookups key on a configurable hostname and
+# block_reporter.py (the mitm proxy addon, which only ever sees network-layer traffic) keys on
+# client IP -- so a hostname change or a new DHCP lease used to mint a brand-new "device" in the
+# dashboard for a machine that was never actually new. DEVICE_ID_ALIASES lets a deployer declare
+# "this hostname/IP is actually this device_id" so every reporting path collapses onto the same
+# entry. JSON object in the env var, e.g. {"192.168.0.115": "<canonical-id>", "old-hostname.local":
+# "<canonical-id>"} -- unset/invalid means no aliasing (today's behavior).
+def _load_device_id_aliases() -> dict:
+    raw = os.environ.get("DEVICE_ID_ALIASES", "").strip()
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return {str(k): str(v) for k, v in parsed.items()} if isinstance(parsed, dict) else {}
+
+
+DEVICE_ID_ALIASES = _load_device_id_aliases()
+
+
+def _canonicalize_device_id(device_id: str) -> str:
+    return DEVICE_ID_ALIASES.get(device_id, device_id)
+
 
 # Keeps ALERTS_PATH from growing without bound -- see _rotate_alerts_if_needed().
 ALERTS_ROTATE_BYTES = 5 * 1024 * 1024
@@ -229,9 +276,32 @@ ALERTS_ROTATE_KEEP_LINES = 2000
 # already separates concerns that way (e.g. alerts get their own ALERTS_PATH/_alerts_lock too).
 SETTINGS_PATH = os.path.join(DATA_DIR, "device_settings.json")
 
+# Guardian PIN is deliberately NOT part of per-device settings: it's one shared secret for a
+# guardian's whole fleet (see /dashboard-api/pin below), not something that varies per device.
+# Stored as plaintext, not a hash: the server relays the raw PIN so each phone can feed it
+# straight into its own existing PinAuthManager.setPin(), which is what actually seals it behind
+# Android Keystore-backed encryption on-device. A 4-digit PIN only has 10,000 possible values, so
+# a server-side hash would add no real protection over plaintext if this file were ever read --
+# the on-device Keystore sealing is the only thing that meaningfully protects this secret either way.
+GUARDIAN_PIN_PATH = os.path.join(DATA_DIR, "guardian_pin.json")
+
+# Habits are a single shared library across every device, same reasoning as the Guardian PIN
+# above -- a habit ("Read 30 min") verified on the phone needs to be referenceable by a rule
+# stored under ANY device's record (e.g. a Mac rule gating an app on that habit), so it can't
+# live inside one device's own per-device settings the way it used to. See
+# /dashboard-api/habits below. HABIT_COMPLETIONS_PATH is the companion "is this habit done
+# today" state, reported by whichever device actually verifies the habit (see
+# /dashboard-api/habits/<id>/complete) -- kept in its own file/lock since it's written far more
+# often (every habit check-in) than the library itself (only edited by the guardian).
+HABITS_PATH = os.path.join(DATA_DIR, "habits.json")
+HABIT_COMPLETIONS_PATH = os.path.join(DATA_DIR, "habit_completions.json")
+
 _state_lock = threading.Lock()
 _alerts_lock = threading.Lock()
 _settings_lock = threading.Lock()
+_pin_lock = threading.Lock()
+_habits_lock = threading.Lock()
+_habit_completions_lock = threading.Lock()
 
 
 def _load_state() -> dict:
@@ -465,7 +535,9 @@ def _append_alert(event: dict) -> dict | None:
         state = _load_state()
         event_id = _next_alert_id_locked(state)
         _save_state(state)
-    event = {**event, "id": event_id}
+    # See DEVICE_ID_ALIASES -- collapses hostname/IP-based reporters onto the same device_id a
+    # UUID-based reporter (or provisioning) already uses for the same physical machine.
+    event = {**event, "device_id": _canonicalize_device_id(event.get("device_id", "")), "id": event_id}
     with _alerts_lock:
         with open(ALERTS_PATH, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(event, sort_keys=True) + "\n")
@@ -492,7 +564,9 @@ def _read_alerts_since(since_id: int) -> list[dict]:
 
 
 def _safe_device_id(raw: str) -> str | None:
-    return raw if DEVICE_ID_RE.match(raw or "") else None
+    if not DEVICE_ID_RE.match(raw or ""):
+        return None
+    return _canonicalize_device_id(raw)
 
 
 def _store_device_log(device_id: str, logs: str) -> str:
@@ -543,25 +617,78 @@ def _list_device_logs() -> dict:
 # ─── Dashboard device settings (/dashboard-api/*) ──────────────────────────────────────────────
 # Backs the web dashboard at filter-server/dashboard/ (served by Caddy at /dashboard/, see
 # Caddyfile) -- a guardian-facing settings console, distinct from the mac/phone-facing routes
-# above. Not yet pulled/enforced by the Android app itself (a documented follow-up, see
-# filter-server/dashboard/README.md); this is the server-side store + API only.
+# above. Pulled and enforced by both clients: the Android app's DashboardConfigStore.kt (see
+# filter-server/dashboard/SERVER_DRIVEN_CONFIG_PLAN.md) and the Mac daemon's
+# DashboardConfigSync.swift (macos/FocusLock/Sources/FocusLockHelperd/) each poll their own
+# device's settings record and reconcile local state against it.
 
 # (dashboard-path-segment -> (settings list key, item-matching field)). Both the generic
 # add/remove handlers and _build_list_item below key off this table.
 LIST_ENDPOINTS = {
     "websites": ("blockedWebsites", "domain"),
     "bypass-apps": ("vpnBypassApps", "id"),
-    "habits": ("habits", "id"),
+    # habits is NOT here -- it moved to a global library (see HABITS_PATH /
+    # /dashboard-api/habits below), since a rule on ANY device can now reference a habit
+    # verified on a different device. `rules` stays per-device: `requiredHabitIds` reference
+    # the global habit ids, but WHERE a rule applies (which device, which app) is still
+    # per-device.
     "rules": ("rules", "id"),
     "app-budgets": ("appBudgets", "id"),
+    "trigger-words": ("triggerWords", "word"),
+    "blocked-apps": ("blockedApps", "appId"),
+    # macos-only (see DashboardConfigSync.swift's reconcile) -- an app kept alive/undeletable
+    # (schg-locked), the inverse of blocked-apps. Meaningless for Android, same as protectedApps
+    # not appearing in _default_device_settings() below.
+    "protected-apps": ("protectedApps", "executableName"),
 }
 
-DASHBOARD_DEVICE_RE = re.compile(r"^/dashboard-api/devices/([A-Za-z0-9_-]{1,128})((?:/.+)?)$")
+# Mirrors MitmExemptManager.NEVER_EXEMPT_PACKAGES on the Android side (see
+# app/src/main/java/app/otterling/content/MitmExemptManager.kt) -- a general browser can be
+# pointed at literally any site, so exempting it from MITM interception would defeat content
+# filtering entirely. Enforced here too, in _build_list_item below, not just trusted to the
+# Android client's own veto in MitmExemptManager.add() -- a compromised or careless dashboard
+# edit must not be able to reach the phone with this package name in vpnBypassApps.
+NEVER_EXEMPT_PACKAGES = {
+    "com.android.chrome",
+    "com.chrome.beta",
+    "com.chrome.dev",
+    "com.chrome.canary",
+}
+
+# Mirrors the self-block guard already in PackageDisableStore.markBlocked/AppSuspensionManager on
+# the Android side -- blocking Otterling's own package would brick the parent's ability to manage
+# the device. Enforced here too so a careless dashboard edit can't reach the phone with it.
+OTTERLING_PACKAGE_NAME = "app.otterling"
+
+# Mirrors AppBlockEnforcer.protectedExecutables on the Mac (macos/FocusLock/Sources/
+# FocusLockHelperd/AppBlockEnforcer.swift) -- that file already refuses to kill these regardless
+# of what's in blockedApps, so this is defense-in-depth, not the only guard. Keep in sync by hand
+# (no shared source between the Python server and the Swift daemon for this list).
+MAC_OWN_EXECUTABLE_NAMES = {
+    "FocusLockHelperd", "FocusLock", "focuslockctl", "FocusLockWatchdog", "FocusLockScanner",
+}
+
+DASHBOARD_DEVICE_RE = re.compile(r"^/dashboard-api/devices/([A-Za-z0-9_.-]{1,128})((?:/.+)?)$")
+# Matches /dashboard-api/habits/<id> (DELETE) and /dashboard-api/habits/<id>/complete (POST).
+HABIT_ITEM_RE = re.compile(r"^/dashboard-api/habits/([A-Za-z0-9]+)(/complete)?$")
 
 # PATCH .../settings is allowlisted to these keys -- everything else in _default_device_settings
-# (rules, habits, blockedWebsites, vpnBypassApps, appBudgets, guardianPinHash, updatedAt) is either
-# managed through its own dedicated endpoint or server-computed, not client-settable via this route.
-SETTINGS_PATCH_ALLOWED_KEYS = {"device_name", "protections", "vpnFilter", "frictionDelay", "guardianEmail"}
+# (rules, blockedWebsites, vpnBypassApps, appBudgets, triggerWords, blockedApps, protectedApps,
+# updatedAt) is either managed through its own dedicated endpoint or server-computed, not
+# client-settable via this route. The guardian PIN and habit library aren't part of device
+# settings at all -- see GUARDIAN_PIN_PATH / the global /dashboard-api/pin route, and
+# HABITS_PATH / /dashboard-api/habits, below.
+#
+# cooldownHours/proxyFilter/cloudFilterHost/cloudFilterEnabled are macos-only (see
+# DashboardConfigSync.swift's reconcile) -- meaningless for Android, same as protections is
+# meaningless for macOS. Deliberately default to None/absent in _default_device_settings rather
+# than a concrete value: DashboardConfigSync only reconciles a field when it's non-null, which
+# keeps "the guardian genuinely wants this value" distinct from "this device record's updatedAt
+# happened to be set by an unrelated edit" -- see that file's reconcile() doc comment.
+SETTINGS_PATCH_ALLOWED_KEYS = {
+    "device_name", "protections", "vpnFilter", "frictionDelay", "guardianEmail",
+    "cooldownHours", "proxyFilter", "cloudFilterHost", "cloudFilterEnabled",
+}
 
 
 def _load_settings() -> dict:
@@ -580,9 +707,95 @@ def _save_settings(settings: dict) -> None:
     os.replace(tmp_path, SETTINGS_PATH)
 
 
-def _default_device_settings() -> dict:
+def _load_guardian_pin() -> dict:
+    try:
+        with open(GUARDIAN_PIN_PATH, "r", encoding="utf-8") as fh:
+            return json.load(fh)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {"pin": None, "updatedAt": None}
+
+
+def _save_guardian_pin(pin: str) -> dict:
+    with _pin_lock:
+        record = {"pin": pin, "updatedAt": time.time()}
+        os.makedirs(DATA_DIR, exist_ok=True)
+        tmp_path = GUARDIAN_PIN_PATH + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as fh:
+            json.dump(record, fh, indent=2, sort_keys=True)
+        os.replace(tmp_path, GUARDIAN_PIN_PATH)
+        return record
+
+
+def _load_habits() -> list:
+    try:
+        with open(HABITS_PATH, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+            return data.get("habits", []) if isinstance(data, dict) else []
+    except (FileNotFoundError, json.JSONDecodeError):
+        return []
+
+
+def _save_habits(habits: list) -> None:
+    os.makedirs(DATA_DIR, exist_ok=True)
+    tmp_path = HABITS_PATH + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as fh:
+        json.dump({"habits": habits}, fh, indent=2, sort_keys=True)
+    os.replace(tmp_path, HABITS_PATH)
+
+
+def _load_habit_completions() -> dict:
+    try:
+        with open(HABIT_COMPLETIONS_PATH, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+            return data if isinstance(data, dict) else {}
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def _save_habit_completions(completions: dict) -> None:
+    os.makedirs(DATA_DIR, exist_ok=True)
+    tmp_path = HABIT_COMPLETIONS_PATH + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as fh:
+        json.dump(completions, fh, indent=2, sort_keys=True)
+    os.replace(tmp_path, HABIT_COMPLETIONS_PATH)
+
+
+def _today_str() -> str:
+    """Naive server-local calendar date (YYYY-MM-DD) -- this deployment is effectively
+    single-timezone (one household), so no per-user timezone conversion is attempted. A habit's
+    `date` (set by whichever device reports its completion, see
+    /dashboard-api/habits/<id>/complete) is compared against this exact string."""
+    return time.strftime("%Y-%m-%d")
+
+
+def _habits_with_completion_status() -> list:
+    """{id, name, doneToday, verifiedAt} for every habit in the global library -- doneToday is
+    computed by comparing the stored completion's `date` against today's server-local date, not
+    stored as its own persisted boolean (so it naturally resets at local midnight without a
+    separate daily-reset job)."""
+    habits = _load_habits()
+    completions = _load_habit_completions()
+    today = _today_str()
+    result = []
+    for habit in habits:
+        completion = completions.get(habit.get("id", ""))
+        done_today = bool(completion) and completion.get("date") == today
+        result.append({
+            "id": habit.get("id"),
+            "name": habit.get("name"),
+            "doneToday": done_today,
+            "verifiedAt": completion.get("verifiedAt") if completion else None,
+        })
+    return result
+
+
+def _default_device_settings(device_id: str = "") -> dict:
+    # Default name by detected platform rather than leaving it blank -- a guardian can still
+    # rename via the dashboard's Device Name field at any time, this is just so a never-configured
+    # device doesn't show its raw device_id in the sidebar/header.
+    default_name = "Macbook" if _detect_platform(device_id) == "macos" else "Phone"
     return {
-        "device_name": "",
+        "device_name": default_name,
         "protections": {
             "safeMode": True,
             "factoryReset": True,
@@ -594,14 +807,22 @@ def _default_device_settings() -> dict:
         "vpnBypassApps": [],
         "blockedWebsites": [],
         "frictionDelay": {"enabled": True, "seconds": 30},
-        "habits": [],
+        # habits deliberately NOT here -- moved to the global library, see LIST_ENDPOINTS' comment.
         "rules": [],
         "appBudgets": [],
-        # Salted hash only (see _handle_dashboard_route's /pin route) -- never returned by GET
-        # .../settings. Metadata for a future phone-side sync, not a second web login: Caddy's
-        # Basic Auth in front of /dashboard/ is this dashboard's actual login.
-        "guardianPinHash": None,
+        "triggerWords": [],
+        "blockedApps": [],
+        "protectedApps": [],
         "guardianEmail": "",
+        # macos-only, deliberately None ("no opinion") rather than a concrete value that would
+        # only coincidentally match a fresh Mac install's own defaults -- see
+        # SETTINGS_PATCH_ALLOWED_KEYS's comment for why. A guardian must explicitly interact with
+        # the dashboard's Proxy/Cloud Filter Host/Cooldown controls at least once before
+        # DashboardConfigSync reconciles any of these against the Mac.
+        "cooldownHours": None,
+        "proxyFilter": None,
+        "cloudFilterHost": None,
+        "cloudFilterEnabled": None,
         "updatedAt": None,
     }
 
@@ -617,7 +838,18 @@ def _device_settings(device_id: str, updates: dict | None = None) -> dict:
         record = settings.get(device_id)
         created = record is None
         if created:
-            record = _default_device_settings()
+            record = _default_device_settings(device_id)
+        else:
+            # Backfill keys added to the schema after this record was first created (e.g. a
+            # macos-only field shipped later) -- without this, an already-provisioned device's
+            # GET/PATCH response would silently omit new fields forever, since only a brand-new
+            # record goes through _default_device_settings() above. Only fills in what's
+            # missing; never overwrites an existing value. A bare GET with no `updates` still
+            # doesn't rewrite the file below, matching the existing read-only contract -- the
+            # backfilled keys just aren't persisted until something else triggers a save.
+            for key, value in _default_device_settings(device_id).items():
+                if key not in record:
+                    record[key] = value
         if updates:
             for key, value in updates.items():
                 if isinstance(value, dict) and isinstance(record.get(key), dict):
@@ -631,10 +863,28 @@ def _device_settings(device_id: str, updates: dict | None = None) -> dict:
         return record
 
 
+def _delete_device(device_id: str) -> bool:
+    """Removes device_id's record from device_settings.json entirely (not just resets it) --
+    used to clean up test/ghost entries (e.g. from curl testing) without a data-file edit, which
+    the app's own permission model requires go through a real endpoint rather than raw file
+    mutation. Does NOT touch alerts.jsonl -- historical tamper events stay for audit purposes, and
+    since device_id is canonicalized before storage/lookup (see DEVICE_ID_ALIASES), a deleted
+    settings record won't resurrect itself from old alerts unless that device reports again.
+    Returns False if device_id had no settings record (caller can still 200 -- DELETE is
+    idempotent)."""
+    with _settings_lock:
+        settings = _load_settings()
+        if device_id not in settings:
+            return False
+        del settings[device_id]
+        _save_settings(settings)
+        return True
+
+
 def _list_item_add(device_id: str, list_key: str, item: dict) -> dict:
     with _settings_lock:
         settings = _load_settings()
-        record = settings.get(device_id) or _default_device_settings()
+        record = settings.get(device_id) or _default_device_settings(device_id)
         record.setdefault(list_key, []).append(item)
         record["updatedAt"] = time.time()
         settings[device_id] = record
@@ -645,7 +895,7 @@ def _list_item_add(device_id: str, list_key: str, item: dict) -> dict:
 def _list_item_remove(device_id: str, list_key: str, match_field: str, match_value: str) -> dict:
     with _settings_lock:
         settings = _load_settings()
-        record = settings.get(device_id) or _default_device_settings()
+        record = settings.get(device_id) or _default_device_settings(device_id)
         items = record.get(list_key, [])
         record[list_key] = [i for i in items if str(i.get(match_field)) != str(match_value)]
         record["updatedAt"] = time.time()
@@ -659,7 +909,7 @@ def _list_item_update(device_id: str, list_key: str, item_id: str, updates: dict
     should 404 in that case)."""
     with _settings_lock:
         settings = _load_settings()
-        record = settings.get(device_id) or _default_device_settings()
+        record = settings.get(device_id) or _default_device_settings(device_id)
         found = False
         for item in record.get(list_key, []):
             if str(item.get("id")) == str(item_id):
@@ -682,10 +932,31 @@ def _build_list_item(kind: str, body: dict) -> dict | None:
         return {"domain": domain, "addedAt": time.time()} if domain else None
     if kind == "bypass-apps":
         name = (body.get("name") or "").strip()
-        return {"id": uuid.uuid4().hex, "name": name} if name else None
-    if kind == "habits":
-        name = (body.get("name") or "").strip()
-        return {"id": uuid.uuid4().hex, "name": name} if name else None
+        if not name or name.lower() in NEVER_EXEMPT_PACKAGES:
+            return None
+        return {"id": uuid.uuid4().hex, "name": name}
+    if kind == "trigger-words":
+        word = (body.get("word") or "").strip().lower()
+        return {"word": word, "addedAt": time.time()} if word else None
+    if kind == "blocked-apps":
+        app_id = (body.get("appId") or "").strip()
+        if not app_id or app_id == OTTERLING_PACKAGE_NAME or app_id in MAC_OWN_EXECUTABLE_NAMES:
+            return None
+        return {"appId": app_id, "addedAt": time.time()}
+    if kind == "protected-apps":
+        # macos-only -- see LIST_ENDPOINTS. No self-block guard needed here (protecting, not
+        # blocking, this app's own executables would just be inert/harmless, unlike blocked-apps).
+        display_name = (body.get("displayName") or "").strip()
+        executable_name = (body.get("executableName") or "").strip()
+        bundle_path = (body.get("bundlePath") or "").strip()
+        if not executable_name or not bundle_path:
+            return None
+        return {
+            "displayName": display_name or executable_name,
+            "executableName": executable_name,
+            "bundlePath": bundle_path,
+            "addedAt": time.time(),
+        }
     if kind == "rules":
         app_name = (body.get("appName") or "").strip()
         if not app_name:
@@ -717,20 +988,33 @@ def _list_known_device_ids() -> dict:
     device_settings.json or in alerts.jsonl -- a device can show up in tamper alerts long before a
     guardian ever opens the dashboard for it, or vice versa (settings configured ahead of the phone
     ever checking in), so the device list is the union of both sources rather than a separate
-    registry."""
+    registry.
+
+    Also canonicalizes through DEVICE_ID_ALIASES so historical records written under an alias
+    (before the alias was declared, or from a reporter DEVICE_ID_ALIASES doesn't cover) still
+    merge into the one entry going forward, without needing a data migration -- alertCount24h sums
+    across every alias, and device_name/updatedAt keep whichever alias's value is more informative."""
     devices: dict[str, dict] = {}
     for device_id, record in _load_settings().items():
-        devices[device_id] = {
-            "device_name": record.get("device_name", ""),
-            "updatedAt": record.get("updatedAt"),
-            "alertCount24h": 0,
-        }
+        device_id = _canonicalize_device_id(device_id)
+        entry = devices.setdefault(
+            device_id,
+            {"device_name": "", "updatedAt": None, "alertCount24h": 0, "platform": _detect_platform(device_id)},
+        )
+        if record.get("device_name"):
+            entry["device_name"] = record["device_name"]
+        record_updated = record.get("updatedAt")
+        if record_updated and (entry["updatedAt"] is None or record_updated > entry["updatedAt"]):
+            entry["updatedAt"] = record_updated
     cutoff = time.time() - 86400
     for event in _read_alerts_since(0):
-        device_id = event.get("device_id")
+        device_id = _canonicalize_device_id(event.get("device_id") or "")
         if not device_id:
             continue
-        entry = devices.setdefault(device_id, {"device_name": "", "updatedAt": None, "alertCount24h": 0})
+        entry = devices.setdefault(
+            device_id,
+            {"device_name": "", "updatedAt": None, "alertCount24h": 0, "platform": _detect_platform(device_id)},
+        )
         if event.get("received_at", 0) >= cutoff:
             entry["alertCount24h"] += 1
     return devices
@@ -834,15 +1118,19 @@ def _fcm_credentials():
             return None, None
 
 
-def _send_fcm_wake(event: dict) -> None:
+def _send_fcm_wake(event: dict) -> int:
     """Best-effort FCM 'poll now' wake to every registered phone. Never raises. The data payload is
-    advisory only -- the phone re-pulls from /alerts/poll, which is the source of truth."""
+    advisory only -- the phone re-pulls from /alerts/poll (and, since DashboardConfigStore piggybacks
+    on the same MacTamperPollWorker cycle this wakes, the phone's own dashboard/PIN/habits sync too --
+    see MacTamperMessagingService.kt's doc comment: any push at all is treated as "go poll now",
+    regardless of this payload's content). Returns how many tokens were actually sent to, so callers
+    like the dashboard's "Poll Now" button can tell the guardian whether this reached a real device."""
     creds, project_id = _fcm_credentials()
     if creds is None:
-        return
+        return 0
     tokens = _all_fcm_tokens()
     if not tokens:
-        return
+        return 0
     try:
         from google.auth.transport.requests import Request as GoogleAuthRequest
         if not creds.valid:
@@ -850,8 +1138,9 @@ def _send_fcm_wake(event: dict) -> None:
         access_token = creds.token
     except Exception as error:  # noqa: BLE001
         print(f"[lockprofile] FCM token refresh failed: {error}", flush=True)
-        return
+        return 0
 
+    sent = 0
     url = f"https://fcm.googleapis.com/v1/projects/{project_id}/messages:send"
     for token in tokens:
         message = {
@@ -859,7 +1148,9 @@ def _send_fcm_wake(event: dict) -> None:
                 "token": token,
                 # Data-only (no "notification" block) so the app's onMessageReceived always runs and
                 # can wake the poller, rather than the system silently tray-ing a notification.
-                "data": {"type": str(event.get("type", "")), "reason": "tamper"},
+                # This "type" value is advisory/for-logging only -- MacTamperMessagingService.kt
+                # deliberately ignores message.data entirely and treats ANY push as "poll now".
+                "data": {"type": str(event.get("type", ""))},
                 "android": {"priority": "high"},
             }
         }
@@ -874,6 +1165,7 @@ def _send_fcm_wake(event: dict) -> None:
         )
         try:
             urllib.request.urlopen(request, timeout=10).close()
+            sent += 1
         except urllib.error.HTTPError as error:
             # 404 (or UNREGISTERED) means the token is dead -- prune it so we stop trying.
             if error.code in (404, 400):
@@ -881,6 +1173,7 @@ def _send_fcm_wake(event: dict) -> None:
             print(f"[lockprofile] FCM send failed for {event.get('type')}: HTTP {error.code}", flush=True)
         except (urllib.error.URLError, OSError) as error:
             print(f"[lockprofile] FCM send failed for {event.get('type')}: {error}", flush=True)
+    return sent
 
 
 def _check_sudo_command(command: str, reason: str) -> tuple[str, str]:
@@ -941,6 +1234,12 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
         self.wfile.write(payload)
+
+    def _send_redirect(self, location: str) -> None:
+        self.send_response(302)
+        self.send_header("Location", location)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
     def _authorized(self) -> bool:
         if not TOKEN:
@@ -1005,11 +1304,18 @@ class Handler(BaseHTTPRequestHandler):
         `HttpOnly` so the dashboard's own JS can never read it (nothing to steal via XSS);
         `SameSite=Strict` since this cookie should never be sent cross-site; `Secure` because this
         server is only ever reached over HTTPS (Caddy) or the LAN vhost, never plain HTTP with
-        anything sensitive riding along."""
+        anything sensitive riding along.
+
+        Deliberately no `Max-Age` on login -- that makes this a browser *session* cookie, cleared
+        automatically when the browser itself closes, rather than a persistent one that would keep
+        a guardian logged in for weeks after they'd left the site. DASHBOARD_SESSION_MAX_AGE_SECONDS
+        still bounds the underlying token server-side (checked in _dashboard_session_valid) as a
+        backstop, in case a browser's "restore previous session" setting resurrects the cookie
+        anyway."""
         if token is None:
             value = "deleted; Max-Age=0"
         else:
-            value = f"{token}; Max-Age={DASHBOARD_SESSION_MAX_AGE_SECONDS}"
+            value = token
         self.send_header(
             "Set-Cookie",
             f"otterling_dashboard_session={value}; Path=/; HttpOnly; Secure; SameSite=Strict",
@@ -1045,11 +1351,23 @@ class Handler(BaseHTTPRequestHandler):
         """Backs Caddy's `forward_auth` in front of `/dashboard/*` and `/dashboard-api/*` -- Caddy
         calls this on every request to those paths and only lets the real request through on 2xx.
         Deliberately checks nothing but the cookie (no Bearer token): a browser has no way to send
-        one, and the cookie itself is what proves the login happened."""
+        one, and the cookie itself is what proves the login happened.
+
+        On failure, forward_auth relays this response verbatim as the final response to whatever
+        request triggered it. For an actual page load (/dashboard, /dashboard/*) that should send
+        the browser straight to the login page rather than showing this route's raw JSON body.
+        /dashboard-api/* calls (the SPA's own fetch()s, which forward_auth gates too) still need a
+        plain 401 though -- api.ts already turns that into an in-app error screen, and redirecting
+        those would hand the login page's HTML to a caller expecting JSON. forward_auth sets
+        X-Forwarded-Uri to the original request's path, which is how these two cases are told apart
+        here."""
         cookie = _dashboard_cookie_from_headers(self.headers)
         if cookie and _dashboard_session_valid(cookie):
             return self._send_json(200, {"status": "ok"})
-        return self._send_json(401, {"error": "not logged in"})
+        forwarded_uri = self.headers.get("X-Forwarded-Uri", "")
+        if forwarded_uri.startswith("/dashboard-api/"):
+            return self._send_json(401, {"error": "not logged in"})
+        return self._send_redirect("/dashboard-login/")
 
     def do_POST(self):  # noqa: N802 (http.server API)
         parsed = urllib.parse.urlparse(self.path)
@@ -1225,6 +1543,102 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(200, {"devices": devices})
             return True
 
+        # Guardian PIN: one shared secret for the whole fleet, not per-device -- see
+        # GUARDIAN_PIN_PATH's comment for why this is plaintext rather than a hash, and why it
+        # lives outside device_settings.json entirely. GET is used both by the dashboard (to show
+        # whether a PIN is currently set) and by each phone's periodic sync (to pull the raw PIN
+        # and feed it into its own local PinAuthManager.setPin()).
+        if path == "/dashboard-api/pin" and method == "GET":
+            self._send_json(200, _load_guardian_pin())
+            return True
+
+        if path == "/dashboard-api/pin" and method == "POST":
+            pin = (body or {}).get("pin", "").strip()
+            if not re.fullmatch(r"\d{4}", pin):
+                self._send_json(400, {"error": "pin must be exactly 4 digits"})
+                return True
+            record = _save_guardian_pin(pin)
+            self._send_json(200, record)
+            return True
+
+        # Global habit library: one shared list for the whole fleet, not per-device -- see
+        # HABITS_PATH's comment. GET includes each habit's `doneToday`/`verifiedAt`, computed
+        # from HABIT_COMPLETIONS_PATH, so both the dashboard AND every device's own
+        # DashboardConfigSync/DashboardConfigStore can see live completion state from the same
+        # response a per-device settings fetch would otherwise need a second round-trip for.
+        if path == "/dashboard-api/habits" and method == "GET":
+            self._send_json(200, {"habits": _habits_with_completion_status()})
+            return True
+
+        if path == "/dashboard-api/habits" and method == "POST":
+            name = ((body or {}).get("name") or "").strip()
+            if not name:
+                self._send_json(400, {"error": "name required"})
+                return True
+            with _habits_lock:
+                habits = _load_habits()
+                habits.append({"id": uuid.uuid4().hex, "name": name})
+                _save_habits(habits)
+            self._send_json(200, {"habits": _habits_with_completion_status()})
+            return True
+
+        habit_match = HABIT_ITEM_RE.match(path)
+        if habit_match:
+            habit_id, is_complete = habit_match.group(1), habit_match.group(2)
+
+            if is_complete and method == "POST":
+                # Reported by whichever device just verified the habit (see
+                # HabitCompletionReporter.kt / the Mac equivalent once built) -- bearer-token
+                # authenticated like every other phone/mac -> server call, not gated further.
+                # `date` is the REPORTING DEVICE's own local calendar date, trusted as-is -- see
+                # _today_str's comment on why this server does no timezone conversion.
+                date = ((body or {}).get("date") or "").strip()
+                if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date):
+                    self._send_json(400, {"error": "date must be YYYY-MM-DD"})
+                    return True
+                reporting_device_id = _safe_device_id(((body or {}).get("device_id") or "").strip()) or ""
+                with _habits_lock:
+                    if not any(h.get("id") == habit_id for h in _load_habits()):
+                        self._send_json(404, {"error": "no such habit"})
+                        return True
+                with _habit_completions_lock:
+                    completions = _load_habit_completions()
+                    completions[habit_id] = {
+                        "date": date,
+                        "verifiedAt": time.time(),
+                        "device_id": reporting_device_id,
+                    }
+                    _save_habit_completions(completions)
+                self._send_json(200, {"status": "ok"})
+                return True
+
+            if not is_complete and method == "DELETE":
+                with _habits_lock:
+                    habits = [h for h in _load_habits() if h.get("id") != habit_id]
+                    _save_habits(habits)
+                with _habit_completions_lock:
+                    completions = _load_habit_completions()
+                    completions.pop(habit_id, None)
+                    _save_habit_completions(completions)
+                self._send_json(200, {"habits": _habits_with_completion_status()})
+                return True
+
+        # "Poll Now" button: wakes every registered phone via FCM instead of waiting out
+        # MacTamperPollWorker's 15-minute floor -- same push channel _push_event already uses for
+        # tamper alerts (_send_fcm_wake), just guardian-triggered instead of event-triggered. Run
+        # synchronously (unlike _push_event's fire-and-forget thread) so the response can tell the
+        # guardian whether this actually reached a device, not just "requested" -- there's realistically
+        # at most a couple of tokens to notify, so blocking briefly here is fine for a button click.
+        if path == "/dashboard-api/poll-now" and method == "POST":
+            notified = _send_fcm_wake({"type": "dashboard_poll_requested"})
+            _, project_id = _fcm_credentials()
+            self._send_json(200, {
+                "status": "ok",
+                "notified": notified,
+                "fcmConfigured": project_id is not None,
+            })
+            return True
+
         match = DASHBOARD_DEVICE_RE.match(path)
         if not match:
             return False
@@ -1234,6 +1648,11 @@ class Handler(BaseHTTPRequestHandler):
             return True
         parts = [p for p in (match.group(2) or "").split("/") if p]
 
+        if not parts and method == "DELETE":
+            _delete_device(device_id)
+            self._send_json(200, {"status": "ok"})
+            return True
+
         if parts == ["settings"] and method in ("GET", "PATCH"):
             updates = None
             if method == "PATCH":
@@ -1241,14 +1660,12 @@ class Handler(BaseHTTPRequestHandler):
                     self._send_json(400, {"error": "bad json"})
                     return True
                 # Allowlisted, not a raw pass-through: everything else (rules, habits,
-                # blockedWebsites, vpnBypassApps, appBudgets) has its own dedicated endpoint above,
-                # and guardianPinHash must only ever be set via the salted-hash /pin route below --
-                # letting an arbitrary PATCH body reach _device_settings unfiltered would let a
-                # caller overwrite guardianPinHash directly, bypassing that hashing entirely.
+                # blockedWebsites, vpnBypassApps, appBudgets) has its own dedicated endpoint above.
                 updates = {k: v for k, v in body.items() if k in SETTINGS_PATCH_ALLOWED_KEYS}
             record = _device_settings(device_id, updates)
-            record = {k: v for k, v in record.items() if k != "guardianPinHash"}
-            self._send_json(200, record)
+            # platform is computed, not stored -- see _detect_platform's doc comment. Lets the
+            # dashboard show/hide Android-only sections (most of this record) per selected device.
+            self._send_json(200, {**record, "platform": _detect_platform(device_id)})
             return True
 
         if parts == ["activity"] and method == "GET":
@@ -1261,17 +1678,6 @@ class Handler(BaseHTTPRequestHandler):
             events = [e for e in _read_alerts_since(since_id) if e.get("device_id") == device_id]
             max_id = events[-1]["id"] if events else since_id
             self._send_json(200, {"events": events, "max_id": max_id})
-            return True
-
-        if parts == ["pin"] and method == "POST":
-            pin = (body or {}).get("pin", "").strip()
-            if not pin:
-                self._send_json(400, {"error": "pin required"})
-                return True
-            salt = secrets.token_hex(16)
-            digest = hashlib.sha256((salt + pin).encode("utf-8")).hexdigest()
-            _device_settings(device_id, {"guardianPinHash": f"{salt}${digest}"})
-            self._send_json(200, {"status": "ok"})
             return True
 
         if len(parts) == 1 and parts[0] in LIST_ENDPOINTS and method in ("GET", "POST"):

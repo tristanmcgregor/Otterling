@@ -190,6 +190,13 @@ func formatState(_ state: FocusLockState) -> String {
         lines.append("⚠️  Lock profile: NOT installed -- DNS floor + removal tripwire are missing. " +
                       "See GUARDIAN_SETUP.md / Scripts/install_lock_profile.command.")
     }
+    if let lastFetched = state.dashboardConfigLastFetchedAt {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .abbreviated
+        lines.append("Dashboard sync: last synced \(formatter.localizedString(for: lastFetched, relativeTo: Date()))")
+    } else {
+        lines.append("Dashboard sync: never synced yet")
+    }
     return lines.joined(separator: "\n")
 }
 

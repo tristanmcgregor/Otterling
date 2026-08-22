@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -18,6 +17,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Backspace
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -39,9 +39,16 @@ private const val MIN_PIN_LENGTH = 4
 private const val MAX_PIN_LENGTH = 8
 
 /**
- * Gate shown before Settings, rebuilt as a numeric keypad. If no PIN has been set yet, walks
- * through a create-and-confirm flow first; otherwise just prompts for the existing PIN. All PIN
- * validation, lockout, and persistence stays in [PinAuthManager] exactly as before.
+ * Gate shown before Settings, a numeric keypad. The Guardian PIN is set exclusively from the
+ * guardian dashboard (see [PinAuthManager.setPin] -- its only caller anywhere in this app is
+ * [app.otterling.content.DashboardConfigStore.syncPin], on the same ~15-minute cadence as the
+ * rest of that dashboard sync) and reaches this device automatically; this screen never lets
+ * anyone create, change, or clear a PIN locally, so the one 4-digit PIN set on the website is the
+ * only one that ever exists anywhere in the Otterling ecosystem. If no PIN has synced down yet,
+ * [NoPinYetScreen] explains that and lets the caller straight through -- there's nothing to gate
+ * against yet, and blocking Settings entirely until the guardian's very first dashboard visit
+ * would strand a fresh install with no way in. Once a PIN exists, every future visit gates on it
+ * for real, with escalating lockout on wrong guesses (see [PinAuthManager.verifyPin]).
  */
 @Composable
 fun PinLockScreen(
@@ -50,42 +57,24 @@ fun PinLockScreen(
     onCancel: () -> Unit,
 ) {
     val hasPin = remember { pinAuthManager.hasPin() }
+    if (!hasPin) {
+        NoPinYetScreen(onContinue = onUnlocked, onCancel = onCancel)
+        return
+    }
+
     var pin by remember { mutableStateOf("") }
-    var firstEntry by remember { mutableStateOf("") }
-    var confirming by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf("") }
 
     fun submit() {
-        if (hasPin) {
-            val lockoutMs = pinAuthManager.lockoutRemainingMillis()
-            if (lockoutMs > 0) {
-                errorMessage = "Too many wrong PINs -- try again in ${(lockoutMs / 1000) + 1}s"
-                pin = ""
-            } else if (pinAuthManager.verifyPin(pin)) {
-                onUnlocked()
-            } else {
-                errorMessage = "Incorrect PIN"
-                pin = ""
-            }
-        } else if (!confirming) {
-            if (pin.length < MIN_PIN_LENGTH) {
-                errorMessage = "PIN must be at least $MIN_PIN_LENGTH digits"
-            } else {
-                firstEntry = pin
-                pin = ""
-                confirming = true
-                errorMessage = ""
-            }
+        val lockoutMs = pinAuthManager.lockoutRemainingMillis()
+        if (lockoutMs > 0) {
+            errorMessage = "Too many wrong PINs -- try again in ${(lockoutMs / 1000) + 1}s"
+            pin = ""
+        } else if (pinAuthManager.verifyPin(pin)) {
+            onUnlocked()
         } else {
-            if (pin != firstEntry) {
-                errorMessage = "PINs don't match"
-                firstEntry = ""
-                pin = ""
-                confirming = false
-            } else {
-                pinAuthManager.setPin(firstEntry)
-                onUnlocked()
-            }
+            errorMessage = "Incorrect PIN"
+            pin = ""
         }
     }
 
@@ -94,17 +83,6 @@ fun PinLockScreen(
             pin += digit
             errorMessage = ""
         }
-    }
-
-    val title = when {
-        hasPin -> "Guardian Settings"
-        confirming -> "Confirm your PIN"
-        else -> "Create a PIN"
-    }
-    val subtitle = when {
-        hasPin -> "Enter your PIN to continue"
-        confirming -> "Re-enter the PIN to confirm"
-        else -> "Choose a $MIN_PIN_LENGTH–$MAX_PIN_LENGTH digit PIN"
     }
 
     Box(
@@ -142,10 +120,10 @@ fun PinLockScreen(
                 )
             }
             Spacer(Modifier.height(16.dp))
-            Text(title, style = MaterialTheme.typography.titleLarge)
+            Text("Guardian Settings", style = MaterialTheme.typography.titleLarge)
             Spacer(Modifier.height(4.dp))
             Text(
-                subtitle,
+                "Enter the Guardian PIN to continue",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
@@ -172,6 +150,62 @@ fun PinLockScreen(
                 onSubmit = ::submit,
                 submitEnabled = pin.length >= MIN_PIN_LENGTH,
             )
+        }
+    }
+}
+
+/** Shown in place of the keypad when [PinAuthManager.hasPin] is false -- see [PinLockScreen]'s
+ *  doc comment for why there's no local create-a-PIN fallback anymore. */
+@Composable
+private fun NoPinYetScreen(onContinue: () -> Unit, onCancel: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background),
+    ) {
+        IconButton(
+            onClick = onCancel,
+            modifier = Modifier.padding(8.dp).align(Alignment.TopStart),
+        ) {
+            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+        }
+
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .statusBarsPadding()
+                .padding(horizontal = 32.dp, vertical = 24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(64.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.primaryContainer),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Default.Lock,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(30.dp),
+                )
+            }
+            Spacer(Modifier.height(16.dp))
+            Text("No Guardian PIN set yet", style = MaterialTheme.typography.titleLarge)
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "The Guardian PIN is set from the dashboard, not on this phone. Once your " +
+                    "guardian sets one there, it syncs here automatically.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+            )
+            Spacer(Modifier.height(32.dp))
+            Button(onClick = onContinue) {
+                Text("Continue")
+            }
         }
     }
 }

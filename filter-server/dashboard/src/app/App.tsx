@@ -1,17 +1,17 @@
 import React, { useEffect, useState } from "react";
 import {
   Shield, Lock, Clock, Globe, CheckCircle, Bug, RefreshCw,
-  Plus, Settings as SettingsIcon, Camera, X, Trash2,
+  Plus, Settings as SettingsIcon, X, Trash2, LogOut, Laptop,
   Home, ListChecks, Timer, AlertTriangle, Moon, Sun,
   BarChart3, Check, Wifi, ChevronDown,
 } from "lucide-react";
 import { cn, Card, Button, Switch, Pill } from "./components/ui";
-import { api, ApiError } from "../lib/api";
+import { api, ApiError, logout } from "../lib/api";
 import type {
-  DeviceSettings, DeviceSummary, ActivityEvent, Rule, RuleSchedule,
+  DeviceSettings, DeviceSummary, ActivityEvent, Rule, RuleSchedule, AppBudget, ProtectedApp, Habit,
 } from "../lib/api";
 
-type Screen = "Dashboard" | "Settings" | "Wizard" | "PhotoCapture" | "Friction" | "AccessibilityNag";
+type Screen = "Dashboard" | "Settings" | "Wizard" | "Friction" | "AccessibilityNag";
 
 interface NavDef {
   id: Screen;
@@ -24,15 +24,20 @@ const NAV: NavDef[] = [
   { id: "Settings", label: "Settings", icon: SettingsIcon },
 ];
 
+// These two are genuinely phone-side *previews* -- read-only mockups of screens the child's
+// Android phone shows (see each screen's PreviewBanner), not something you configure here.
+// "Rules"/Wizard used to be listed alongside them, but it's the real add/edit-rule flow (it
+// calls api.addRule/updateRule), not a preview -- it's reachable via the "Add Rule" buttons on
+// the Dashboard/Settings screens instead. Both previews are Android-only concepts (the Mac has no
+// equivalent screens), so the sidebar only shows this section for an android-platform device.
 const PREVIEW_NAV: NavDef[] = [
-  { id: "Wizard", label: "Rules", icon: ListChecks },
-  { id: "PhotoCapture", label: "Verify Habit", icon: Camera },
   { id: "Friction", label: "Delay Timer", icon: Timer },
   { id: "AccessibilityNag", label: "Accessibility", icon: AlertTriangle },
 ];
 
 const DEVICE_STORAGE_KEY = "otterling.deviceId";
 const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const IDLE_LOGOUT_MS = 20 * 60 * 1000;
 
 export default function App() {
   const [screen, setScreen] = useState<Screen>("Dashboard");
@@ -41,10 +46,12 @@ export default function App() {
   const [deviceId, setDeviceId] = useState<string>(() => localStorage.getItem(DEVICE_STORAGE_KEY) || "");
   const [settings, setSettings] = useState<DeviceSettings | null>(null);
   const [activity, setActivity] = useState<ActivityEvent[]>([]);
+  const [habits, setHabits] = useState<Habit[]>([]);
   const [editingRule, setEditingRule] = useState<Rule | null>(null);
   const [refreshToken, setRefreshToken] = useState(0);
   const [loadError, setLoadError] = useState<string | null>(null);
   const reload = () => setRefreshToken((t) => t + 1);
+  const reloadHabits = () => api.getHabits().then((res) => setHabits(res.habits)).catch(() => setHabits([]));
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", dark);
@@ -65,15 +72,53 @@ export default function App() {
     if (deviceId) localStorage.setItem(DEVICE_STORAGE_KEY, deviceId);
   }, [deviceId]);
 
+  // Global habit library -- not scoped to the selected device, unlike settings/activity below.
+  useEffect(() => {
+    reloadHabits();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshToken]);
+
   useEffect(() => {
     if (!deviceId) { setSettings(null); return; }
-    api.getSettings(deviceId).then(setSettings).catch(() => setSettings(null));
+    api.getSettings(deviceId)
+      .then((s) => { setSettings(s); setLoadError(null); })
+      .catch((err) => {
+        // A silent setSettings(null) here previously left the dashboard stuck on a bare
+        // "Loading..." forever on failure (e.g. a device_id the server couldn't route), with no
+        // way to tell a slow request from a broken one. Surfacing it as loadError instead gives
+        // an ErrorScreen with a retry button.
+        setSettings(null);
+        setLoadError(err instanceof ApiError ? err.message : "Couldn't load this device's settings");
+      });
   }, [deviceId, refreshToken]);
 
   useEffect(() => {
     if (!deviceId) { setActivity([]); return; }
     api.getActivity(deviceId).then((res) => setActivity(res.events.slice().reverse())).catch(() => setActivity([]));
   }, [deviceId, refreshToken]);
+
+  // Auto-logout after IDLE_LOGOUT_MS of no interaction. The session cookie itself has no Max-Age
+  // (see lockprofile_service.py's _set_dashboard_session_cookie) so it *should* clear when the
+  // browser closes -- but Chrome/Firefox/Edge's "continue where you left off" restores session
+  // cookies across a real restart regardless, which a Set-Cookie header can't override. An idle
+  // timer is the only way to reliably end a session after a guardian actually walks away, so this
+  // is the real logout mechanism; the session-cookie behavior is just a best-effort second layer.
+  useEffect(() => {
+    const lastActivity = { current: Date.now() };
+    const bump = () => { lastActivity.current = Date.now(); };
+    const events: (keyof WindowEventMap)[] = ["pointerdown", "keydown", "scroll", "wheel"];
+    events.forEach((e) => window.addEventListener(e, bump, { passive: true }));
+    const interval = window.setInterval(() => {
+      if (Date.now() - lastActivity.current >= IDLE_LOGOUT_MS) {
+        window.clearInterval(interval);
+        logout().finally(() => window.location.reload());
+      }
+    }, 30_000);
+    return () => {
+      events.forEach((e) => window.removeEventListener(e, bump));
+      window.clearInterval(interval);
+    };
+  }, []);
 
   const navigate = (s: Screen) => setScreen(s);
   const startNewRule = () => { setEditingRule(null); setScreen("Wizard"); };
@@ -86,13 +131,20 @@ export default function App() {
     if (!deviceId) {
       return <NoDeviceScreen devices={devices} />;
     }
-    switch (screen) {
+    // Friction/AccessibilityNag are literal mockups of Android-phone screens, so they stay
+    // Android-only -- if a guardian was on one of these and then switched the device dropdown to
+    // the Mac, fall back to Dashboard. Wizard (rule creation) is NOT Android-only anymore: a rule
+    // can now target the Mac too (see HabitRuleWizard's platform-conditional Step 1).
+    const androidOnlyScreen = screen === "Friction" || screen === "AccessibilityNag";
+    const effectiveScreen = settings?.platform === "macos" && androidOnlyScreen ? "Dashboard" : screen;
+    switch (effectiveScreen) {
       case "Dashboard":
         return (
           <DashboardScreen
             deviceId={deviceId}
             settings={settings}
             activity={activity}
+            habits={habits}
             onNavigate={navigate}
             onAddRule={startNewRule}
             onEditRule={startEditRule}
@@ -104,9 +156,12 @@ export default function App() {
           <SettingsScreen
             deviceId={deviceId}
             settings={settings}
+            habits={habits}
             onNavigate={navigate}
             onAddRule={startNewRule}
             onChanged={reload}
+            onHabitsChanged={reloadHabits}
+            onDeviceRemoved={() => { setDeviceId(""); reload(); }}
           />
         );
       case "Wizard":
@@ -114,13 +169,12 @@ export default function App() {
           <HabitRuleWizard
             deviceId={deviceId}
             settings={settings}
+            habits={habits}
             editingRule={editingRule}
             onNavigate={navigate}
             onSaved={reload}
           />
         );
-      case "PhotoCapture":
-        return <PhotoCaptureScreen onNavigate={navigate} />;
       case "Friction":
         return <FrictionDelayScreen onNavigate={navigate} seconds={settings?.frictionDelay.seconds ?? 30} />;
       case "AccessibilityNag":
@@ -141,6 +195,7 @@ export default function App() {
         settings={settings}
         dark={dark}
         onToggleDark={() => setDark(!dark)}
+        onLogout={() => logout().finally(() => window.location.reload())}
       />
       <main className="flex-1 overflow-y-auto no-scrollbar bg-background min-w-0">
         {renderContent()}
@@ -152,7 +207,7 @@ export default function App() {
 // ─── Chrome ──────────────────────────────────────────────────────────────────
 
 function Sidebar({
-  screen, nav, previewNav, onNavigate, devices, deviceId, onSelectDevice, settings, dark, onToggleDark,
+  screen, nav, previewNav, onNavigate, devices, deviceId, onSelectDevice, settings, dark, onToggleDark, onLogout,
 }: {
   screen: Screen;
   nav: NavDef[];
@@ -164,7 +219,9 @@ function Sidebar({
   settings: DeviceSettings | null;
   dark: boolean;
   onToggleDark: () => void;
+  onLogout: () => void;
 }) {
+  const isMac = settings?.platform === "macos";
   const protectionsOn = settings ? Object.values(settings.protections).filter(Boolean).length : 0;
   const protectionsTotal = settings ? Object.keys(settings.protections).length : 0;
 
@@ -208,7 +265,16 @@ function Sidebar({
       </div>
 
       {/* Status badge */}
-      {settings && (
+      {settings && isMac && (
+        <div className="mx-3 mb-3 px-3 py-2 rounded-xl bg-secondary-container/50 border border-secondary/20">
+          <div className="flex items-center gap-1.5">
+            <span className="w-1.5 h-1.5 rounded-full shrink-0 bg-secondary animate-pulse" />
+            <span className="text-[11px] font-semibold text-secondary">Tamper monitoring active</span>
+          </div>
+          <p className="text-[10px] text-on-surface-variant mt-0.5">Managed locally by FocusLock</p>
+        </div>
+      )}
+      {settings && !isMac && (
         <div className="mx-3 mb-3 px-3 py-2 rounded-xl bg-secondary-container/50 border border-secondary/20">
           <div className="flex items-center gap-1.5">
             <span className={cn("w-1.5 h-1.5 rounded-full shrink-0", protectionsOn === protectionsTotal ? "bg-secondary animate-pulse" : "bg-tertiary")} />
@@ -222,24 +288,37 @@ function Sidebar({
         </div>
       )}
 
+      <PollNowButton />
+
       {/* Nav */}
       <nav className="px-2 flex-1 space-y-px overflow-y-auto no-scrollbar">
         <p className="text-[9px] font-bold uppercase tracking-[0.12em] text-on-surface-variant/50 px-3 py-1.5">Manage</p>
         {nav.map((item) => (
           <SidebarItem key={item.id} item={item} active={screen === item.id} onClick={() => onNavigate(item.id)} />
         ))}
-        <div className="h-px bg-outline-variant/40 my-2" />
-        <p className="text-[9px] font-bold uppercase tracking-[0.12em] text-on-surface-variant/50 px-3 py-1.5">
-          Phone previews
-        </p>
-        {previewNav.map((item) => (
-          <SidebarItem key={item.id} item={item} active={screen === item.id} onClick={() => onNavigate(item.id)} />
-        ))}
+        {!isMac && (
+          <>
+            <div className="h-px bg-outline-variant/40 my-2" />
+            <p className="text-[9px] font-bold uppercase tracking-[0.12em] text-on-surface-variant/50 px-3 py-1.5">
+              Phone previews
+            </p>
+            {previewNav.map((item) => (
+              <SidebarItem key={item.id} item={item} active={screen === item.id} onClick={() => onNavigate(item.id)} />
+            ))}
+          </>
+        )}
       </nav>
 
-      <div className="p-3 border-t border-outline-variant/30">
+      <div className="p-3 border-t border-outline-variant/30 space-y-2">
+        <button
+          onClick={onLogout}
+          className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm font-medium text-on-surface-variant hover:bg-error-container hover:text-error transition-colors"
+        >
+          <LogOut className="w-4 h-4 shrink-0" />
+          <span className="flex-1 text-left">Log out</span>
+        </button>
         <p className="text-[10px] text-on-surface-variant/60 leading-snug px-2">
-          Signed in via this dashboard's own login.
+          Signed in via this dashboard's own login. Auto logs out after 20 minutes idle.
         </p>
       </div>
     </aside>
@@ -261,6 +340,44 @@ function SidebarItem({ item, active, onClick }: { item: NavDef; active: boolean;
       <Icon className="w-4 h-4 shrink-0" />
       <span className="flex-1 text-left">{item.label}</span>
     </button>
+  );
+}
+
+// Wakes every registered phone via FCM right now (see api.pollNow) instead of waiting out
+// MacTamperPollWorker's 15-minute WorkManager floor -- fleet-wide, not scoped to the selected
+// device, so this lives in the Sidebar chrome rather than a per-device screen.
+function PollNowButton() {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<string | null>(null);
+
+  const handleClick = () => {
+    setBusy(true);
+    setResult(null);
+    api.pollNow()
+      .then((res) => {
+        if (!res.fcmConfigured) setResult("Push isn't configured on the server");
+        else if (res.notified === 0) setResult("No phone has registered for push yet");
+        else setResult(`Sent to ${res.notified} device${res.notified === 1 ? "" : "s"}`);
+      })
+      .catch((err) => setResult(err instanceof ApiError ? err.message : "Couldn't reach the server"))
+      .finally(() => {
+        setBusy(false);
+        window.setTimeout(() => setResult(null), 5000);
+      });
+  };
+
+  return (
+    <div className="mx-3 mb-3">
+      <button
+        onClick={handleClick}
+        disabled={busy}
+        className="w-full flex items-center justify-center gap-2 h-9 rounded-xl border border-outline-variant/50 bg-surface-variant/40 text-sm font-medium text-on-surface hover:bg-surface-variant transition-colors disabled:opacity-60"
+      >
+        <RefreshCw className={cn("w-3.5 h-3.5", busy && "animate-spin")} />
+        {busy ? "Polling..." : "Poll now"}
+      </button>
+      {result && <p className="text-[10px] text-on-surface-variant mt-1 text-center leading-snug">{result}</p>}
+    </div>
   );
 }
 
@@ -315,11 +432,12 @@ function PreviewBanner({ children }: { children: React.ReactNode }) {
 // ─── Dashboard ────────────────────────────────────────────────────────────────
 
 function DashboardScreen({
-  deviceId, settings, activity, onNavigate, onAddRule, onEditRule, onReload,
+  deviceId, settings, activity, habits, onNavigate, onAddRule, onEditRule, onReload,
 }: {
   deviceId: string;
   settings: DeviceSettings | null;
   activity: ActivityEvent[];
+  habits: Habit[];
   onNavigate: (s: Screen) => void;
   onAddRule: () => void;
   onEditRule: (rule: Rule) => void;
@@ -340,6 +458,170 @@ function DashboardScreen({
       setBusyRuleId(null);
     }
   };
+
+  if (settings.platform === "macos") {
+    const dnsOn = settings.vpnFilter.enabled;
+    const hasBlocking = settings.blockedApps.length > 0 || settings.protectedApps.length > 0;
+    const headline = dnsOn ? "Protected" : hasBlocking ? "Partially Protected" : "Setup Required";
+    const subtitle = dnsOn
+      ? "Content filter active"
+      : hasBlocking
+      ? "Content filter is off, but blocked/protected apps are still enforced"
+      : "Content filter is off — turn it on from Settings";
+    const statusHue = dnsOn ? "success" : hasBlocking ? "warning" : "error";
+
+    return (
+      <div className="p-7 space-y-5 max-w-[1080px]">
+        {/* Header */}
+        <div className="flex items-start justify-between">
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight">{settings.device_name || deviceId}</h1>
+            <p className="text-sm text-on-surface-variant mt-0.5">
+              {new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })}
+            </p>
+          </div>
+          <Button size="sm" className="gap-2 mt-0.5" onClick={onAddRule}>
+            <Plus className="w-4 h-4" /> Add Rule
+          </Button>
+        </div>
+
+        {/* Status card -- mirrors the local FocusLock app's own Overview status card */}
+        <Card className="rounded-2xl">
+          <div className="flex items-center gap-3.5">
+            <div
+              className={cn(
+                "w-12 h-12 rounded-2xl flex items-center justify-center shrink-0",
+                statusHue === "success" ? "bg-secondary-container/60 text-secondary"
+                  : statusHue === "warning" ? "bg-tertiary-container/60 text-tertiary"
+                  : "bg-error-container/60 text-error"
+              )}
+            >
+              {statusHue === "success" ? <Shield className="w-6 h-6" /> : <AlertTriangle className="w-6 h-6" />}
+            </div>
+            <div>
+              <p className="font-bold text-base leading-tight">{headline}</p>
+              <p className="text-xs text-on-surface-variant mt-0.5">{subtitle}</p>
+            </div>
+          </div>
+        </Card>
+
+        {/* Stat row */}
+        <div className="grid grid-cols-4 gap-3">
+          <StatTile icon={Lock} label="Apps Blocked" value={String(settings.blockedApps.length)} sub="Killed on sight" hue="error" />
+          <StatTile icon={Shield} label="Apps Protected" value={String(settings.protectedApps.length)} sub="Kept alive" hue="secondary" />
+          <StatTile icon={ListChecks} label="Rules Active" value={String(settings.rules.length)} sub="Enforced now" hue="primary" />
+          <StatTile
+            icon={Wifi}
+            label="Content Filter"
+            value={dnsOn ? "On" : "Off"}
+            sub={dnsOn ? "DNS enforced" : "Disabled"}
+            hue={dnsOn ? "secondary" : "tertiary"}
+          />
+        </div>
+
+        {/* Main grid */}
+        <div className="grid grid-cols-5 gap-4">
+          {/* Rules column -- same rendering as the Android dashboard; rules work identically for
+              a Mac device (see HabitRuleWizard's platform-conditional app-identifier field). */}
+          <div className="col-span-3 space-y-3">
+            <div className="flex items-center justify-between px-0.5">
+              <h2 className="font-semibold text-base">Active Rules</h2>
+              <button
+                onClick={onReload}
+                className="p-1.5 rounded-lg hover:bg-surface-variant text-on-surface-variant transition-colors"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            {settings.rules.length === 0 && (
+              <Card className="rounded-2xl text-center py-8">
+                <p className="text-sm text-on-surface-variant">No habit rules yet.</p>
+                <Button size="sm" className="mt-3 gap-1.5" onClick={onAddRule}>
+                  <Plus className="w-3.5 h-3.5" /> Add your first rule
+                </Button>
+              </Card>
+            )}
+
+            {settings.rules.map((rule) => (
+              <Card key={rule.id} className="rounded-2xl space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <AppIcon name={(rule.appName || "?").slice(0, 2).toUpperCase()} color="bg-primary/10 text-primary" />
+                    <div className="min-w-0">
+                      <p className="font-semibold leading-tight truncate">{rule.appName}</p>
+                      <p className="text-xs text-on-surface-variant">{describeSchedule(rule.schedule)}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <Button variant="text" size="sm" className="h-7 px-2 text-xs" onClick={() => onEditRule(rule)}>
+                      Edit
+                    </Button>
+                    <button
+                      onClick={() => removeRule(rule.id)}
+                      disabled={busyRuleId === rule.id}
+                      className="w-7 h-7 rounded-lg flex items-center justify-center text-on-surface-variant hover:bg-error-container hover:text-error transition-colors disabled:opacity-50"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+                {rule.requiredHabitIds.length > 0 && (
+                  <>
+                    <div className="h-px bg-outline-variant/30" />
+                    <div className="flex flex-wrap gap-1.5">
+                      {rule.requiredHabitIds.map((hid) => {
+                        const habit = habits.find((h) => h.id === hid);
+                        return (
+                          <Pill key={hid} variant={habit?.doneToday ? "success" : "default"}>
+                            {habit ? habit.name : "Unknown habit"} {habit?.doneToday ? "✓" : ""}
+                          </Pill>
+                        );
+                      })}
+                    </div>
+                  </>
+                )}
+              </Card>
+            ))}
+          </div>
+
+          {/* Right column */}
+          <div className="col-span-2 space-y-4">
+            <Card className="rounded-2xl">
+              <h3 className="font-semibold text-sm mb-1.5 flex items-center gap-2">
+                <Laptop className="w-4 h-4 text-primary" /> Managed locally by FocusLock
+              </h3>
+              <p className="text-xs text-on-surface-variant leading-relaxed">
+                Sudo-elevation gating and trigger-word reporting run locally and aren't
+                configurable here. Habits, app budgets, and website blocking are phone-only
+                features.
+              </p>
+            </Card>
+
+            <Card className="rounded-2xl bg-surface-variant/20 border-none">
+              <h3 className="text-sm font-semibold mb-2.5 flex items-center gap-2">
+                <Bug className="w-3.5 h-3.5" /> Activity Log
+              </h3>
+              {activity.length === 0 ? (
+                <p className="text-xs text-on-surface-variant">No logs captured yet.</p>
+              ) : (
+                <div className="space-y-1.5" style={{ fontFamily: "var(--font-mono)" }}>
+                  {activity.slice(0, 8).map((e) => (
+                    <div key={e.id} className="flex gap-2.5 text-[10px]">
+                      <span className="text-on-surface-variant/40 shrink-0 tabular-nums">
+                        {new Date(e.reported_at * 1000).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}
+                      </span>
+                      <span className="text-on-surface-variant/80 truncate">{e.details || e.type}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Card>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="p-7 space-y-5 max-w-[1080px]">
@@ -366,7 +648,7 @@ function DashboardScreen({
       {/* Stat row */}
       <div className="grid grid-cols-4 gap-3">
         <StatTile icon={ListChecks} label="Rules Active" value={String(settings.rules.length)} sub="Enforced now" hue="primary" />
-        <StatTile icon={CheckCircle} label="Habits" value={String(settings.habits.length)} sub="Configured" hue="secondary" />
+        <StatTile icon={CheckCircle} label="Habits" value={String(habits.length)} sub="Shared library" hue="secondary" />
         <StatTile icon={Lock} label="Blocked Sites" value={String(settings.blockedWebsites.length)} sub="Custom list" hue="error" />
         <StatTile icon={BarChart3} label="App Budgets" value={String(settings.appBudgets.length)} sub="Daily limits set" hue="tertiary" />
       </div>
@@ -422,8 +704,12 @@ function DashboardScreen({
                   <div className="h-px bg-outline-variant/30" />
                   <div className="flex flex-wrap gap-1.5">
                     {rule.requiredHabitIds.map((hid) => {
-                      const habit = settings.habits.find((h) => h.id === hid);
-                      return <Pill key={hid}>{habit ? habit.name : "Unknown habit"}</Pill>;
+                      const habit = habits.find((h) => h.id === hid);
+                      return (
+                        <Pill key={hid} variant={habit?.doneToday ? "success" : "default"}>
+                          {habit ? habit.name : "Unknown habit"} {habit?.doneToday ? "✓" : ""}
+                        </Pill>
+                      );
                     })}
                   </div>
                 </>
@@ -514,22 +800,37 @@ function describeSchedule(schedule: RuleSchedule): string {
 // ─── Settings ────────────────────────────────────────────────────────────────
 
 function SettingsScreen({
-  deviceId, settings, onNavigate, onAddRule, onChanged,
+  deviceId, settings, habits, onNavigate, onAddRule, onChanged, onHabitsChanged, onDeviceRemoved,
 }: {
   deviceId: string;
   settings: DeviceSettings | null;
+  habits: Habit[];
   onNavigate: (s: Screen) => void;
   onAddRule: () => void;
   onChanged: () => void;
+  onHabitsChanged: () => void;
+  onDeviceRemoved: () => void;
 }) {
   const [pinModalOpen, setPinModalOpen] = useState(false);
+  const [confirmRemove, setConfirmRemove] = useState(false);
+  const [removing, setRemoving] = useState(false);
+  const [pinStatus, setPinStatus] = useState<{ pin: string | null; updatedAt: number | null } | null>(null);
   const [emailDraft, setEmailDraft] = useState("");
   const [nameDraft, setNameDraft] = useState("");
+  const [cooldownDraft, setCooldownDraft] = useState("");
+  const [cloudFilterHostDraft, setCloudFilterHostDraft] = useState("");
+
+  const reloadPinStatus = () => api.getPin().then(setPinStatus).catch(() => setPinStatus(null));
+  useEffect(() => {
+    reloadPinStatus();
+  }, []);
 
   useEffect(() => {
     setEmailDraft(settings?.guardianEmail ?? "");
     setNameDraft(settings?.device_name ?? "");
-  }, [settings?.guardianEmail, settings?.device_name]);
+    setCooldownDraft(settings?.cooldownHours != null ? String(settings.cooldownHours) : "");
+    setCloudFilterHostDraft(settings?.cloudFilterHost ?? "");
+  }, [settings?.guardianEmail, settings?.device_name, settings?.cooldownHours, settings?.cloudFilterHost]);
 
   if (!settings) {
     return <div className="p-7 text-sm text-on-surface-variant">Loading…</div>;
@@ -543,6 +844,14 @@ function SettingsScreen({
 
   const patchFriction = (updates: Partial<DeviceSettings["frictionDelay"]>) =>
     api.patchSettings(deviceId, { frictionDelay: { ...settings.frictionDelay, ...updates } }).then(onChanged);
+
+  // Protections/VPN filter/bypass apps/blocked websites/app budgets/blocked apps/trigger words/
+  // habits & rules are all consumed exclusively by the Android app's DashboardConfigStore (see
+  // RestrictionPreferences.kt, MitmExemptManager.kt, CustomBlocklistManager.kt,
+  // AppTimeBudgetManager.kt, AppSuspensionManager.kt, GuardianAlertSettings.kt,
+  // HabitRuleManager.kt) -- nothing on the Mac reads dashboard-api, so showing those controls for
+  // a macos device would save values that are never actually enforced anywhere.
+  const isMac = settings.platform === "macos";
 
   return (
     <div className="p-7 max-w-[900px] space-y-6">
@@ -575,7 +884,129 @@ function SettingsScreen({
           </Card>
         </div>
 
-        {/* Protection */}
+        {isMac && (
+          <>
+          <div className="space-y-3 col-span-2">
+            <SectionLabel>Mac Protection</SectionLabel>
+            <Card className="rounded-2xl">
+              <h3 className="font-semibold text-sm mb-1.5 flex items-center gap-2">
+                <Laptop className="w-4 h-4 text-primary" /> Everything below is dashboard-driven
+              </h3>
+              <p className="text-xs text-on-surface-variant leading-relaxed">
+                Sudo-elevation gating and trigger-word reporting run locally and aren't
+                configurable here. Turning something on (blocking an app, protecting an app,
+                enabling filtering) applies immediately. Turning something off — unblocking an
+                app, removing protection, disabling filtering, lowering the cooldown, repointing
+                the filter host — is delayed by this Mac's own cooldown period before it actually
+                takes effect; check the Activity Log for status. Website blocking, app time
+                budgets, and habits & rules are phone-only features and stay hidden for this
+                device.
+              </p>
+            </Card>
+          </div>
+
+          {/* Removal cooldown */}
+          <div className="space-y-3">
+            <SectionLabel>Removal Cooldown</SectionLabel>
+            <Card className="rounded-2xl">
+              <p className="text-xs text-on-surface-variant mb-2">
+                How long a protection-reducing change waits before it actually takes effect.
+                Raising it applies immediately; lowering it is itself delayed by the current
+                cooldown.
+              </p>
+              <div className="flex items-center gap-3">
+                <input
+                  type="number"
+                  min={0}
+                  max={720}
+                  value={cooldownDraft}
+                  onChange={(e) => setCooldownDraft(e.target.value)}
+                  className="w-24 h-9 px-3 rounded-xl border border-outline bg-surface text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                />
+                <span className="text-xs text-on-surface-variant">hours</span>
+                <Button
+                  variant="tonal"
+                  size="sm"
+                  onClick={() => api.patchSettings(deviceId, { cooldownHours: Number(cooldownDraft) || 0 }).then(onChanged)}
+                >
+                  Save
+                </Button>
+              </div>
+            </Card>
+          </div>
+
+          {/* Proxy enforcement */}
+          <div className="space-y-3">
+            <SectionLabel>Proxy Enforcement</SectionLabel>
+            <Card className="rounded-2xl space-y-0 divide-y divide-outline-variant/30">
+              <SettingsRow
+                title="Route traffic through the filter proxy"
+                sub="Extra layer beyond DNS filtering — needs the proxy CA/password already provisioned on the Mac"
+                checked={settings.proxyFilter?.enabled ?? false}
+                onChange={(v) => api.patchSettings(deviceId, { proxyFilter: { enabled: v } }).then(onChanged)}
+              />
+              <SettingsRow
+                title="Force all traffic through the proxy"
+                sub="Also blocks direct :80/:443 so non-proxy-aware apps can't bypass it"
+                checked={settings.proxyFilter?.forceViaFirewall ?? false}
+                onChange={(v) => api.patchSettings(deviceId, { proxyFilter: { forceViaFirewall: v } }).then(onChanged)}
+              />
+            </Card>
+          </div>
+
+          {/* Cloud filter */}
+          <div className="space-y-3">
+            <SectionLabel>Cloud Filter</SectionLabel>
+            <Card className="rounded-2xl space-y-0 divide-y divide-outline-variant/30">
+              <SettingsRow
+                title="Use the cloud filter as DNS resolver"
+                sub="Off falls back to Cloudflare Family DNS"
+                checked={settings.cloudFilterEnabled ?? true}
+                onChange={(v) => api.patchSettings(deviceId, { cloudFilterEnabled: v }).then(onChanged)}
+              />
+              <div className="py-3 px-1 space-y-1.5">
+                <div className="flex items-center gap-3">
+                  <input
+                    value={cloudFilterHostDraft}
+                    onChange={(e) => setCloudFilterHostDraft(e.target.value)}
+                    placeholder="vpn.bartholomew.help"
+                    className="flex-1 h-9 px-3 rounded-xl border border-outline bg-surface text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                  />
+                  <Button
+                    variant="text"
+                    size="sm"
+                    className="text-xs h-9"
+                    onClick={() => api.patchSettings(deviceId, { cloudFilterHost: cloudFilterHostDraft }).then(onChanged)}
+                  >
+                    Save
+                  </Button>
+                </div>
+                <p className="text-xs text-on-surface-variant">
+                  Repointing the host is always delayed by the cooldown, even to "fix" it.
+                </p>
+              </div>
+            </Card>
+          </div>
+
+          {/* Protected apps */}
+          <div className="space-y-3 col-span-2">
+            <SectionLabel>Protected Apps</SectionLabel>
+            <Card className="rounded-2xl">
+              <p className="text-xs text-on-surface-variant mb-2">
+                Kept running and undeletable (filesystem-locked) instead of blocked — e.g. an
+                accountability app whose reporting shouldn't be removable. Use the exact
+                executable name and the full path to the .app bundle.
+              </p>
+              <ProtectedAppList
+                items={settings.protectedApps}
+                onAdd={(app) => api.addProtectedApp(deviceId, app).then(onChanged)}
+                onRemove={(executableName) => api.removeProtectedApp(deviceId, executableName).then(onChanged)}
+              />
+            </Card>
+          </div>
+          </>
+        )}
+        {!isMac && (
         <div className="space-y-3">
           <SectionLabel>Tamper Protection</SectionLabel>
           <Card className="rounded-2xl space-y-0 divide-y divide-outline-variant/30">
@@ -612,63 +1043,168 @@ function SettingsScreen({
             />
           </Card>
         </div>
+        )}
 
-        {/* VPN & Content */}
-        <div className="space-y-3">
-          <SectionLabel>Content Filter VPN</SectionLabel>
-          <Card className="rounded-2xl space-y-0 divide-y divide-outline-variant/30">
-            <SettingsRow
-              title="Enable VPN Filter"
-              sub="Blocks adult content globally across all apps"
-              checked={settings.vpnFilter.enabled}
-              onChange={patchVpnEnabled}
-            />
-            <div className="py-3 px-1">
-              <div className="flex items-center gap-2 mb-2">
-                <Wifi className="w-4 h-4 text-secondary" />
-                <span className="text-sm font-medium">Bypass apps</span>
-                <Pill variant={settings.vpnFilter.enabled ? "success" : "default"}>
-                  {settings.vpnFilter.enabled ? "Filter active" : "Filter off"}
-                </Pill>
-              </div>
-              <p className="text-xs text-on-surface-variant mb-2">Apps allowed to skip the content filter.</p>
-              <TagList
-                items={settings.vpnBypassApps.map((a) => ({ id: a.id, label: a.name }))}
-                placeholder="App name…"
-                onAdd={(name) => api.addBypassApp(deviceId, name).then(onChanged)}
-                onRemove={(id) => api.removeBypassApp(deviceId, id).then(onChanged)}
-              />
-            </div>
-          </Card>
-        </div>
-
+        {!isMac && (
+        <>
         {/* Blocked websites */}
         <div className="space-y-3">
           <SectionLabel>Blocked Websites</SectionLabel>
           <Card className="rounded-2xl">
-            <p className="text-xs text-on-surface-variant mb-2">Add-only — the device owner can never remove these.</p>
+            <p className="text-xs text-on-surface-variant mb-2">
+              Add-only — the device owner can never remove these. A bare domain (e.g. <code>example.com</code>) blocks
+              the whole site; a domain+path (e.g. <code>youtube.com/shorts</code>) blocks only that path.
+            </p>
             <TagList
               items={settings.blockedWebsites.map((w) => ({ id: w.domain, label: w.domain }))}
-              placeholder="example.com"
+              placeholder="example.com or youtube.com/shorts"
               onAdd={(domain) => api.addWebsite(deviceId, domain).then(onChanged)}
               onRemove={(domain) => api.removeWebsite(deviceId, domain).then(onChanged)}
             />
           </Card>
         </div>
 
-        {/* Habits */}
+        {/* App time budgets */}
         <div className="space-y-3">
-          <SectionLabel>Habits & Rules</SectionLabel>
+          <SectionLabel>App Time Budgets</SectionLabel>
+          <Card className="rounded-2xl">
+            <p className="text-xs text-on-surface-variant mb-2">
+              Daily screen-time limit for a specific app. Use the exact Android package name (e.g.{" "}
+              <code>com.zhiliaoapp.musically</code>), not the app's display name — the phone matches on this
+              literally.
+            </p>
+            <AppBudgetList
+              items={settings.appBudgets}
+              onAdd={(budget) => api.addAppBudget(deviceId, budget).then(onChanged)}
+              onRemove={(id) => api.removeAppBudget(deviceId, id).then(onChanged)}
+            />
+          </Card>
+        </div>
+        </>
+        )}
+
+        {/* Content Filter -- shared toggle (Android: VPN tunnel, Mac: DNS enforcement); the
+            per-app bypass list is Android-only (MitmExemptManager has no Mac equivalent). */}
+        <div className="space-y-3">
+          <SectionLabel>{isMac ? "Content Filter" : "Content Filter VPN"}</SectionLabel>
           <Card className="rounded-2xl space-y-0 divide-y divide-outline-variant/30">
-            <div className="py-3 px-1">
-              <p className="text-sm font-medium mb-2">Habit library</p>
-              <TagList
-                items={settings.habits.map((h) => ({ id: h.id, label: h.name }))}
-                placeholder="New habit…"
-                onAdd={(name) => api.addHabit(deviceId, name).then(onChanged)}
-                onRemove={(id) => api.removeHabit(deviceId, id).then(onChanged)}
-              />
-            </div>
+            <SettingsRow
+              title={isMac ? "Enable content filtering" : "Enable VPN Filter"}
+              sub={isMac ? "Blocks adult content system-wide via DNS" : "Blocks adult content globally across all apps"}
+              checked={settings.vpnFilter.enabled}
+              onChange={patchVpnEnabled}
+            />
+            {!isMac && (
+              <div className="py-3 px-1">
+                <div className="flex items-center gap-2 mb-2">
+                  <Wifi className="w-4 h-4 text-secondary" />
+                  <span className="text-sm font-medium">Bypass apps</span>
+                  <Pill variant={settings.vpnFilter.enabled ? "success" : "default"}>
+                    {settings.vpnFilter.enabled ? "Filter active" : "Filter off"}
+                  </Pill>
+                </div>
+                <p className="text-xs text-on-surface-variant mb-2">
+                  Apps allowed to skip the content filter. Use the exact Android package name (e.g.{" "}
+                  <code>com.google.android.youtube</code>), not the app's display name — the phone matches on this
+                  literally.
+                </p>
+                <TagList
+                  items={settings.vpnBypassApps.map((a) => ({ id: a.id, label: a.name }))}
+                  placeholder="com.example.app"
+                  onAdd={(name) => api.addBypassApp(deviceId, name).then(onChanged)}
+                  onRemove={(id) => api.removeBypassApp(deviceId, id).then(onChanged)}
+                />
+              </div>
+            )}
+          </Card>
+        </div>
+
+        {/* Blocked apps -- shared, platform-conditional copy (Android: package name, Mac:
+            executable/process name, see BlockedApp's doc comment in lib/api.ts). */}
+        <div className="space-y-3">
+          <SectionLabel>Blocked Apps</SectionLabel>
+          <Card className="rounded-2xl">
+            <p className="text-xs text-on-surface-variant mb-2">
+              {isMac ? (
+                <>
+                  Fully blocks an app, all the time. Use the exact process/executable name as it
+                  appears in Activity Monitor (e.g. <code>Safari</code>) — not the app's display
+                  name or bundle identifier. Removing a block here takes effect after this Mac's
+                  own cooldown period, not instantly — check the Activity Log for status.
+                </>
+              ) : (
+                <>
+                  Fully blocks an app, all the time -- unlike a habit rule or time budget, there's no condition that
+                  unlocks it. Use the exact Android package name (e.g. <code>com.zhiliaoapp.musically</code>).
+                </>
+              )}
+            </p>
+            <TagList
+              items={settings.blockedApps.map((a) => ({ id: a.appId, label: a.appId }))}
+              placeholder={isMac ? "Safari" : "com.example.app"}
+              onAdd={(appId) => api.addBlockedApp(deviceId, appId).then(onChanged)}
+              onRemove={(appId) => api.removeBlockedApp(deviceId, appId).then(onChanged)}
+            />
+          </Card>
+        </div>
+
+        {/* Trigger words */}
+        {!isMac && (
+        <div className="space-y-3">
+          <SectionLabel>Trigger Words</SectionLabel>
+          <Card className="rounded-2xl">
+            <p className="text-xs text-on-surface-variant mb-2">
+              Words or phrases that trigger an accountability-partner SMS alert when typed or seen on screen, in
+              addition to whatever's configured on the phone itself.
+            </p>
+            <TagList
+              items={settings.triggerWords.map((t) => ({ id: t.word, label: t.word }))}
+              placeholder="New trigger word…"
+              onAdd={(word) => api.addTriggerWord(deviceId, word).then(onChanged)}
+              onRemove={(word) => api.removeTriggerWord(deviceId, word).then(onChanged)}
+            />
+          </Card>
+        </div>
+        )}
+
+        {/* Habit library -- global, shared across every device on this account. A habit
+            verified on the phone can gate a rule on the Mac and vice versa. */}
+        <div className="space-y-3">
+          <SectionLabel>Habit Library</SectionLabel>
+          <Card className="rounded-2xl">
+            <p className="text-xs text-on-surface-variant mb-2">
+              Shared across every device on this account — not per-device. A habit checked off
+              (and verified) on the phone can satisfy a rule on the Mac.
+            </p>
+            <TagList
+              items={habits.map((h) => ({ id: h.id, label: h.doneToday ? `${h.name} ✓` : h.name }))}
+              placeholder="New habit…"
+              onAdd={(name) => api.addHabit(name).then(onHabitsChanged)}
+              onRemove={(id) => api.removeHabit(id).then(onHabitsChanged)}
+            />
+          </Card>
+        </div>
+
+        {/* Rules -- per-device (targets an app on THIS device specifically), but no longer
+            Android-only: a rule can now block an app on the Mac too. */}
+        <div className="space-y-3">
+          <SectionLabel>Rules</SectionLabel>
+          <Card className="rounded-2xl">
+            <p className="text-xs text-on-surface-variant mb-2">
+              Blocks an app on {settings.device_name || deviceId} until required habits from the
+              library above are done, during a schedule window.
+            </p>
+            <Button variant="text" size="sm" className="px-0 text-xs h-7" onClick={onAddRule}>
+              Add new rule →
+            </Button>
+          </Card>
+        </div>
+
+        {/* Friction delay -- Android-only, no Mac equivalent. */}
+        {!isMac && (
+        <div className="space-y-3">
+          <SectionLabel>Friction Delay</SectionLabel>
+          <Card className="rounded-2xl space-y-0 divide-y divide-outline-variant/30">
             <SettingsRow
               title="Friction delay"
               sub="Show countdown before unlocking apps"
@@ -689,13 +1225,9 @@ function SettingsScreen({
                 <span className="text-xs text-on-surface-variant">seconds</span>
               </div>
             )}
-            <div className="py-3 px-1">
-              <Button variant="text" size="sm" className="px-0 text-xs h-7" onClick={onAddRule}>
-                Add new rule →
-              </Button>
-            </div>
           </Card>
         </div>
+        )}
 
         {/* PIN & Security */}
         <div className="space-y-3">
@@ -703,8 +1235,15 @@ function SettingsScreen({
           <Card className="rounded-2xl space-y-0 divide-y divide-outline-variant/30">
             <div className="py-3 px-1 flex items-center justify-between">
               <div>
-                <p className="text-sm font-medium">Guardian PIN</p>
-                <p className="text-xs text-on-surface-variant">Used for local unlock on the child's phone</p>
+                <div className="flex items-center gap-2">
+                  <p className="text-sm font-medium">Guardian PIN</p>
+                  <Pill variant={pinStatus?.pin ? "success" : "default"}>
+                    {pinStatus?.pin ? "Set" : "Not set"}
+                  </Pill>
+                </div>
+                <p className="text-xs text-on-surface-variant">
+                  Shared across every Otterling device on this account — not per-device
+                </p>
               </div>
               <Button variant="outlined" size="sm" onClick={() => setPinModalOpen(true)}>Change PIN</Button>
             </div>
@@ -729,10 +1268,55 @@ function SettingsScreen({
         </div>
       </div>
 
+      <div className="space-y-3">
+        <SectionLabel>Danger Zone</SectionLabel>
+        <Card className="rounded-2xl border-error/30">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-medium">Remove this device</p>
+              <p className="text-xs text-on-surface-variant">
+                Deletes {settings.device_name || deviceId}'s settings record from the dashboard.
+                Tamper alert history is kept. If the device connects again, it'll reappear with
+                default settings.
+              </p>
+            </div>
+            {confirmRemove ? (
+              <div className="flex items-center gap-2 shrink-0">
+                <Button variant="text" size="sm" disabled={removing} onClick={() => setConfirmRemove(false)}>
+                  Cancel
+                </Button>
+                <Button
+                  size="sm"
+                  className="gap-1.5 bg-error text-on-error hover:bg-error/90"
+                  disabled={removing}
+                  onClick={async () => {
+                    setRemoving(true);
+                    try {
+                      await api.removeDevice(deviceId);
+                      onDeviceRemoved();
+                    } finally {
+                      setRemoving(false);
+                    }
+                  }}
+                >
+                  <Trash2 className="w-3.5 h-3.5" /> {removing ? "Removing…" : "Confirm removal"}
+                </Button>
+              </div>
+            ) : (
+              <Button variant="outlined" size="sm" className="shrink-0" onClick={() => setConfirmRemove(true)}>
+                Remove device
+              </Button>
+            )}
+          </div>
+        </Card>
+      </div>
+
       <div className="flex gap-3 pt-2">
-        <Button variant="outlined" size="sm" onClick={() => onNavigate("AccessibilityNag")}>
-          Preview accessibility screen
-        </Button>
+        {!isMac && (
+          <Button variant="outlined" size="sm" onClick={() => onNavigate("AccessibilityNag")}>
+            Preview accessibility screen
+          </Button>
+        )}
         <Button variant="text" size="sm" onClick={() => onNavigate("Dashboard")}>
           ← Back to Overview
         </Button>
@@ -743,8 +1327,9 @@ function SettingsScreen({
           <SetPinModal
             onClose={() => setPinModalOpen(false)}
             onSave={async (pin) => {
-              await api.setPin(deviceId, pin);
+              await api.setPin(pin);
               setPinModalOpen(false);
+              reloadPinStatus();
             }}
           />
         </div>
@@ -812,6 +1397,168 @@ function TagList({
   );
 }
 
+function AppBudgetList({
+  items, onAdd, onRemove,
+}: {
+  items: AppBudget[];
+  onAdd: (budget: Partial<AppBudget>) => Promise<unknown>;
+  onRemove: (id: string) => Promise<unknown>;
+}) {
+  const [appId, setAppId] = useState("");
+  const [appName, setAppName] = useState("");
+  const [minutes, setMinutes] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const submit = async () => {
+    const id = appId.trim();
+    if (!id) return;
+    setBusy(true);
+    try {
+      await onAdd({
+        appId: id,
+        appName: appName.trim() || id,
+        dailyLimitMinutes: minutes.trim() ? Number(minutes) : null,
+      });
+      setAppId("");
+      setAppName("");
+      setMinutes("");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="space-y-2">
+      {items.length > 0 && (
+        <div className="space-y-1.5">
+          {items.map((b) => (
+            <div
+              key={b.id}
+              className="flex items-center justify-between gap-2 pl-2.5 pr-1 py-1.5 rounded-xl bg-surface-variant text-on-surface-variant"
+            >
+              <span className="text-xs font-medium truncate">
+                {b.appName}
+                {b.dailyLimitMinutes != null ? ` — ${b.dailyLimitMinutes} min/day` : ""}
+              </span>
+              <button
+                onClick={() => onRemove(b.id)}
+                className="w-4 h-4 shrink-0 rounded-full flex items-center justify-center hover:bg-error-container hover:text-error transition-colors"
+              >
+                <X className="w-2.5 h-2.5" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="flex items-center gap-2">
+        <input
+          value={appId}
+          onChange={(e) => setAppId(e.target.value)}
+          placeholder="com.example.app"
+          className="flex-1 min-w-0 h-9 px-3 rounded-xl border border-outline bg-surface text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+        />
+        <input
+          value={appName}
+          onChange={(e) => setAppName(e.target.value)}
+          placeholder="Display name (optional)"
+          className="flex-1 min-w-0 h-9 px-3 rounded-xl border border-outline bg-surface text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+        />
+        <input
+          type="number"
+          min={1}
+          value={minutes}
+          onChange={(e) => setMinutes(e.target.value)}
+          placeholder="min/day"
+          className="w-20 shrink-0 h-9 px-3 rounded-xl border border-outline bg-surface text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+        />
+        <Button variant="tonal" size="sm" className="h-9 px-3 shrink-0" disabled={busy || !appId.trim()} onClick={submit}>
+          <Plus className="w-3.5 h-3.5" />
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function ProtectedAppList({
+  items, onAdd, onRemove,
+}: {
+  items: ProtectedApp[];
+  onAdd: (app: { displayName: string; executableName: string; bundlePath: string }) => Promise<unknown>;
+  onRemove: (executableName: string) => Promise<unknown>;
+}) {
+  const [displayName, setDisplayName] = useState("");
+  const [executableName, setExecutableName] = useState("");
+  const [bundlePath, setBundlePath] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const submit = async () => {
+    const executable = executableName.trim();
+    const path = bundlePath.trim();
+    if (!executable || !path) return;
+    setBusy(true);
+    try {
+      await onAdd({ displayName: displayName.trim() || executable, executableName: executable, bundlePath: path });
+      setDisplayName("");
+      setExecutableName("");
+      setBundlePath("");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="space-y-2">
+      {items.length > 0 && (
+        <div className="space-y-1.5">
+          {items.map((a) => (
+            <div
+              key={a.executableName}
+              className="flex items-center justify-between gap-2 pl-2.5 pr-1 py-1.5 rounded-xl bg-surface-variant text-on-surface-variant"
+            >
+              <span className="text-xs font-medium truncate">
+                {a.displayName} <span className="text-on-surface-variant/60">— {a.bundlePath}</span>
+              </span>
+              <button
+                onClick={() => onRemove(a.executableName)}
+                className="w-4 h-4 shrink-0 rounded-full flex items-center justify-center hover:bg-error-container hover:text-error transition-colors"
+              >
+                <X className="w-2.5 h-2.5" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="flex items-center gap-2">
+        <input
+          value={displayName}
+          onChange={(e) => setDisplayName(e.target.value)}
+          placeholder="Display name (optional)"
+          className="flex-1 min-w-0 h-9 px-3 rounded-xl border border-outline bg-surface text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+        />
+        <input
+          value={executableName}
+          onChange={(e) => setExecutableName(e.target.value)}
+          placeholder="Executable name"
+          className="flex-1 min-w-0 h-9 px-3 rounded-xl border border-outline bg-surface text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+        />
+        <input
+          value={bundlePath}
+          onChange={(e) => setBundlePath(e.target.value)}
+          placeholder="/Applications/App.app"
+          className="flex-1 min-w-0 h-9 px-3 rounded-xl border border-outline bg-surface text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+        />
+        <Button
+          variant="tonal" size="sm" className="h-9 px-3 shrink-0"
+          disabled={busy || !executableName.trim() || !bundlePath.trim()}
+          onClick={submit}
+        >
+          <Plus className="w-3.5 h-3.5" />
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function SetPinModal({ onClose, onSave }: { onClose: () => void; onSave: (pin: string) => Promise<void> }) {
   const [pin, setPin] = useState("");
   const [confirm, setConfirm] = useState("");
@@ -841,7 +1588,7 @@ function SetPinModal({ onClose, onSave }: { onClose: () => void; onSave: (pin: s
           </div>
           <div>
             <h2 className="font-bold text-base leading-tight">Change Guardian PIN</h2>
-            <p className="text-xs text-on-surface-variant">Used for local unlock on the phone</p>
+            <p className="text-xs text-on-surface-variant">Applies to every device on this account</p>
           </div>
         </div>
         <button
@@ -891,10 +1638,11 @@ const COMMON_APPS = [
 ];
 
 function HabitRuleWizard({
-  deviceId, settings, editingRule, onNavigate, onSaved,
+  deviceId, settings, habits, editingRule, onNavigate, onSaved,
 }: {
   deviceId: string;
   settings: DeviceSettings | null;
+  habits: Habit[];
   editingRule: Rule | null;
   onNavigate: (s: Screen) => void;
   onSaved: () => void;
@@ -902,6 +1650,7 @@ function HabitRuleWizard({
   const [step, setStep] = useState(1);
   const [appQuery, setAppQuery] = useState("");
   const [selectedApp, setSelectedApp] = useState(editingRule?.appName ?? "");
+  const [appId, setAppId] = useState(editingRule?.appId ?? "");
   const [selectedHabitIds, setSelectedHabitIds] = useState<string[]>(editingRule?.requiredHabitIds ?? []);
   const [newHabit, setNewHabit] = useState("");
   const [startTime, setStartTime] = useState(editingRule?.schedule.startTime ?? "00:00");
@@ -917,7 +1666,7 @@ function HabitRuleWizard({
   ];
 
   const filteredApps = COMMON_APPS.filter((a) => a.name.toLowerCase().includes(appQuery.toLowerCase()));
-  const habits = settings?.habits ?? [];
+  const isMac = settings?.platform === "macos";
 
   const toggleHabit = (id: string) =>
     setSelectedHabitIds((prev) => (prev.includes(id) ? prev.filter((h) => h !== id) : [...prev, id]));
@@ -928,7 +1677,7 @@ function HabitRuleWizard({
   const addCustomHabit = async () => {
     const name = newHabit.trim();
     if (!name) return;
-    const res = await api.addHabit(deviceId, name);
+    const res = await api.addHabit(name);
     const created = res.habits[res.habits.length - 1];
     if (created) setSelectedHabitIds((prev) => [...prev, created.id]);
     setNewHabit("");
@@ -936,9 +1685,10 @@ function HabitRuleWizard({
   };
 
   const save = async () => {
-    if (!selectedApp) return;
+    if (!selectedApp || !appId.trim()) return;
     setSaving(true);
     const payload = {
+      appId: appId.trim(),
       appName: selectedApp,
       requiredHabitIds: selectedHabitIds,
       schedule: { startTime, endTime, daysOfWeek: days },
@@ -1001,6 +1751,31 @@ function HabitRuleWizard({
                 placeholder="Search or type a custom app name…"
                 className="w-full h-11 px-4 rounded-xl border border-outline bg-surface text-sm focus:outline-none focus:ring-2 focus:ring-primary"
               />
+              <div>
+                <label className="text-sm font-semibold block mb-1.5">
+                  {isMac ? "Executable name" : "Android package name"}
+                </label>
+                <input
+                  type="text"
+                  value={appId}
+                  onChange={(e) => setAppId(e.target.value)}
+                  placeholder={isMac ? "Safari" : "com.example.app"}
+                  className="w-full h-11 px-4 rounded-xl border border-outline bg-surface text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                />
+                <p className="text-xs text-on-surface-variant mt-1.5">
+                  {isMac ? (
+                    <>
+                      The exact process/executable name as it appears in Activity Monitor (e.g.{" "}
+                      <code>Steam</code>) — not the app's display name or bundle identifier.
+                    </>
+                  ) : (
+                    <>
+                      The exact Android package name (e.g. <code>com.zhiliaoapp.musically</code>) — the phone matches on
+                      this literally, not the display name above.
+                    </>
+                  )}
+                </p>
+              </div>
               <div className="grid grid-cols-2 gap-2">
                 {filteredApps.map((app) => (
                   <button
@@ -1140,61 +1915,11 @@ function HabitRuleWizard({
           </div>
           <Button
             size="sm"
-            disabled={(step === 1 && !selectedApp) || saving}
+            disabled={(step === 1 && (!selectedApp || !appId.trim())) || saving}
             onClick={() => (step < 3 ? setStep(step + 1) : save())}
           >
             {saving ? "Saving…" : step < 3 ? "Continue →" : "Save Rule"}
           </Button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── Photo Capture (phone-side preview only) ──────────────────────────────────
-
-function PhotoCaptureScreen({ onNavigate }: { onNavigate: (s: Screen) => void }) {
-  return (
-    <div className="h-full flex flex-col">
-      <PreviewBanner>
-        Preview only — this is what your child's phone shows when proving a habit. Photo capture and
-        AI matching happen on-device; nothing here is enforced from the browser.
-      </PreviewBanner>
-      <div className="flex-1 flex">
-        <div className="flex-1 bg-neutral-950 relative flex items-center justify-center">
-          <div className="absolute inset-10 border border-dashed border-white/15 rounded-3xl" />
-          <div className="flex flex-col items-center text-white/30">
-            <Camera className="w-16 h-16 mb-3" />
-            <p className="text-sm">Camera preview</p>
-          </div>
-        </div>
-        <div className="w-80 border-l border-outline-variant/30 bg-background flex flex-col">
-          <div className="p-6 border-b border-outline-variant/30">
-            <h2 className="text-xl font-bold">Prove it: [habit name]</h2>
-            <p className="text-sm text-on-surface-variant mt-1">Photo must match the reference to unlock apps.</p>
-          </div>
-          <div className="p-6 flex-1 flex flex-col gap-5">
-            <div>
-              <p className="text-[10px] font-bold uppercase tracking-wider text-on-surface-variant/60 mb-2">Reference Photo</p>
-              <div className="h-40 bg-surface-variant rounded-2xl flex items-center justify-center text-on-surface-variant/40">
-                <div className="text-center">
-                  <Camera className="w-8 h-8 mx-auto mb-1" />
-                  <p className="text-xs">Reference image</p>
-                </div>
-              </div>
-            </div>
-            <div className="text-xs text-on-surface-variant space-y-1.5 bg-surface-variant/30 rounded-xl p-3">
-              <p className="font-semibold text-on-surface mb-1">Tips for a good match:</p>
-              <p>· Same angle and distance as the reference</p>
-              <p>· Good lighting, avoid harsh shadows</p>
-              <p>· Make sure the whole area is visible</p>
-            </div>
-          </div>
-          <div className="p-6 pt-0">
-            <Button variant="text" className="w-full" onClick={() => onNavigate("Dashboard")}>
-              ← Back to Overview
-            </Button>
-          </div>
         </div>
       </div>
     </div>

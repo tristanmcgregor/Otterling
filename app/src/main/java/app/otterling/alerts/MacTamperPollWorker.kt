@@ -12,6 +12,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import app.otterling.content.CloudFilterSettings
+import app.otterling.content.DashboardConfigStore
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.TimeUnit
@@ -46,6 +47,16 @@ class MacTamperPollWorker(context: Context, params: WorkerParameters) : Coroutin
         // and independent of the poll below: a failed refresh just leaves the existing cache in
         // place, it never turns this into a Result.retry().
         ReportConfigStore(applicationContext).refresh()
+        // Same best-effort piggyback as ReportConfigStore above -- see SERVER_DRIVEN_CONFIG_PLAN.md.
+        DashboardConfigStore(applicationContext).refresh()
+        // Same best-effort piggyback -- see DashboardConfigStore.syncPin's doc comment for why
+        // this is a separate call rather than folded into refresh()'s cached snapshot.
+        DashboardConfigStore(applicationContext).syncPin()
+        // Global habit library + live completion state (shared across every device, not this
+        // phone's own settings record) -- HabitRuleManager reads this on its own separate
+        // ~5-minute evaluation cadence (HabitShareSyncManager), so this just needs to stay
+        // reasonably fresh, not be triggered in lockstep with it.
+        DashboardConfigStore(applicationContext).refreshGlobalHabits()
         val sinceId = settings.lastSeenAlertId()
         try {
             val response = httpGet("https://$host/alerts/poll?since_id=$sinceId", settings.token())

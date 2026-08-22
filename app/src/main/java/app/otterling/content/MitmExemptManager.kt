@@ -3,6 +3,18 @@ package app.otterling.content
 import android.content.Context
 
 /**
+ * ## Dashboard-driven bypass list (Phase 1 of `dashboard/SERVER_DRIVEN_CONFIG_PLAN.md`)
+ *
+ * [exemptPackages] is the union of the local set below (seeded defaults +
+ * [PinningFailureTracker]'s auto-exemptions + anything still added via this device's own
+ * Settings UI) with `vpnBypassApps` from [DashboardConfigStore]'s cached
+ * `device_settings.json` record -- additive for now, not a replacement, since the seeded
+ * defaults and auto-exempt path are technical necessities (cert-pinning compat), not guardian
+ * config the dashboard should own outright, and this device's own Settings UI hasn't been
+ * removed yet (that's Phase 8, once this phase is proven stable). [NEVER_EXEMPT_PACKAGES] is
+ * stripped from the merged result too, not just at [add]-time, so a stale cached dashboard
+ * snapshot from before the server-side veto existed can't reintroduce it.
+ *
  * Stores the set of app package names exempt from the mitmproxy MITM hop -- these apps stay
  * *inside* the VPN tunnel (their DNS still goes through [DomainBlocklistManager]/cloud AdGuard,
  * and QUIC/443-UDP is still dropped for them, same as everything else) but their TCP 80/443 flows
@@ -23,7 +35,8 @@ import android.content.Context
  * see [VpnFilterService.runPacketLoop].
  */
 class MitmExemptManager(context: Context) {
-    private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    private val appContext = context.applicationContext
+    private val prefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
     init {
         seedDefaultsIfNeeded()
@@ -32,7 +45,32 @@ class MitmExemptManager(context: Context) {
         seedV4DefaultsIfNeeded()
     }
 
-    fun exemptPackages(): Set<String> = prefs.getStringSet(KEY_PACKAGES, emptySet())?.toSet() ?: emptySet()
+    fun exemptPackages(): Set<String> = (localPackages() + dashboardExemptPackages()) - NEVER_EXEMPT_PACKAGES
+
+    /** The local-only set (seeded defaults, [add]/[remove], [PinningFailureTracker] auto-exempts)
+     *  -- deliberately NOT merged with [dashboardExemptPackages], so the seed*IfNeeded methods
+     *  below (which read-modify-write this) never bake a dashboard-sourced entry into local
+     *  storage. Baking one in would survive a guardian later removing it from the dashboard,
+     *  since it'd then look identical to a locally-added entry. */
+    private fun localPackages(): Set<String> = prefs.getStringSet(KEY_PACKAGES, emptySet())?.toSet() ?: emptySet()
+
+    /** `vpnBypassApps` entries from [DashboardConfigStore]'s cache -- each item's `name` field is
+     *  the exact Android package name (the dashboard's "Bypass apps" field, not a display name;
+     *  see that field's placeholder text in the dashboard UI). Empty if nothing's been fetched
+     *  yet, same "fail toward not-yet-configured rather than throwing" stance as
+     *  [DashboardConfigStore.refresh] itself. Public (not just folded into [exemptPackages]) so
+     *  [app.otterling.ui.VpnFilterSection] can tell dashboard-sourced entries apart from local
+     *  ones -- [remove] is a no-op against these (it only ever touches local storage), so the
+     *  UI needs to know not to offer a Remove button that would silently fail to do anything. */
+    fun dashboardExemptPackages(): Set<String> {
+        val apps = DashboardConfigStore(appContext).snapshot()?.optJSONArray("vpnBypassApps") ?: return emptySet()
+        return buildSet {
+            for (i in 0 until apps.length()) {
+                val name = apps.optJSONObject(i)?.optString("name")?.trim()
+                if (!name.isNullOrEmpty()) add(name)
+            }
+        }
+    }
 
     /**
      * No-ops for [NEVER_EXEMPT_PACKAGES] -- unlike YouTube/banking, which only ever talk to their
@@ -43,11 +81,11 @@ class MitmExemptManager(context: Context) {
      */
     fun add(packageName: String) {
         if (packageName in NEVER_EXEMPT_PACKAGES) return
-        prefs.edit().putStringSet(KEY_PACKAGES, exemptPackages() + packageName).apply()
+        prefs.edit().putStringSet(KEY_PACKAGES, localPackages() + packageName).apply()
     }
 
     fun remove(packageName: String) {
-        prefs.edit().putStringSet(KEY_PACKAGES, exemptPackages() - packageName).apply()
+        prefs.edit().putStringSet(KEY_PACKAGES, localPackages() - packageName).apply()
     }
 
     /**
@@ -60,7 +98,7 @@ class MitmExemptManager(context: Context) {
     private fun seedDefaultsIfNeeded() {
         if (prefs.getBoolean(KEY_SEEDED_DEFAULTS, false)) return
         prefs.edit()
-            .putStringSet(KEY_PACKAGES, exemptPackages() + DEFAULT_EXEMPT_PACKAGES)
+            .putStringSet(KEY_PACKAGES, localPackages() + DEFAULT_EXEMPT_PACKAGES)
             .putBoolean(KEY_SEEDED_DEFAULTS, true)
             .apply()
     }
@@ -75,7 +113,7 @@ class MitmExemptManager(context: Context) {
     private fun seedV2DefaultsIfNeeded() {
         if (prefs.getBoolean(KEY_SEEDED_V2, false)) return
         prefs.edit()
-            .putStringSet(KEY_PACKAGES, exemptPackages() + DEFAULT_EXEMPT_PACKAGES_V2)
+            .putStringSet(KEY_PACKAGES, localPackages() + DEFAULT_EXEMPT_PACKAGES_V2)
             .putBoolean(KEY_SEEDED_V2, true)
             .apply()
     }
@@ -85,7 +123,7 @@ class MitmExemptManager(context: Context) {
     private fun seedV3DefaultsIfNeeded() {
         if (prefs.getBoolean(KEY_SEEDED_V3, false)) return
         prefs.edit()
-            .putStringSet(KEY_PACKAGES, exemptPackages() + DEFAULT_EXEMPT_PACKAGES_V3)
+            .putStringSet(KEY_PACKAGES, localPackages() + DEFAULT_EXEMPT_PACKAGES_V3)
             .putBoolean(KEY_SEEDED_V3, true)
             .apply()
     }
@@ -94,7 +132,7 @@ class MitmExemptManager(context: Context) {
     private fun seedV4DefaultsIfNeeded() {
         if (prefs.getBoolean(KEY_SEEDED_V4, false)) return
         prefs.edit()
-            .putStringSet(KEY_PACKAGES, exemptPackages() + DEFAULT_EXEMPT_PACKAGES_V4)
+            .putStringSet(KEY_PACKAGES, localPackages() + DEFAULT_EXEMPT_PACKAGES_V4)
             .putBoolean(KEY_SEEDED_V4, true)
             .apply()
     }

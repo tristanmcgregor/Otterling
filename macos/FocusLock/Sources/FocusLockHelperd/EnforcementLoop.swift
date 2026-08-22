@@ -90,6 +90,14 @@ final class EnforcementLoop {
     private var lastIntegrityCheckAt: Date?
     private let integrityCheckInterval: TimeInterval = 900
 
+    // DashboardConfigSync fetch cadence -- another network round-trip to the filter-server, same
+    // "own slower cadence" reasoning as DNS/proxy/integrity above. 60s (much tighter than the
+    // phone's 15-min WorkManager floor) since this is a native daemon's own timer rather than
+    // fighting a shared OS-level scheduler -- one HTTPS GET/minute (~1440/day) is trivial for a
+    // single-family home server to absorb.
+    private var lastDashboardSyncAt: Date?
+    private let dashboardSyncInterval: TimeInterval = 60
+
     // ProxyEnforcer shells out to networksetup + does a TCP reachability probe; same "own slower
     // cadence" reasoning as DNS. Re-asserts the system proxy (or removes it when unreachable).
     private var lastProxyCheckAt: Date?
@@ -196,6 +204,19 @@ final class EnforcementLoop {
                 self.lastIntegrityCheckAt = integrityNow
             }
 
+            // SERVER_DRIVEN_CONFIG_PLAN.md-style dashboard control for the Mac -- see
+            // DashboardConfigSync.swift's header doc comment for the full picture. Two
+            // independent fetches on the same cadence: this device's own settings (reconciled
+            // against blockedApps/protectedApps/DNS/proxy/cloud-filter/cooldown), and the
+            // fleet-wide habit library + completion state (read by RuleBlockEnforcer below, not
+            // reconciled here at all).
+            let dashboardSyncNow = Date()
+            if self.lastDashboardSyncAt == nil || dashboardSyncNow.timeIntervalSince(self.lastDashboardSyncAt!) >= self.dashboardSyncInterval {
+                DashboardConfigSync.fetch(stateStore: stateStore)
+                DashboardConfigSync.fetchGlobalHabits(stateStore: stateStore)
+                self.lastDashboardSyncAt = dashboardSyncNow
+            }
+
             // A VPN tunnels traffic around the whole content filter, so it's checked on every tick's
             // slow cadence right alongside the lock profile.
             let vpnNow = Date()
@@ -261,7 +282,14 @@ final class EnforcementLoop {
                 self.lastAppliedProxyIPs = proxyIPs
             }
 
-            let killed = AppBlockEnforcer.enforce(blockedApps: state.blockedApps)
+            // Rule-driven blocks (see RuleBlockEnforcer's doc comment for why these are computed
+            // fresh every tick rather than stored in state.blockedApps) merge into the SAME
+            // enforce() call -- AppBlockEnforcer already dedupes by executableName internally, and
+            // this keeps the self-block guard (protectedExecutables) applied exactly once, in one
+            // place, for both sources.
+            let ruleBlockedApps = RuleBlockEnforcer.currentlyBlockedExecutableNames(state: state)
+                .map { BlockedApp(displayName: $0, executableName: $0) }
+            let killed = AppBlockEnforcer.enforce(blockedApps: state.blockedApps + ruleBlockedApps)
             if !killed.isEmpty {
                 FileHandle.standardError.write(
                     "[enforcement] killed: \(killed.joined(separator: ", "))\n".data(using: .utf8)!

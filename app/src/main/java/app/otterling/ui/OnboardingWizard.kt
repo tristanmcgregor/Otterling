@@ -42,7 +42,6 @@ import app.otterling.content.VpnFilterManager
 import app.otterling.onboarding.OnboardingState
 import app.otterling.onboarding.OnboardingStep
 import app.otterling.onboarding.resolveOnboardingStep
-import app.otterling.pin.PinAuthManager
 import app.otterling.restrictions.AccessibilityGuard
 import app.otterling.restrictions.DeviceRestrictionsManager
 import app.otterling.restrictions.Restriction
@@ -76,8 +75,7 @@ fun OnboardingWizard(context: Context, onComplete: () -> Unit) {
                 currentStep = resolveOnboardingStep(context)
             },
         )
-        OnboardingStep.DeviceOwner -> DeviceOwnerStep(context, onContinue = { currentStep = OnboardingStep.Pin })
-        OnboardingStep.Pin -> PinStep(context, onContinue = { currentStep = OnboardingStep.Restrictions })
+        OnboardingStep.DeviceOwner -> DeviceOwnerStep(context, onContinue = { currentStep = OnboardingStep.Restrictions })
         OnboardingStep.Restrictions -> RestrictionsStep(context, onContinue = { currentStep = OnboardingStep.ContentFilter })
         OnboardingStep.ContentFilter -> ContentFilterStep(context, onContinue = { currentStep = OnboardingStep.AccountabilityPartnerSms })
         OnboardingStep.AccountabilityPartnerSms -> AccountabilityPartnerSmsStep(context, onContinue = { currentStep = OnboardingStep.Accessibility })
@@ -150,8 +148,9 @@ private fun WelcomeStep(onContinue: () -> Unit) {
     WizardScaffold(
         title = "Welcome to Otterling",
         subtitle = "Let's get this device set up together. You'll go through a few steps: " +
-            "confirming Device Owner, creating a Guardian PIN, and turning on protections one " +
-            "at a time. Everything here can be fine-tuned later in Settings.",
+            "confirming Device Owner, and turning on protections one at a time. Everything here " +
+            "can be fine-tuned later in Settings. (The Guardian PIN is set separately, from the " +
+            "dashboard.)",
         onContinue = onContinue,
         continueLabel = "Get started",
     ) {}
@@ -185,18 +184,6 @@ private fun DeviceOwnerStep(context: Context, onContinue: () -> Unit) {
             Text("Check again")
         }
     }
-}
-
-@Composable
-private fun PinStep(context: Context, onContinue: () -> Unit) {
-    PinLockScreen(
-        pinAuthManager = remember { PinAuthManager(context) },
-        onUnlocked = onContinue,
-        // This step is only ever reached when no PIN exists yet, so there's nothing to cancel
-        // back to -- Device Owner is already confirmed by construction, and there's no earlier
-        // wizard screen worth returning to either. A no-op is correct here, not an oversight.
-        onCancel = {},
-    )
 }
 
 @Composable

@@ -112,10 +112,17 @@ public enum FocusLockConstants {
     /// above override these when they exist.
     ///
     /// Embedding the token means it ships inside the app bundle and is extractable by anyone with
-    /// the binary. That's an accepted trade here: `/alerts/tamper` is append-only ingestion for a
-    /// personal accountability deployment, so the worst a leaked token buys is posting spurious
-    /// alerts (noise the Guardian sees) or reading the alert feed -- not turning off any protection.
-    /// Rotate it by regenerating `LOCKPROFILE_TOKEN` server-side and updating this constant.
+    /// the binary. That was originally an accepted trade because `/alerts/tamper` is append-only
+    /// ingestion, so the worst a leaked token bought was posting spurious alerts or reading the
+    /// alert feed -- **not turning off any protection**. That premise changed once
+    /// `DashboardConfigSync` shipped: possession of this same token is now also sufficient to
+    /// schedule a Mac protection removal (blocked-app unblock, DNS enforcement off) through
+    /// `PendingActionScheduler`'s dashboard-authorized path -- deliberately, per this project's
+    /// plan doc, since requiring local confirmation for every remote removal would defeat the
+    /// point of a remote dashboard. The blast radius stays bounded by `cooldownHours` (a leaked
+    /// token can schedule a removal, not apply one instantly), but a leaked/extracted token is no
+    /// longer harmless-by-design the way this comment used to claim. Rotate it by regenerating
+    /// `LOCKPROFILE_TOKEN` server-side and updating this constant.
     public static let defaultLockProfileHost = defaultCloudFilterHost
     public static let defaultLockProfileToken = "22ff3ed0a6b843633a6499911abb7378239e6e9e6cbd97d56e465b39d0dbdc9b"
 

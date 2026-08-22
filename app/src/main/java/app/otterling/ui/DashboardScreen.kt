@@ -666,6 +666,11 @@ fun BlockedWebsitesSettingsSection(context: Context) {
         if (domains.isEmpty()) {
             Text("No custom websites blocked.", style = MaterialTheme.typography.bodySmall)
         } else {
+            // Dashboard-sourced entries can't be removed from here -- same reasoning as
+            // VpnFilterSection's MitmExemptManager.dashboardExemptPackages check: remove() only
+            // ever touches local storage, so a working-looking Remove button here would silently
+            // do nothing (it'd reappear on the next domains()/entries() merge).
+            val dashboardManaged = remember(domains) { manager.dashboardEntries().map { it.display() }.toSet() }
             domains.forEach { domain ->
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -682,10 +687,14 @@ fun BlockedWebsitesSettingsSection(context: Context) {
                             )
                         }
                     }
-                    TextButton(onClick = {
-                        manager.remove(domain)
-                        domains = manager.domains()
-                    }) { Text("Remove") }
+                    if (domain in dashboardManaged) {
+                        Text("Managed by dashboard", style = MaterialTheme.typography.bodySmall)
+                    } else {
+                        TextButton(onClick = {
+                            manager.remove(domain)
+                            domains = manager.domains()
+                        }) { Text("Remove") }
+                    }
                 }
             }
         }
