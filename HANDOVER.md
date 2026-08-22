@@ -9,6 +9,8 @@ Hardware reality: the user's Mac is a **T1 Intel MacBook Pro** — it cannot be 
 admin can still wipe via Recovery, but every tamper is reported to a server the user does not
 control. That server-side separation is the whole point of this checklist.
 
+
+
 ---
 
 ## A. Server owner — lock the user out of the backend
