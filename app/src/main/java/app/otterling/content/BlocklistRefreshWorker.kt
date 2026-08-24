@@ -8,14 +8,17 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import java.util.concurrent.TimeUnit
 
-/** Keeps [DomainBlocklistManager]'s cached domain list fresh so newly listed sites get blocked. */
+/** Keeps [DomainBlocklistManager]'s and [ServerClassifiedDomainsManager]'s cached domain lists
+ *  fresh so newly listed/classified sites get blocked. */
 class BlocklistRefreshWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
-        val manager = DomainBlocklistManager(applicationContext)
-        return manager.refresh().fold(
-            onSuccess = { Result.success() },
-            onFailure = { Result.retry() },
-        )
+        val blocklistResult = DomainBlocklistManager(applicationContext).refresh()
+        val classifiedResult = ServerClassifiedDomainsManager(applicationContext).refresh()
+        return if (blocklistResult.isSuccess && classifiedResult.isSuccess) {
+            Result.success()
+        } else {
+            Result.retry()
+        }
     }
 
     companion object {

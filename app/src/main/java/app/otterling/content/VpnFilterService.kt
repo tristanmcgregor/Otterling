@@ -145,6 +145,7 @@ class VpnFilterService : VpnService() {
 
     private fun startVpn() {
         val blocklist = DomainBlocklistManager(applicationContext)
+        val classifiedDomains = ServerClassifiedDomainsManager(applicationContext)
         val cloudFilterSettings = CloudFilterSettings(applicationContext)
         val builder = Builder()
             .setSession("Otterling Filter")
@@ -188,7 +189,7 @@ class VpnFilterService : VpnService() {
         )
         connectionScope = generationScope
         workerJob = scope.launch {
-            runCatching { runPacketLoop(tun, blocklist, cloudFilterSettings, generationScope) }
+            runCatching { runPacketLoop(tun, blocklist, classifiedDomains, cloudFilterSettings, generationScope) }
                 .onFailure { Log.e(TAG, "Packet loop crashed", it) }
             // The packet loop returned. If this coroutine is still active and the service is still
             // meant to be running, the loop exited unexpectedly (transient tun read IOException/EOF
@@ -249,6 +250,7 @@ class VpnFilterService : VpnService() {
     private fun runPacketLoop(
         tun: ParcelFileDescriptor,
         blocklist: DomainBlocklistManager,
+        classifiedDomains: ServerClassifiedDomainsManager,
         cloudFilterSettings: CloudFilterSettings,
         relayScope: CoroutineScope,
     ) {
@@ -403,7 +405,18 @@ class VpnFilterService : VpnService() {
                         // (this alone used to be enough to make apps that fire off many DNS
                         // lookups in quick succession, e.g. Spotify resolving several
                         // edge/access-point hostnames at once, see lookups time out).
-                        relayScope.launch { handleDnsPacket(packet, writeToTun, blocklist, cloudFilterSettings, ownerUidResolver, mitmExemptUids) }
+                        relayScope.launch {
+                            handleDnsPacket(
+                                packet,
+                                writeToTun,
+                                blocklist,
+                                classifiedDomains,
+                                cloudFilterSettings,
+                                ownerUidResolver,
+                                mitmExemptUids,
+                                isProxyUnavailable = { !proxyEnabled || proxyOutageTracker.isLikelyDown() },
+                            )
+                        }
                     } else if (proxyEnabled && packet.destinationPort == QUIC_PORT) {
                         // Silent drop: forces browsers/apps to fall back to TCP HTTPS instead of
                         // HTTP/3-over-QUIC, which would otherwise sail straight past the proxy
@@ -425,21 +438,43 @@ class VpnFilterService : VpnService() {
         packet: IpPacket,
         writeToTun: suspend (ByteArray) -> Unit,
         blocklist: DomainBlocklistManager,
+        classifiedDomains: ServerClassifiedDomainsManager,
         cloudFilterSettings: CloudFilterSettings,
         ownerUidResolver: AppUidResolver,
         mitmExemptUids: Set<Int>,
+        isProxyUnavailable: () -> Boolean,
     ) {
         val query = DnsMessage.parseQuery(packet.payload)
         if (query == null) {
             Log.d(TAG, "DNS: unparseable query (${packet.payload.size} bytes) from ${packet.sourceAddress}:${packet.sourcePort}")
             return
         }
+        // A MITM-exempt app (see mitmExemptUids above -- now just the curated
+        // MitmExemptManager list, not "everything except Chrome") gets NONE of
+        // mitm_nsfw_addon.py's page-content-level review, only whatever the DNS-level cloud
+        // filter decides from the domain name alone -- which is deliberately permissive about
+        // ambiguous-but-not-known-bad domains, because it normally trusts the MITM hop to catch a
+        // genuinely bad page on an otherwise-fine domain. An unresolvable owner UID (older
+        // Android, or the lookup itself failing) fails toward the STRICT path too, not the lenient
+        // one, matching "assume unknown = discourage" rather than "assume unknown = safe".
+        val ownerUid = ownerUidResolver.ownerUid(
+            packet.sourceAddress, packet.sourcePort, packet.destinationAddress, packet.destinationPort,
+            protocol = OsConstants.IPPROTO_UDP,
+        )
+        val isMitmExempt = ownerUid == null || ownerUid in mitmExemptUids
         // The local adult-domain list is always applied client-side first, regardless of whether
         // the cloud filter is configured or reachable -- this is the "defense in depth" fail-safe:
         // known adult domains stay blocked even offline or if the cloud filter server is down,
         // rather than relying entirely on a network round-trip to a server outside this device's
-        // control.
-        val blocked = blocklist.isBlocked(query.questionName)
+        // control. classifiedDomains (the server's own AI-classified list, coarser/less certain
+        // than mitm_nsfw_addon.py's full-page-content check) is only consulted when that
+        // more-informed check isn't going to happen for this flow anyway -- see that class's own
+        // doc for the full reasoning. When neither condition holds, an unclassified-by-the-local-
+        // list domain is left for the proxy itself to judge, on purpose: preempting it here with a
+        // coarser guess would work against the whole point of scoping this list differently from
+        // the always-on public blocklist above.
+        val blocked = blocklist.isBlocked(query.questionName) ||
+            ((isMitmExempt || isProxyUnavailable()) && classifiedDomains.isBlocked(query.questionName))
         if (blocked) {
             scope.launch {
                 runCatching {
@@ -452,24 +487,12 @@ class VpnFilterService : VpnService() {
                 }.onFailure { Log.w(TAG, "VPN block alert failed", it) }
             }
         }
-        // A MITM-exempt app (see mitmExemptUids above -- now just the curated
-        // MitmExemptManager list, not "everything except Chrome") gets NONE of
-        // mitm_nsfw_addon.py's page-content-level review, only whatever the DNS-level cloud
-        // filter decides from the domain name alone -- which is deliberately permissive about
-        // ambiguous-but-not-known-bad domains, because it normally trusts the MITM hop to catch a
-        // genuinely bad page on an otherwise-fine domain. Without that safety net, "less
-        // restrictive at the domain level" would just mean unfiltered for anything not already on
-        // a static blocklist -- exactly the loophole a non-MITM'd app becomes. So a MITM-exempt
-        // app's queries skip the smart cloud filter entirely and go straight to Cloudflare Family
-        // (blunter, but blocks known-bad categories with no page-content nuance needed) -- a
-        // normal (non-exempt) app's DNS query is unaffected. An unresolvable owner UID (older
-        // Android, or the lookup itself failing) fails toward the STRICT path too, not the lenient
-        // one, matching "assume unknown = discourage" rather than "assume unknown = safe".
-        val ownerUid = ownerUidResolver.ownerUid(
-            packet.sourceAddress, packet.sourcePort, packet.destinationAddress, packet.destinationPort,
-            protocol = OsConstants.IPPROTO_UDP,
-        )
-        val useStrictDns = !blocked && (ownerUid == null || ownerUid in mitmExemptUids)
+        // Without the MITM safety net, "less restrictive at the domain level" would just mean
+        // unfiltered for anything not already on a static blocklist -- exactly the loophole a
+        // non-MITM'd app becomes. So a MITM-exempt app's queries skip the smart cloud filter
+        // entirely and go straight to Cloudflare Family (blunter, but blocks known-bad categories
+        // with no page-content nuance needed) -- a normal (non-exempt) app's DNS query is unaffected.
+        val useStrictDns = !blocked && isMitmExempt
         val response = if (blocked) {
             DnsMessage.buildBlockedResponse(packet.payload)
         } else if (useStrictDns) {

@@ -7,9 +7,8 @@ import org.junit.Test
 /**
  * [DomainBlocklistManager] itself needs a real [android.content.Context] (SharedPreferences,
  * filesDir) that this project's plain-JUnit test setup can't construct (no Robolectric) -- so
- * these tests target [DomainBlocklistManager.fetchAllSources] and
- * [DomainBlocklistManager.combineSourceUrls] directly: the two pure, `Context`-free functions
- * `refresh()` was refactored to delegate to specifically so they're unit-testable.
+ * these tests target [DomainBlocklistManager.fetchAllSources] directly: the pure, `Context`-free
+ * function `refresh()` was refactored to delegate to so it's unit-testable.
  */
 class DomainBlocklistManagerTest {
     @Test
@@ -40,27 +39,5 @@ class DomainBlocklistManagerTest {
             listOf("https://a.example/list", "https://b.example/list"),
         ) { _, _ -> throw java.io.IOException("simulated network failure") }
         assertTrue(result.isEmpty())
-    }
-
-    @Test
-    fun `combineSourceUrls appends the classified-domains URL when present`() {
-        val result = DomainBlocklistManager.combineSourceUrls(
-            listOf("https://a.example/list", "https://b.example/list"),
-            "https://vpn.bartholomew.help/filter-lists/classified-bad-domains.txt",
-        )
-        assertEquals(
-            listOf(
-                "https://a.example/list",
-                "https://b.example/list",
-                "https://vpn.bartholomew.help/filter-lists/classified-bad-domains.txt",
-            ),
-            result,
-        )
-    }
-
-    @Test
-    fun `combineSourceUrls leaves the source list unchanged when there is no classified-domains URL`() {
-        val sourceUrls = listOf("https://a.example/list", "https://b.example/list")
-        assertEquals(sourceUrls, DomainBlocklistManager.combineSourceUrls(sourceUrls, null))
     }
 }

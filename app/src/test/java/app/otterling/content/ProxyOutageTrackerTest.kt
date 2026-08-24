@@ -80,4 +80,41 @@ class ProxyOutageTrackerTest {
         }
         assertTrue(tracker.recordFailure("198.51.100.${ProxyOutageTracker.OUTAGE_DISTINCT_DESTINATIONS_THRESHOLD - 1}"))
     }
+
+    @Test
+    fun `isLikelyDown is false below threshold and true at or above it`() {
+        val tracker = ProxyOutageTracker()
+        repeat(ProxyOutageTracker.OUTAGE_DISTINCT_DESTINATIONS_THRESHOLD - 1) { i ->
+            tracker.recordFailure("203.0.113.$i")
+        }
+        assertFalse(tracker.isLikelyDown())
+        tracker.recordFailure("203.0.113.${ProxyOutageTracker.OUTAGE_DISTINCT_DESTINATIONS_THRESHOLD - 1}")
+        assertTrue(tracker.isLikelyDown())
+    }
+
+    @Test
+    fun `isLikelyDown does not mutate state -- repeated calls give the same answer`() {
+        val tracker = ProxyOutageTracker()
+        repeat(ProxyOutageTracker.OUTAGE_DISTINCT_DESTINATIONS_THRESHOLD) { i ->
+            tracker.recordFailure("203.0.113.$i")
+        }
+        assertTrue(tracker.isLikelyDown())
+        assertTrue(tracker.isLikelyDown())
+        assertTrue(tracker.isLikelyDown())
+    }
+
+    @Test
+    fun `isLikelyDown respects window pruning even without a new recordFailure call`() {
+        var now = 0L
+        val tracker = ProxyOutageTracker(nowProvider = { now })
+        repeat(ProxyOutageTracker.OUTAGE_DISTINCT_DESTINATIONS_THRESHOLD) { i ->
+            tracker.recordFailure("203.0.113.$i")
+        }
+        assertTrue(tracker.isLikelyDown())
+
+        // Age everything out -- isLikelyDown must recompute freshness itself, not just report
+        // whatever recordFailure last pruned.
+        now += ProxyOutageTracker.OUTAGE_WINDOW_MS + 1
+        assertFalse(tracker.isLikelyDown())
+    }
 }

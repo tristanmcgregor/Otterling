@@ -65,6 +65,23 @@ class ProxyOutageTracker(
         return true
     }
 
+    /**
+     * Read-only: true if [OUTAGE_DISTINCT_DESTINATIONS_THRESHOLD] or more distinct destinations
+     * have failed within [OUTAGE_WINDOW_MS] as of right now. Used by
+     * [VpnFilterService.handleDnsPacket] to decide whether [ServerClassifiedDomainsManager]'s
+     * coarser domain list should stand in for the proxy's own (currently unavailable) content
+     * inspection. Unlike [recordFailure], never mutates [alreadyCrossedThreshold] or prunes
+     * [lastFailureByDestination] as a side effect -- a query from a different code path shouldn't
+     * perturb the edge-trigger alert bookkeeping that [recordFailure] owns; it independently
+     * recomputes freshness against [nowProvider] each call instead.
+     */
+    @Synchronized
+    fun isLikelyDown(): Boolean {
+        val now = nowProvider()
+        val freshFailureCount = lastFailureByDestination.count { (_, timestamp) -> now - timestamp <= OUTAGE_WINDOW_MS }
+        return freshFailureCount >= OUTAGE_DISTINCT_DESTINATIONS_THRESHOLD
+    }
+
     companion object {
         // Much shorter than PinningFailureTracker's 24h window: an outage is a live condition to
         // catch and alert on quickly, not a slow-accumulating per-app signal.
