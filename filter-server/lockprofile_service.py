@@ -139,6 +139,19 @@ DASHBOARD_USER = os.environ.get("DASHBOARD_USER", "")
 DASHBOARD_LOGIN_PASSWORD = os.environ.get("DASHBOARD_LOGIN_PASSWORD", "")
 DASHBOARD_SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60  # 30 days
 
+# /review, /review-data/*, and /device-logs/view/* (AI code-review pipeline history, uploaded
+# phone diagnostic logs) used to be gated by Caddy's own basic_auth against a bcrypt hash
+# (REVIEW_DASHBOARD_PASSWORD_HASH in docker-compose.yml). That got removed 2026-08-18 for the same
+# stuck-re-prompt-loop reason DASHBOARD_LOGIN_PASSWORD's login replaced Caddy basic_auth for one
+# day later -- but unlike the dashboard, this route was never re-gated, leaving it fully
+# unauthenticated to the open internet (REVIEW_DASHBOARD_PASSWORD_HASH is set in the environment
+# but nothing in this file ever reads it -- there's no bcrypt in the stdlib to verify it against
+# anyway). Same fix as the dashboard got: its own plaintext-password custom login
+# (filter-server/review-login/), its own session cookie, deliberately a SEPARATE credential from
+# DASHBOARD_LOGIN_PASSWORD so dashboard and review access can be handed out independently.
+REVIEW_LOGIN_PASSWORD = os.environ.get("REVIEW_LOGIN_PASSWORD", "")
+REVIEW_SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60  # 30 days, same as the dashboard's
+
 NTFY_SERVER = os.environ.get("NTFY_SERVER", "https://ntfy.sh").rstrip("/")
 NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "")
 
@@ -558,6 +571,40 @@ def _dashboard_cookie_from_headers(headers) -> str | None:
     for part in raw.split(";"):
         name, _, value = part.strip().partition("=")
         if name == "otterling_dashboard_session":
+            return value
+    return None
+
+
+# ─── Review session cookie (custom login, re-gating /review after basic_auth's removal) ────────
+# Same self-verifying <expiry>.<hmac> shape as the dashboard's session above, but keyed on
+# REVIEW_LOGIN_PASSWORD instead of TOKEN -- a deliberately separate credential, so a token minted
+# here is never accepted as a dashboard session or vice versa.
+def _review_session_create() -> str:
+    expiry = str(int(time.time()) + REVIEW_SESSION_MAX_AGE_SECONDS)
+    signature = hmac.new(REVIEW_LOGIN_PASSWORD.encode("utf-8"), expiry.encode("utf-8"), hashlib.sha256).hexdigest()
+    return f"{expiry}.{signature}"
+
+
+def _review_session_valid(token: str) -> bool:
+    # No configured password must never validate -- otherwise HMAC-with-empty-key would make
+    # every token mint/verify against the same fixed (empty) secret, which is not "unconfigured
+    # and therefore locked out", it's "unconfigured and therefore a fixed, guessable key".
+    if not REVIEW_LOGIN_PASSWORD:
+        return False
+    if not token or "." not in token:
+        return False
+    expiry, _, signature = token.partition(".")
+    if not expiry.isdigit() or int(expiry) < time.time():
+        return False
+    expected = hmac.new(REVIEW_LOGIN_PASSWORD.encode("utf-8"), expiry.encode("utf-8"), hashlib.sha256).hexdigest()
+    return secrets.compare_digest(signature, expected)
+
+
+def _review_cookie_from_headers(headers) -> str | None:
+    raw = headers.get("Cookie", "")
+    for part in raw.split(";"):
+        name, _, value = part.strip().partition("=")
+        if name == "otterling_review_session":
             return value
     return None
 
@@ -1445,6 +1492,55 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_json(401, {"error": "not logged in"})
         return self._send_redirect("/dashboard-login/")
 
+    def _set_review_session_cookie(self, token: str | None) -> None:
+        """Same shape/flags as [_set_dashboard_session_cookie] -- see that method's doc for why
+        HttpOnly/Secure/SameSite=Strict/no-Max-Age. Separate cookie name so it's never confused
+        with (or accidentally cleared/set by) the dashboard's own session cookie."""
+        value = "deleted; Max-Age=0" if token is None else token
+        self.send_header(
+            "Set-Cookie",
+            f"otterling_review_session={value}; Path=/; HttpOnly; Secure; SameSite=Strict",
+        )
+
+    def _handle_review_login(self) -> None:
+        if not REVIEW_LOGIN_PASSWORD:
+            return self._send_json(503, {"error": "review login not configured -- set REVIEW_LOGIN_PASSWORD"})
+        body = self._read_json_body()
+        password = (body or {}).get("password", "")
+        if not secrets.compare_digest(password, REVIEW_LOGIN_PASSWORD):
+            return self._send_json(401, {"error": "invalid password"})
+        token = _review_session_create()
+        payload = json.dumps({"status": "ok"}).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self._set_review_session_cookie(token)
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def _handle_review_logout(self) -> None:
+        payload = json.dumps({"status": "ok"}).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self._set_review_session_cookie(None)
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def _handle_review_verify(self) -> None:
+        """Backs Caddy's `forward_auth` in front of `/review`, `/review/*`, `/review-data/*`, and
+        `/device-logs/view/*` -- same split as [_handle_dashboard_verify]: an actual page load
+        (`/review`, `/review/*`) gets redirected to the login page, while `/review-data/*` and
+        `/device-logs/view/*` (fetched via JS or curl, expecting JSON/plain text, never HTML) get
+        a plain 401 instead."""
+        cookie = _review_cookie_from_headers(self.headers)
+        if cookie and _review_session_valid(cookie):
+            return self._send_json(200, {"status": "ok"})
+        forwarded_uri = self.headers.get("X-Forwarded-Uri", "")
+        if forwarded_uri.startswith("/review-data/") or forwarded_uri.startswith("/device-logs/view/"):
+            return self._send_json(401, {"error": "not logged in"})
+        return self._send_redirect("/review-login/")
+
     def do_POST(self):  # noqa: N802 (http.server API)
         parsed = urllib.parse.urlparse(self.path)
         # This one route authenticates on a query secret (Fleet can't send a Bearer header), so it
@@ -1458,6 +1554,12 @@ class Handler(BaseHTTPRequestHandler):
             return self._handle_dashboard_login()
         if parsed.path == "/dashboard-auth/logout":
             return self._handle_dashboard_logout()
+        # Same reasoning as dashboard-auth above, for the review login (see REVIEW_LOGIN_PASSWORD's
+        # comment).
+        if parsed.path == "/review-auth/login":
+            return self._handle_review_login()
+        if parsed.path == "/review-auth/logout":
+            return self._handle_review_logout()
 
         if not self._authorized():
             return self._send_json(401, {"error": "unauthorized"})
@@ -1927,6 +2029,8 @@ class Handler(BaseHTTPRequestHandler):
         # login/logout routes in do_POST).
         if parsed.path == "/dashboard-auth/verify":
             return self._handle_dashboard_verify()
+        if parsed.path == "/review-auth/verify":
+            return self._handle_review_verify()
 
         if not self._authorized():
             return self._send_json(401, {"error": "unauthorized"})

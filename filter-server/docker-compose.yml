@@ -181,6 +181,12 @@ services:
       # access rather than DNS/proxy enforcement.
       - DASHBOARD_USER=${DASHBOARD_USER:-}
       - DASHBOARD_LOGIN_PASSWORD=${DASHBOARD_LOGIN_PASSWORD:-}
+      # Review dashboard's own login (see lockprofile_service.py's REVIEW_LOGIN_PASSWORD comment
+      # and Caddyfile's /review-auth/*) -- same fail-closed-when-blank stance as
+      # DASHBOARD_LOGIN_PASSWORD above. Replaces REVIEW_DASHBOARD_PASSWORD_HASH (still set in
+      # .env but no longer read anywhere -- it backed Caddy's own basicauth, which was removed
+      # from /review 2026-08-18 and never replaced until now).
+      - REVIEW_LOGIN_PASSWORD=${REVIEW_LOGIN_PASSWORD:-}
       # Optional -- blank disables push notification, events still log to lockprofile-data/alerts/.
       - NTFY_TOPIC=${NTFY_TOPIC:-}
       - NTFY_SERVER=${NTFY_SERVER:-https://ntfy.sh}
@@ -204,10 +210,12 @@ services:
     network_mode: host
     environment:
       - UPDATE_HOST=${UPDATE_HOST:-vpn.bartholomew.help}
-      - REVIEW_DASHBOARD_USER=${REVIEW_DASHBOARD_USER:-guardian}
-      - REVIEW_DASHBOARD_PASSWORD_HASH=${REVIEW_DASHBOARD_PASSWORD_HASH:?set REVIEW_DASHBOARD_PASSWORD_HASH in .env, see review-dashboard/README.md}
-      # Device-settings dashboard at /dashboard -- separate Basic Auth credentials from
-      # REVIEW_DASHBOARD_* above, see filter-server/dashboard/README.md.
+      # Device-settings dashboard at /dashboard -- see filter-server/dashboard/README.md. (Review
+      # dashboard's own former REVIEW_DASHBOARD_USER/REVIEW_DASHBOARD_PASSWORD_HASH Basic Auth
+      # vars lived here too, but Caddy's basicauth directive that read them was removed
+      # 2026-08-18 -- see lockprofile_service.py's REVIEW_LOGIN_PASSWORD comment for the
+      # replacement, which lives on the lockprofile service instead since Caddy no longer does
+      # any credential-checking itself for either dashboard.)
       - DASHBOARD_USER=${DASHBOARD_USER:-guardian}
       - DASHBOARD_PASSWORD_HASH=${DASHBOARD_PASSWORD_HASH:?set DASHBOARD_PASSWORD_HASH in .env, see dashboard/README.md}
       # Injected onto outbound requests to lockprofile for the /device-logs/view/* and
@@ -237,6 +245,9 @@ services:
       # app, so it can be served un-authenticated without carving an exception into the @dashboard
       # matcher that gates everything else.
       - ./dashboard-login:/srv/dashboard-login:ro
+      # Same standalone-login-page pattern as dashboard-login above, for /review et al -- see
+      # Caddyfile's /review-auth/* + forward_auth.
+      - ./review-login:/srv/review-login:ro
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - ./caddy-data:/data
       - ./caddy-config:/config

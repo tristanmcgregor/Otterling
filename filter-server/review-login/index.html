@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Otterling — Review sign in</title>
+<meta name="robots" content="noindex, nofollow" />
+<style>
+  :root { color-scheme: dark; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    display: flex; align-items: center; justify-content: center;
+    background: #0b0e14; color: #e6e8ee;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  form {
+    width: 320px; padding: 28px; border-radius: 14px;
+    background: #131722; border: 1px solid #232838;
+    display: flex; flex-direction: column; gap: 14px;
+  }
+  h1 { font-size: 18px; margin: 0 0 4px; font-weight: 600; }
+  p.sub { margin: 0 0 8px; font-size: 12px; color: #9aa3b5; }
+  label { font-size: 12px; color: #9aa3b5; }
+  input {
+    width: 100%; box-sizing: border-box; padding: 9px 10px; margin-top: 4px;
+    border-radius: 8px; border: 1px solid #2a3040; background: #0f1320; color: #e6e8ee;
+    font-size: 14px;
+  }
+  input:focus { outline: none; border-color: #5b6ee8; }
+  button {
+    margin-top: 6px; padding: 10px; border-radius: 8px; border: none;
+    background: #5b6ee8; color: white; font-size: 14px; font-weight: 600; cursor: pointer;
+  }
+  button:disabled { opacity: 0.6; cursor: default; }
+  #error { color: #ff6b6b; font-size: 12px; min-height: 14px; }
+</style>
+</head>
+<body>
+  <form id="loginForm">
+    <h1>Otterling Review</h1>
+    <p class="sub">Sign in to view AI review history and device diagnostic logs.</p>
+    <div>
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" autofocus />
+    </div>
+    <div id="error"></div>
+    <button type="submit" id="submitBtn">Sign in</button>
+  </form>
+
+  <script>
+    const form = document.getElementById('loginForm');
+    const errorEl = document.getElementById('error');
+    const submitBtn = document.getElementById('submitBtn');
+
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      errorEl.textContent = '';
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Signing in…';
+      try {
+        const response = await fetch('/review-auth/login', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            password: document.getElementById('password').value,
+          }),
+        });
+        if (response.ok) {
+          window.location.replace('/review/');
+          return;
+        }
+        const data = await response.json().catch(() => ({}));
+        errorEl.textContent = data.error || 'Sign in failed.';
+      } catch (error) {
+        errorEl.textContent = 'Could not reach the server.';
+      } finally {
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Sign in';
+      }
+    });
+  </script>
+</body>
+</html>
