@@ -324,17 +324,12 @@ export const api = {
   removeHabitShareAccount: () =>
     request<{ username: null; password: null; updatedAt: number }>("/habitshare-account", { method: "DELETE" }),
 
-  // Changes this dashboard's own login password. Requires the current one -- see
-  // lockprofile_service.py's dashboard-password route.
+  // Changes the one shared guardian login password (used for both this dashboard and /review).
+  // Requires the current password -- see lockprofile_service.py's dashboard-password route.
+  // Also invalidates every existing /review session, since that session's HMAC key IS this
+  // password.
   setDashboardPassword: (currentPassword: string, newPassword: string) =>
     request<{ status: string }>("/dashboard-password", {
-      method: "POST",
-      body: JSON.stringify({ currentPassword, newPassword }),
-    }),
-  // Changes the /review login password. Invalidates every existing review session, including
-  // this browser's own if it's ever called from within /review itself.
-  setReviewPassword: (currentPassword: string, newPassword: string) =>
-    request<{ status: string }>("/review-password", {
       method: "POST",
       body: JSON.stringify({ currentPassword, newPassword }),
     }),

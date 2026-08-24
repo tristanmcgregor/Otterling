@@ -127,45 +127,36 @@ REPORT_TYPES_CONFIG_PATH = os.environ.get(
 # (returns 403), so an unconfigured deployment can't be poked with unauthenticated Fleet payloads.
 FLEET_WEBHOOK_SECRET = os.environ.get("FLEET_WEBHOOK_SECRET", "")
 
-# Device-settings dashboard's OWN login (a custom page, see filter-server/dashboard-login/), not
-# Caddy's basic_auth -- that native browser dialog was confusing/unreliable enough in practice
-# (stuck re-prompt loops, silent stale-credential caching) that it got replaced outright. Plaintext
-# password compared via secrets.compare_digest (not a bcrypt hash like Caddy's basic_auth used --
-# Python's stdlib has no bcrypt, and this server already carries plaintext-secret-plus-
-# compare_digest as its established pattern for LOCKPROFILE_TOKEN/FLEET_WEBHOOK_SECRET). Session
-# tokens are self-verifying (HMAC'd with TOKEN as the key, see _dashboard_session_* below) rather
-# than server-stored, so there's no session store to lose on a restart.
-DASHBOARD_USER = os.environ.get("DASHBOARD_USER", "")
-DASHBOARD_LOGIN_PASSWORD = os.environ.get("DASHBOARD_LOGIN_PASSWORD", "")
+# One shared guardian login -- password only, no username -- for BOTH the device-settings
+# dashboard (filter-server/dashboard-login/) and /review et al (filter-server/review-login/).
+# These used to be two separate credentials (DASHBOARD_LOGIN_PASSWORD/REVIEW_LOGIN_PASSWORD); the
+# guardian explicitly asked for one shared password instead, and for the dashboard login to drop
+# its username field entirely -- this is a single-operator household tool, not a multi-user
+# system, so a username was never actually distinguishing anyone. Not Caddy's basic_auth -- that
+# native browser dialog was confusing/unreliable enough in practice (stuck re-prompt loops, silent
+# stale-credential caching) that it got replaced outright, first for the dashboard (2026-08-19),
+# then for review (added later, initially as its own separate password, now unified here).
+# Plaintext password compared via secrets.compare_digest (not a bcrypt hash -- Python's stdlib has
+# no bcrypt, and this server already carries plaintext-secret-plus-compare_digest as its
+# established pattern for LOCKPROFILE_TOKEN/FLEET_WEBHOOK_SECRET). The dashboard and review
+# sessions are still separate cookies/tokens (see _dashboard_session_* and _review_session_*) --
+# visiting one doesn't automatically log you into the other -- they just now check the same
+# password.
+GUARDIAN_LOGIN_PASSWORD = os.environ.get("DASHBOARD_LOGIN_PASSWORD", "") or os.environ.get("REVIEW_LOGIN_PASSWORD", "")
 DASHBOARD_SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60  # 30 days
+REVIEW_SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60  # 30 days, same as the dashboard's
 
-# Guardian-changeable override for DASHBOARD_LOGIN_PASSWORD, set from the dashboard's own Global
+# Guardian-changeable override for GUARDIAN_LOGIN_PASSWORD, set from the dashboard's own Global
 # Settings > Passwords screen (POST /dashboard-api/dashboard-password, guardian-session-only,
 # requires the current password) rather than only ever being settable by hand-editing .env and
 # recreating the container. The env var stays the bootstrap/first-run value; once a guardian
-# changes it here, this file wins. See _dashboard_login_password() below -- every place that used
-# to read the DASHBOARD_LOGIN_PASSWORD constant directly now goes through that instead, so a
-# change here takes effect on the very next request, no restart needed.
-DASHBOARD_LOGIN_PASSWORD_PATH = os.path.join(DATA_DIR, "dashboard_password_override.txt")
-
-# /review, /review-data/*, and /device-logs/view/* (AI code-review pipeline history, uploaded
-# phone diagnostic logs) used to be gated by Caddy's own basic_auth against a bcrypt hash
-# (REVIEW_DASHBOARD_PASSWORD_HASH in docker-compose.yml). That got removed 2026-08-18 for the same
-# stuck-re-prompt-loop reason DASHBOARD_LOGIN_PASSWORD's login replaced Caddy basic_auth for one
-# day later -- but unlike the dashboard, this route was never re-gated, leaving it fully
-# unauthenticated to the open internet (REVIEW_DASHBOARD_PASSWORD_HASH is set in the environment
-# but nothing in this file ever reads it -- there's no bcrypt in the stdlib to verify it against
-# anyway). Same fix as the dashboard got: its own plaintext-password custom login
-# (filter-server/review-login/), its own session cookie, deliberately a SEPARATE credential from
-# DASHBOARD_LOGIN_PASSWORD so dashboard and review access can be handed out independently.
-REVIEW_LOGIN_PASSWORD = os.environ.get("REVIEW_LOGIN_PASSWORD", "")
-REVIEW_SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60  # 30 days, same as the dashboard's
-
-# Same guardian-changeable-override pattern as DASHBOARD_LOGIN_PASSWORD_PATH above, for
-# REVIEW_LOGIN_PASSWORD. Since the review session HMAC key IS this password (see
-# _review_session_create/_valid), changing it also invalidates every existing review session --
-# a deliberate side effect, not a bug: a password change should log everyone else out.
-REVIEW_LOGIN_PASSWORD_PATH = os.path.join(DATA_DIR, "review_password_override.txt")
+# changes it here, this file wins. See _guardian_login_password() below -- every place that used
+# to read a password constant directly now goes through that instead, so a change here takes
+# effect on the very next request, no restart needed, and applies to both logins at once. Since
+# the review session HMAC key IS this password (see _review_session_create/_valid), changing it
+# also invalidates every existing review session -- a deliberate side effect, not a bug: a
+# password change should log everyone else out.
+GUARDIAN_LOGIN_PASSWORD_PATH = os.path.join(DATA_DIR, "guardian_password_override.txt")
 
 
 def _load_password_override(path: str, env_default: str) -> str:
@@ -186,12 +177,8 @@ def _save_password_override(path: str, password: str) -> None:
         os.replace(tmp_path, path)
 
 
-def _dashboard_login_password() -> str:
-    return _load_password_override(DASHBOARD_LOGIN_PASSWORD_PATH, DASHBOARD_LOGIN_PASSWORD)
-
-
-def _review_login_password() -> str:
-    return _load_password_override(REVIEW_LOGIN_PASSWORD_PATH, REVIEW_LOGIN_PASSWORD)
+def _guardian_login_password() -> str:
+    return _load_password_override(GUARDIAN_LOGIN_PASSWORD_PATH, GUARDIAN_LOGIN_PASSWORD)
 
 NTFY_SERVER = os.environ.get("NTFY_SERVER", "https://ntfy.sh").rstrip("/")
 NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "")
@@ -629,12 +616,12 @@ def _dashboard_cookie_from_headers(headers) -> str | None:
 
 
 # ─── Review session cookie (custom login, re-gating /review after basic_auth's removal) ────────
-# Same self-verifying <expiry>.<hmac> shape as the dashboard's session above, but keyed on
-# REVIEW_LOGIN_PASSWORD instead of TOKEN -- a deliberately separate credential, so a token minted
-# here is never accepted as a dashboard session or vice versa.
+# Same self-verifying <expiry>.<hmac> shape as the dashboard's session above, keyed on the same
+# shared GUARDIAN_LOGIN_PASSWORD -- but still its own cookie/token, so a dashboard session isn't
+# automatically also a review session (or vice versa); they just check the same password now.
 def _review_session_create() -> str:
     expiry = str(int(time.time()) + REVIEW_SESSION_MAX_AGE_SECONDS)
-    signature = hmac.new(_review_login_password().encode("utf-8"), expiry.encode("utf-8"), hashlib.sha256).hexdigest()
+    signature = hmac.new(_guardian_login_password().encode("utf-8"), expiry.encode("utf-8"), hashlib.sha256).hexdigest()
     return f"{expiry}.{signature}"
 
 
@@ -642,7 +629,7 @@ def _review_session_valid(token: str) -> bool:
     # No configured password must never validate -- otherwise HMAC-with-empty-key would make
     # every token mint/verify against the same fixed (empty) secret, which is not "unconfigured
     # and therefore locked out", it's "unconfigured and therefore a fixed, guessable key".
-    password = _review_login_password()
+    password = _guardian_login_password()
     if not password:
         return False
     if not token or "." not in token:
@@ -1529,14 +1516,13 @@ class Handler(BaseHTTPRequestHandler):
         )
 
     def _handle_dashboard_login(self) -> None:
-        current_password = _dashboard_login_password()
-        if not DASHBOARD_USER or not current_password:
-            return self._send_json(503, {"error": "dashboard login not configured -- set DASHBOARD_USER/DASHBOARD_LOGIN_PASSWORD"})
+        current_password = _guardian_login_password()
+        if not current_password:
+            return self._send_json(503, {"error": "dashboard login not configured -- set DASHBOARD_LOGIN_PASSWORD"})
         body = self._read_json_body()
-        username = (body or {}).get("username", "")
         password = (body or {}).get("password", "")
-        if not (secrets.compare_digest(username, DASHBOARD_USER) and secrets.compare_digest(password, current_password)):
-            return self._send_json(401, {"error": "invalid username or password"})
+        if not secrets.compare_digest(password, current_password):
+            return self._send_json(401, {"error": "invalid password"})
         token = _dashboard_session_create()
         payload = json.dumps({"status": "ok"}).encode("utf-8")
         self.send_response(200)
@@ -1588,9 +1574,9 @@ class Handler(BaseHTTPRequestHandler):
         )
 
     def _handle_review_login(self) -> None:
-        current_password = _review_login_password()
+        current_password = _guardian_login_password()
         if not current_password:
-            return self._send_json(503, {"error": "review login not configured -- set REVIEW_LOGIN_PASSWORD"})
+            return self._send_json(503, {"error": "review login not configured -- set DASHBOARD_LOGIN_PASSWORD"})
         body = self._read_json_body()
         password = (body or {}).get("password", "")
         if not secrets.compare_digest(password, current_password):
@@ -1640,8 +1626,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._handle_dashboard_login()
         if parsed.path == "/dashboard-auth/logout":
             return self._handle_dashboard_logout()
-        # Same reasoning as dashboard-auth above, for the review login (see REVIEW_LOGIN_PASSWORD's
-        # comment).
+        # Same reasoning as dashboard-auth above, for the review login (see
+        # GUARDIAN_LOGIN_PASSWORD's comment -- same shared password, separate session cookie).
         if parsed.path == "/review-auth/login":
             return self._handle_review_login()
         if parsed.path == "/review-auth/logout":
@@ -1876,37 +1862,23 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(200, _clear_habitshare_account())
             return True
 
-        # Guardian-only (browser session): change the dashboard's own login password. Requires
-        # the current password, not just possession of the session cookie -- a modest extra check
+        # Guardian-only (browser session): change the one shared guardian login password (used by
+        # both /dashboard and /review -- see GUARDIAN_LOGIN_PASSWORD's comment). Requires the
+        # current password, not just possession of the session cookie -- a modest extra check
         # matching how most "change password" flows work, even though the cookie alone already
-        # proves this request came from a logged-in session.
-        if path == "/dashboard-api/dashboard-password" and method == "POST":
+        # proves this request came from a logged-in session. Also accepted at the old
+        # /dashboard-api/review-password path for compatibility -- same handler either way, since
+        # there's only one password to change now.
+        if path in ("/dashboard-api/dashboard-password", "/dashboard-api/review-password") and method == "POST":
             current = (body or {}).get("currentPassword", "")
             new_password = (body or {}).get("newPassword", "")
-            if not secrets.compare_digest(current, _dashboard_login_password()):
+            if not secrets.compare_digest(current, _guardian_login_password()):
                 self._send_json(401, {"error": "current password is incorrect"})
                 return True
             if len(new_password) < 8:
                 self._send_json(400, {"error": "new password must be at least 8 characters"})
                 return True
-            _save_password_override(DASHBOARD_LOGIN_PASSWORD_PATH, new_password)
-            self._send_json(200, {"status": "ok"})
-            return True
-
-        # Same as dashboard-password above, for the review login. Changing this also invalidates
-        # every existing review session (see REVIEW_LOGIN_PASSWORD_PATH's comment) -- including
-        # the one making this very request, so the dashboard UI should expect to need a fresh
-        # /review-auth/login afterward if it ever calls this from within /review itself.
-        if path == "/dashboard-api/review-password" and method == "POST":
-            current = (body or {}).get("currentPassword", "")
-            new_password = (body or {}).get("newPassword", "")
-            if not secrets.compare_digest(current, _review_login_password()):
-                self._send_json(401, {"error": "current password is incorrect"})
-                return True
-            if len(new_password) < 8:
-                self._send_json(400, {"error": "new password must be at least 8 characters"})
-                return True
-            _save_password_override(REVIEW_LOGIN_PASSWORD_PATH, new_password)
+            _save_password_override(GUARDIAN_LOGIN_PASSWORD_PATH, new_password)
             self._send_json(200, {"status": "ok"})
             return True
 

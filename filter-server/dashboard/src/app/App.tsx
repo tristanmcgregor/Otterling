@@ -1381,18 +1381,12 @@ function GlobalSettingsScreen({
       </div>
 
       <div className="space-y-3">
-        <SectionLabel>Passwords</SectionLabel>
-        <Card className="rounded-2xl space-y-4">
+        <SectionLabel>Password</SectionLabel>
+        <Card className="rounded-2xl">
           <PasswordChangeForm
-            title="Dashboard login"
-            sub="Signs into this website."
+            title="Guardian login"
+            sub="Signs into this website and into /review (AI review history, device diagnostic logs) — one shared password for both. Changing it signs out every other /review session."
             onSubmit={(current, next) => api.setDashboardPassword(current, next)}
-          />
-          <div className="h-px bg-outline-variant/40" />
-          <PasswordChangeForm
-            title="Review login"
-            sub="Signs into /review (AI review history, device diagnostic logs). Changing this signs out every other review session."
-            onSubmit={(current, next) => api.setReviewPassword(current, next)}
           />
         </Card>
       </div>
