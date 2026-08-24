@@ -26,10 +26,11 @@ import android.content.Context
  * unfiltered the way a `VpnService`-level bypass would leave them.
  *
  * [DEFAULT_EXEMPT_PACKAGES] (plus the later [DEFAULT_EXEMPT_PACKAGES_V2]/[DEFAULT_EXEMPT_PACKAGES_V3]/
- * [DEFAULT_EXEMPT_PACKAGES_V4]) seeds the common ones (YouTube, AU banking apps, HotDoc, Google
- * Authenticator, Google Play Services, WhatsApp) so this works out of the box instead of the
- * Guardian needing to know to add them. Not every entry is here because of certificate pinning --
- * see [DEFAULT_EXEMPT_PACKAGES_V4]'s doc for WhatsApp's different (performance, not breakage) reason.
+ * [DEFAULT_EXEMPT_PACKAGES_V4]/[DEFAULT_EXEMPT_PACKAGES_V5]) seeds the common ones (YouTube, AU
+ * banking apps, HotDoc, Google Authenticator, Google Play Services, WhatsApp, Netflix, Galaxy
+ * Wearable) so this works out of the box instead of the Guardian needing to know to add them. Not
+ * every entry is here because of certificate pinning -- see [DEFAULT_EXEMPT_PACKAGES_V4]'s doc for
+ * WhatsApp's different (performance, not breakage) reason.
  *
  * Applied via [AppUidResolver]-based flow attribution when the tunnel is (re)established --
  * see [VpnFilterService.runPacketLoop].
@@ -43,6 +44,7 @@ class MitmExemptManager(context: Context) {
         seedV2DefaultsIfNeeded()
         seedV3DefaultsIfNeeded()
         seedV4DefaultsIfNeeded()
+        seedV5DefaultsIfNeeded()
     }
 
     fun exemptPackages(): Set<String> = (localPackages() + dashboardExemptPackages()) - NEVER_EXEMPT_PACKAGES
@@ -137,6 +139,17 @@ class MitmExemptManager(context: Context) {
             .apply()
     }
 
+    /** Same one-time-merge pattern as the earlier seed* methods, for [DEFAULT_EXEMPT_PACKAGES_V5]
+     *  -- see that list's doc for why these two specifically needed seeding rather than waiting
+     *  for [PinningFailureTracker] to notice them break. */
+    private fun seedV5DefaultsIfNeeded() {
+        if (prefs.getBoolean(KEY_SEEDED_V5, false)) return
+        prefs.edit()
+            .putStringSet(KEY_PACKAGES, localPackages() + DEFAULT_EXEMPT_PACKAGES_V5)
+            .putBoolean(KEY_SEEDED_V5, true)
+            .apply()
+    }
+
     companion object {
         /**
          * Apps that certificate-pin and so break under any MITM proxy (not just ours) -- exempting
@@ -194,6 +207,24 @@ class MitmExemptManager(context: Context) {
             "com.whatsapp.w4b", // WhatsApp Business
         )
 
+        /**
+         * Added after the v4 list shipped, at the same time [VpnFilterService]'s temporary
+         * "MITM restricted to Chrome only" fallback (2026-08-18) was reverted. These are the two
+         * concrete apps that prompted that fallback in the first place -- Netflix's video CDN
+         * connections and the Wearable app's watch-pairing traffic both broke badly enough under
+         * MITM to be reported "unusable" -- so they're seeded here as curated exemptions instead
+         * of relying on [PinningFailureTracker] to notice the breakage on its own (same reasoning
+         * as Google Authenticator in [DEFAULT_EXEMPT_PACKAGES_V3]: known breakage gets fixed
+         * immediately, not after a day of the heuristic gathering corroborating failures). This
+         * restores "MITM everything except a curated list" as the real default -- the
+         * Chrome-only fallback was exempting every OTHER app/browser too, which meant installing
+         * any non-Chrome browser skipped page-content review entirely, not just Netflix/Wearable.
+         */
+        val DEFAULT_EXEMPT_PACKAGES_V5 = setOf(
+            "com.netflix.mediaclient", // Netflix
+            "com.samsung.android.app.watchmanager", // Galaxy Wearable (Samsung Gear/Watch companion app)
+        )
+
         /** Chrome (all channels) can never be added to [exemptPackages] -- see [add]. */
         val NEVER_EXEMPT_PACKAGES = setOf(
             "com.android.chrome",
@@ -208,5 +239,6 @@ class MitmExemptManager(context: Context) {
         private const val KEY_SEEDED_V2 = "seeded_defaults_v2"
         private const val KEY_SEEDED_V3 = "seeded_defaults_v3"
         private const val KEY_SEEDED_V4 = "seeded_defaults_v4"
+        private const val KEY_SEEDED_V5 = "seeded_defaults_v5"
     }
 }

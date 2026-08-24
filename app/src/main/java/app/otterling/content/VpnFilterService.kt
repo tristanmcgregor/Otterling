@@ -280,24 +280,22 @@ class VpnFilterService : VpnService() {
         // Resolved once per tunnel generation (same lifecycle as proxyConfig) -- a Guardian
         // adding/removing an exempt app takes effect on the next reestablish(), same pattern as
         // every other setting this loop reads at startup.
+        //
+        // "MITM everything except this curated list" (opt-out), not "MITM only a curated list"
+        // (opt-in) -- an opt-in model was tried (2026-08-18, reverted) to fix Netflix/Samsung
+        // Wearable breaking under the proxy hop, restricting MITM to Chrome only. That fixed
+        // those two apps but silently exempted every OTHER app and browser too: any non-Chrome
+        // browser (or any app at all) got zero page-content review from mitm_nsfw_addon.py,
+        // falling back to DNS-level-only filtering that's deliberately permissive about
+        // ambiguous-but-not-known-bad domains (see useStrictDns below) since it normally trusts
+        // this MITM hop to catch a bad page on an otherwise-fine domain -- installing any other
+        // browser was a full content-filtering bypass. Netflix and Wearable are now seeded
+        // exemptions instead (MitmExemptManager.DEFAULT_EXEMPT_PACKAGES_V5), and
+        // PinningFailureTracker below still catches anything else that breaks, the same as it
+        // always did for every other pinning-incompatible app.
         val exemptManager = MitmExemptManager(applicationContext)
         val mitmExemptUids = exemptManager.exemptPackages().mapNotNullTo(mutableSetOf()) { pkg ->
             runCatching { packageManager.getPackageUid(pkg, 0) }.getOrNull()
-        }
-        // TEMPORARY 2026-08-18: MITM interception restricted to Chrome only -- every other app's
-        // UID is exempted here too, on top of exemptManager's own curated list. Reported live: the
-        // proxy hop was breaking Netflix and Samsung's Wearable companion app badly enough to be
-        // unusable, and per-app exemption additions (MitmExemptManager) are reactive (an app has
-        // to actually break and get noticed/added first) -- this flips the model to opt-in
-        // (Chrome only) rather than opt-out, while every app's DNS/domain-blocklist filtering and
-        // QUIC/443-UDP blocking (see isBlockedDestination above) stays exactly as it was; only the
-        // HTTPS-content-inspection hop is scoped down. Revert by deleting this block --
-        // exemptManager's own list (Chrome permanently excluded from it, see
-        // MitmExemptManager.NEVER_EXEMPT_PACKAGES) is untouched and still the real mechanism.
-        packageManager.getInstalledApplications(0).forEach { appInfo ->
-            if (appInfo.packageName !in MitmExemptManager.NEVER_EXEMPT_PACKAGES) {
-                mitmExemptUids.add(appInfo.uid)
-            }
         }
         val ownerUidResolver = AppUidResolver(applicationContext)
         // Auto-exempts an app after a few suspected pinning rejections within a short window,
@@ -432,16 +430,17 @@ class VpnFilterService : VpnService() {
                 }.onFailure { Log.w(TAG, "VPN block alert failed", it) }
             }
         }
-        // TEMPORARY 2026-08-18, alongside the MITM-scoped-to-Chrome change above: an app that
-        // isn't MITM'd gets NONE of mitm_nsfw_addon.py's page-content-level review, only whatever
-        // the DNS-level cloud filter decides from the domain name alone -- which is deliberately
-        // permissive about ambiguous-but-not-known-bad domains, because it normally trusts the
-        // MITM hop to catch a genuinely bad page on an otherwise-fine domain. Without that safety
-        // net, "less restrictive at the domain level" would just mean unfiltered for anything not
-        // already on a static blocklist -- exactly the loophole a non-MITM'd app becomes. So a
-        // MITM-exempt app's queries skip the smart cloud filter entirely and go straight to
-        // Cloudflare Family (blunter, but blocks known-bad categories with no page-content nuance
-        // needed) -- a real Chrome DNS query is unaffected. An unresolvable owner UID (older
+        // A MITM-exempt app (see mitmExemptUids above -- now just the curated
+        // MitmExemptManager list, not "everything except Chrome") gets NONE of
+        // mitm_nsfw_addon.py's page-content-level review, only whatever the DNS-level cloud
+        // filter decides from the domain name alone -- which is deliberately permissive about
+        // ambiguous-but-not-known-bad domains, because it normally trusts the MITM hop to catch a
+        // genuinely bad page on an otherwise-fine domain. Without that safety net, "less
+        // restrictive at the domain level" would just mean unfiltered for anything not already on
+        // a static blocklist -- exactly the loophole a non-MITM'd app becomes. So a MITM-exempt
+        // app's queries skip the smart cloud filter entirely and go straight to Cloudflare Family
+        // (blunter, but blocks known-bad categories with no page-content nuance needed) -- a
+        // normal (non-exempt) app's DNS query is unaffected. An unresolvable owner UID (older
         // Android, or the lookup itself failing) fails toward the STRICT path too, not the lenient
         // one, matching "assume unknown = discourage" rather than "assume unknown = safe".
         val ownerUid = ownerUidResolver.ownerUid(
