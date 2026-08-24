@@ -55,7 +55,16 @@ fun MacTamperAlertSection(context: Context) {
             "Never checked yet"
         }
     }
-    LaunchedEffect(Unit) { refreshLastPolledText() }
+    // Re-reads the persisted timestamp every few seconds rather than once on composition, so a poll
+    // triggered in the background -- the periodic WorkManager run, or an FCM wake from the
+    // dashboard's "Poll Now" button (MacTamperMessagingService) -- shows up here while this screen
+    // is open, instead of looking like nothing happened until the user leaves and comes back.
+    LaunchedEffect(Unit) {
+        while (true) {
+            refreshLastPolledText()
+            delay(3_000)
+        }
+    }
 
     SectionCard(
         title = "Mac tamper alerts",
