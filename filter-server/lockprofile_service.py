@@ -392,6 +392,7 @@ _habit_completions_lock = threading.Lock()
 _removed_devices_lock = threading.Lock()
 _habitshare_account_lock = threading.Lock()
 _password_override_lock = threading.Lock()
+_report_types_lock = threading.Lock()
 
 # Rate limit for POST /dashboard-api/pin/verify. Global (not per-device/IP): every device shares
 # the one LOCKPROFILE_TOKEN, so a guesser can't be told apart from a legitimate device by identity
@@ -595,6 +596,43 @@ def _report_type_enabled(report_type: str) -> bool:
     if entry is None:
         return True
     return entry.get("enabled", True) is not False
+
+
+def _load_report_types_file() -> dict:
+    """Like _load_report_config, but returns the WHOLE parsed file (including `_readme`), not
+    just `types` -- used by the dashboard's guardian-only read/write below, which needs to
+    preserve `_readme` on save and show `source`/`description` (the plain `/report-config` route
+    -- device-bearer-reachable, see Caddyfile -- deliberately only ever returns the bare
+    `{type: enabled}` map, never this richer shape or a write capability; see the route handler
+    below for why those two must never be merged)."""
+    try:
+        with open(REPORT_TYPES_CONFIG_PATH, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+            return data if isinstance(data, dict) else {"_readme": [], "types": {}}
+    except (OSError, json.JSONDecodeError):
+        return {"_readme": [], "types": {}}
+
+
+def _save_report_types_file(data: dict) -> None:
+    tmp_path = REPORT_TYPES_CONFIG_PATH + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, indent=2, sort_keys=False)
+    os.replace(tmp_path, REPORT_TYPES_CONFIG_PATH)
+
+
+def _set_report_type_enabled(report_type: str, enabled: bool) -> dict | None:
+    """Toggles an EXISTING type's `enabled` flag -- never adds/removes/renames a type via this
+    path, keeping the API narrowly "enable or disable something that's already defined" rather
+    than a general file editor. Returns the updated file (for the response), or None if
+    report_type isn't a known key (caller sends 404)."""
+    with _report_types_lock:
+        data = _load_report_types_file()
+        types = data.setdefault("types", {})
+        if report_type not in types:
+            return None
+        types[report_type]["enabled"] = enabled
+        _save_report_types_file(data)
+        return data
 
 
 # ─── Dashboard session cookie (custom login, replacing Caddy basic_auth) ───────────────────────
@@ -843,6 +881,12 @@ DASHBOARD_DEVICE_RE = re.compile(r"^/dashboard-api/devices/([A-Za-z0-9_.-]{1,128
 # /complete forms are the only two Caddy ever lets a device bearer reach (POST /complete only) --
 # /proof and every other verb here are guardian-browser-session only, see Caddyfile.
 HABIT_ITEM_RE = re.compile(r"^/dashboard-api/habits/([A-Za-z0-9]+)(/complete|/proof)?$")
+
+# Matches /dashboard-api/report-types/<type> (PATCH enabled) -- report type keys are always
+# lower/upper snake_case (see report_types.json, e.g. "lock_profile_removed", "VPN_BLOCK"), never
+# containing anything else, so this is deliberately narrower than HABIT_ITEM_RE's [A-Za-z0-9]+
+# (no hex-id shape to allow for).
+REPORT_TYPE_ITEM_RE = re.compile(r"^/dashboard-api/report-types/([A-Za-z0-9_]+)$")
 
 # PATCH .../settings is allowlisted to these keys -- everything else in _default_device_settings
 # (rules, blockedWebsites, vpnBypassApps, appBudgets, triggerWords, blockedApps, protectedApps,
@@ -2055,6 +2099,33 @@ class Handler(BaseHTTPRequestHandler):
                 if imported:
                     _save_habits(habits)
             self._send_json(200, {"habits": _habits_with_completion_status(), "imported": imported})
+            return True
+
+        # Guardian-only report-type enable/disable list -- deliberately a SEPARATE path from the
+        # plain `/report-config` route (see Caddyfile), which is device-bearer-reachable so the
+        # phone's own ReportConfigStore.kt can fetch it. That bearer token is embedded in the
+        # shipped APK and extractable by the person these reports are ABOUT (see this project's
+        # existing "device bearer must never reach a guardian-authoring route" rule, e.g. Caddyfile's
+        # comment on why a bare "has a bearer" match was rejected in review) -- letting that same
+        # token silence its own tamper reports (PROTECTION_OFF, ACCESSIBILITY_DISABLED, etc.) would
+        # defeat the entire point of this file. This richer GET (source/description included, for
+        # the dashboard UI) and its PATCH live only under /dashboard-api/*, which Caddy does NOT
+        # let the device bearer through to for this path (see @dashboardApiDeviceGet's allowlist).
+        if path == "/dashboard-api/report-types" and method == "GET":
+            self._send_json(200, _load_report_types_file())
+            return True
+
+        report_type_match = REPORT_TYPE_ITEM_RE.match(path)
+        if report_type_match and method == "PATCH":
+            report_type = report_type_match.group(1)
+            if not isinstance((body or {}).get("enabled"), bool):
+                self._send_json(400, {"error": "enabled (boolean) required"})
+                return True
+            updated = _set_report_type_enabled(report_type, body["enabled"])
+            if updated is None:
+                self._send_json(404, {"error": "no such report type"})
+                return True
+            self._send_json(200, updated)
             return True
 
         habit_match = HABIT_ITEM_RE.match(path)

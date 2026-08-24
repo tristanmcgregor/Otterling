@@ -9,6 +9,7 @@ import { cn, Card, Button, Switch, Pill } from "./components/ui";
 import { api, ApiError, logout } from "../lib/api";
 import type {
   DeviceSettings, DeviceSummary, ActivityEvent, Rule, RuleSchedule, AppBudget, ProtectedApp, Habit,
+  ReportType, ReportTypesFile,
 } from "../lib/api";
 
 type Screen = "Dashboard" | "Settings" | "GlobalSettings" | "Wizard";
@@ -1189,6 +1190,25 @@ function SettingsScreen({
       </div>
 
       <div className="space-y-3">
+        <SectionLabel>Diagnostics</SectionLabel>
+        <Card className="rounded-2xl">
+          <details>
+            <summary className="text-sm font-medium cursor-pointer select-none">
+              View raw settings JSON
+            </summary>
+            <p className="text-xs text-on-surface-variant mt-1 mb-2">
+              Exactly what <code>GET /dashboard-api/devices/{deviceId}/settings</code> returns for
+              this device -- useful for confirming what the phone is actually seeing when
+              something looks out of sync.
+            </p>
+            <pre className="text-[11px] leading-snug bg-surface-variant/50 rounded-xl p-3 overflow-x-auto max-h-96 overflow-y-auto">
+              {JSON.stringify(settings, null, 2)}
+            </pre>
+          </details>
+        </Card>
+      </div>
+
+      <div className="space-y-3">
         <SectionLabel>Danger Zone</SectionLabel>
         <Card className="rounded-2xl border-error/30">
           <div className="flex items-center justify-between gap-3">
@@ -1324,6 +1344,17 @@ function GlobalSettingsScreen({
         </Card>
       </div>
 
+      <div className="space-y-3">
+        <SectionLabel>Report Types</SectionLabel>
+        <p className="text-xs text-on-surface-variant -mt-1">
+          Every kind of accountability report/alert Otterling can send, grouped by where it comes
+          from. Turning one off fully suppresses it — no SMS, no local log entry, nothing recorded
+          — so use this deliberately. A type not listed here (e.g. a newly added one) defaults to
+          on. Takes effect immediately server-side; the phone picks up a change within ~15 minutes.
+        </p>
+        <ReportTypesPanel />
+      </div>
+
       {pinModalOpen && (
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-md flex items-center justify-center">
           <SetPinModal
@@ -1336,6 +1367,55 @@ function GlobalSettingsScreen({
           />
         </div>
       )}
+    </div>
+  );
+}
+
+function ReportTypesPanel() {
+  const [data, setData] = useState<ReportTypesFile | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    api.getReportTypes().then(setData).catch(() => setError("Failed to load report types"));
+  }, []);
+
+  const toggle = (type: string, enabled: boolean) => {
+    api.setReportTypeEnabled(type, enabled).then(setData).catch(() => setError(`Failed to update "${type}"`));
+  };
+
+  if (error) return <p className="text-xs text-error">{error}</p>;
+  if (!data) return <p className="text-xs text-on-surface-variant">Loading…</p>;
+
+  const bySource: Record<string, Array<[string, ReportType]>> = { android: [], mac: [], server: [] };
+  for (const entry of Object.entries(data.types).sort(([a], [b]) => a.localeCompare(b))) {
+    bySource[entry[1].source]?.push(entry);
+  }
+  const sourceLabels: Record<string, string> = {
+    android: "Phone",
+    mac: "macOS (FocusLock)",
+    server: "Filter server",
+  };
+
+  return (
+    <div className="space-y-4">
+      {(["android", "mac", "server"] as const).map((source) => bySource[source].length > 0 && (
+        <div key={source}>
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-on-surface-variant/70 mb-1 px-1">
+            {sourceLabels[source]} ({bySource[source].length})
+          </p>
+          <Card className="rounded-2xl space-y-0 divide-y divide-outline-variant/30">
+            {bySource[source].map(([type, info]) => (
+              <SettingsRow
+                key={type}
+                title={type}
+                sub={info.description}
+                checked={info.enabled}
+                onChange={(v) => toggle(type, v)}
+              />
+            ))}
+          </Card>
+        </div>
+      ))}
     </div>
   );
 }

@@ -43,6 +43,20 @@ export interface Habit {
   verifiedAt: number | null;
 }
 
+// One entry from report_types.json's "types" map (see lockprofile_service.py's
+// _load_report_types_file) -- source tells you where an event of this type actually comes from
+// (mac daemon, this server itself, or the phone directly -- android-origin types never touch the
+// server's own reporting path, they're suppressed entirely on-device by AlertReporter.kt).
+export interface ReportType {
+  enabled: boolean;
+  source: "mac" | "server" | "android";
+  description: string;
+}
+
+export interface ReportTypesFile {
+  types: Record<string, ReportType>;
+}
+
 export interface RuleSchedule {
   startTime?: string;
   endTime?: string;
@@ -240,6 +254,16 @@ export const api = {
   // Browser-session-authed image fetch (not JSON) -- callers build an <img src> from this rather
   // than calling it directly; see the GET /dashboard-api/habits/<id>/proof route.
   habitProofUrl: (id: string) => `${BASE}/habits/${enc(id)}/proof`,
+
+  // Guardian-only -- deliberately a different route from the phone-reachable /report-config (see
+  // lockprofile_service.py's route handler comment for why those must never be merged). Toggles
+  // an EXISTING type's enabled flag only; there's no add/remove here on purpose.
+  getReportTypes: () => request<ReportTypesFile>("/report-types"),
+  setReportTypeEnabled: (type: string, enabled: boolean) =>
+    request<ReportTypesFile>(`/report-types/${enc(type)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ enabled }),
+    }),
 
   addRule: (deviceId: string, rule: Partial<Rule>) =>
     request<{ rules: Rule[] }>(`/devices/${enc(deviceId)}/rules`, {
