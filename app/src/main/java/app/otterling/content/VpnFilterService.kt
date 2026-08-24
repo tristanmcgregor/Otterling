@@ -305,6 +305,11 @@ class VpnFilterService : VpnService() {
         // signal, and PinningFailureTracker's own doc for the persistence bug that used to stop
         // this from ever firing in practice.
         val pinningFailureTracker = PinningFailureTracker(applicationContext)
+        // Fresh per tunnel generation, same as pinningFailureTracker above, but unlike it this is
+        // never persisted -- a proxy outage is a live signal about *this* generation's proxy
+        // health, not a slow-accumulating per-app one. See ProxyOutageTracker's own doc for why it
+        // needs a materially shorter window/different shape than the pinning heuristic.
+        val proxyOutageTracker = ProxyOutageTracker()
 
         val tcpRelay = TcpRelayManager(
             scope = relayScope,
@@ -323,6 +328,23 @@ class VpnFilterService : VpnService() {
                     // Newly exempted -- rebuild the tunnel so the change applies to this app's
                     // next connection attempt instead of waiting for some unrelated settings change.
                     VpnFilterService.reestablish(applicationContext)
+                }
+            },
+            onProxyConnectFailure = { dstIp ->
+                if (proxyOutageTracker.recordFailure(dstIp)) {
+                    // Visibility only -- never auto-remediates, never touches MitmExemptManager.
+                    // Same launch-and-log-on-failure idiom as the VPN_BLOCK alert in
+                    // handleDnsPacket below.
+                    scope.launch {
+                        runCatching {
+                            AlertReporter(applicationContext).report(
+                                type = "CONTENT_FILTER_PROXY_OUTAGE",
+                                details = "Filter proxy CONNECT failing across multiple destinations -- filter server may be unreachable",
+                                severity = AlertSeverity.WARNING,
+                                debounceKey = "CONTENT_FILTER_PROXY_OUTAGE",
+                            )
+                        }.onFailure { Log.w(TAG, "Proxy outage alert failed", it) }
+                    }
                 }
             },
         )

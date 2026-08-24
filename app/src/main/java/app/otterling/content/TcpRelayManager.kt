@@ -76,6 +76,14 @@ class TcpRelayManager(
      *  rejection (see [PinningFailureHeuristic]) -- see [PinningFailureTracker], which decides
      *  whether repeated occurrences for the same app warrant auto-exempting it. */
     private val onSuspectedPinningFailure: (Int) -> Unit = {},
+    /** Called when a proxy-eligible flow's CONNECT still fails after [attemptConnect]'s one retry
+     *  -- i.e. before any socket for this flow ever existed, let alone got attributed to a specific
+     *  app. Distinct from [onSuspectedPinningFailure] (which only ever fires for a connection that
+     *  DID connect and was then rejected mid-handshake): this is the signal for "the proxy itself
+     *  looks unreachable right now," not "this one app is pinned" -- see [ProxyOutageTracker],
+     *  which decides whether failures across many different destinations in a short window warrant
+     *  alerting the Guardian instead of looking like a wave of unrelated app breakage. */
+    private val onProxyConnectFailure: (String) -> Unit = {},
 ) {
     private data class FlowKey(val srcIp: String, val srcPort: Int, val dstIp: String, val dstPort: Int)
 
@@ -210,52 +218,30 @@ class TcpRelayManager(
         connection.wasProxied = useProxy
         connection.ownerUidForBlame = ownerUid
 
-        val socket = Socket()
-        var connectInputStream: BufferedInputStream? = null
-        val connected = try {
-            // A freshly-constructed Socket has no underlying file descriptor until it's bound (or
-            // connected) -- protect() silently fails on it otherwise, since there's nothing to mark.
-            socket.bind(InetSocketAddress(0))
-            if (!protect(socket)) throw IOException("VpnService.protect() failed")
-            // Blocking, but this whole call chain already runs on [scope]'s dispatcher -- a
-            // dedicated unbounded pool sized for one thread per concurrent connection (see
-            // VpnFilterService), not the global Dispatchers.IO, so it's safe to block here
-            // directly without an extra withContext hop.
-            if (useProxy) {
-                // Prefer IPv4 when the filter hostname has a stale/unused AAAA (Android often
-                // tries IPv6 first and the CONNECT never reaches the proxy).
-                val proxyAddr = InetAddress.getAllByName(proxyConfig.host)
-                    .firstOrNull { it is Inet4Address }
-                    ?: InetAddress.getByName(proxyConfig.host)
-                socket.connect(InetSocketAddress(proxyAddr, proxyConfig.port), CONNECT_TIMEOUT_MS)
-                socket.tcpNoDelay = true
-                // Prefer a real hostname (from a DNS answer this device itself already saw) over
-                // the bare destination IP on the CONNECT line -- purely cosmetic/best-effort: the
-                // proxy determines the actual destination independently from the tunneled TLS
-                // ClientHello SNI / plaintext HTTP Host header either way, so a cache miss here
-                // (falling back to the IP) doesn't weaken filtering at all.
-                val targetHost = resolveHostname(connection.key.dstIp) ?: connection.key.dstIp
-                connectInputStream = performHttpConnect(socket, targetHost, connection.key.dstPort)
-            } else {
-                socket.connect(InetSocketAddress(InetAddress.getByName(connection.key.dstIp), connection.key.dstPort), CONNECT_TIMEOUT_MS)
-                socket.tcpNoDelay = true
-            }
-            true
-        } catch (error: Exception) {
-            Log.w(
-                TAG,
-                "${if (useProxy) "Proxy CONNECT via ${proxyConfig.host}:${proxyConfig.port} to" else "TCP connect to"} " +
-                    "${connection.key.dstIp}:${connection.key.dstPort} failed",
-                error,
-            )
-            false
+        var socket = attemptConnect(connection, useProxy)
+        if (socket == null && useProxy) {
+            // One bounded retry, proxy-eligible flows only: a direct connect() failure to an
+            // arbitrary destination is far more likely a genuinely dead/unreachable host (common,
+            // and already fails fast today -- retrying it would just add latency to that case for
+            // no benefit), but a proxy CONNECT failure is often a transient blip -- a brief
+            // mitmproxy restart, a network handover, a DNS hiccup resolving the proxy host itself
+            // -- that looks identical to "this app is broken" from the family's side even though it
+            // clears within moments. See filter-server/PINNED_APP_FILTERING.md for a real
+            // live-device test that hit exactly this (a mitmproxy outage failing every proxied
+            // CONNECT). RETRY_DELAY_MS is short enough not to be perceptible on a real page load
+            // but long enough for a genuine blip to clear.
+            Log.d(TAG, "${connection.key.dstIp}:${connection.key.dstPort} proxy CONNECT failed -- retrying once")
+            delay(RETRY_DELAY_MS)
+            socket = attemptConnect(connection, useProxy)
         }
-        if (!connected) {
+        if (socket == null) {
             // Fail closed for 80/443 when the proxy is enabled: no fallback to a direct connection
             // on proxy failure, by construction -- there simply is no direct-connect code path
-            // taken here once useProxy is true, only the RST below.
+            // taken here once useProxy is true, only the RST below. Reaching here for a
+            // proxy-eligible flow means both the original attempt and the retry above failed, i.e.
+            // a sustained failure, not a one-off blip.
             connections.remove(connection.key)
-            runCatching { socket.close() }
+            if (useProxy) onProxyConnectFailure(connection.key.dstIp)
             writeToTun(rstFor(synPacket))
             return
         }
@@ -274,7 +260,8 @@ class TcpRelayManager(
         }
 
         connection.socket = socket
-        connection.socketInput = connectInputStream
+        // connection.socketInput was already set inside attemptConnect (proxied flows only) --
+        // see that method.
         connection.clientNextSeq = (synPacket.tcpSeq + 1) and SEQ_MASK
         val isn = Random.nextInt().toLong() and SEQ_MASK
         connection.serverSeq = (isn + 1) and SEQ_MASK
@@ -303,6 +290,57 @@ class TcpRelayManager(
 
         scope.launch { consumeInbox(connection) }
         scope.launch { relayFromSocket(connection) }
+    }
+
+    /**
+     * One connect attempt for [connection]: either straight to the real destination, or (when
+     * [useProxy]) to the filter proxy followed by an HTTP CONNECT handshake. Returns the connected,
+     * protected [Socket] on success (with [Connection.socketInput] already populated for the
+     * proxied case -- see [performHttpConnect]) or `null` on any failure, having already closed and
+     * logged. Called up to twice by [establish] (a single retry for proxy-eligible flows only) --
+     * kept side-effect-free beyond [connection]/the socket itself so calling it twice is safe.
+     */
+    private fun attemptConnect(connection: Connection, useProxy: Boolean): Socket? {
+        val socket = Socket()
+        return try {
+            // A freshly-constructed Socket has no underlying file descriptor until it's bound (or
+            // connected) -- protect() silently fails on it otherwise, since there's nothing to mark.
+            socket.bind(InetSocketAddress(0))
+            if (!protect(socket)) throw IOException("VpnService.protect() failed")
+            // Blocking, but this whole call chain already runs on [scope]'s dispatcher -- a
+            // dedicated unbounded pool sized for one thread per concurrent connection (see
+            // VpnFilterService), not the global Dispatchers.IO, so it's safe to block here
+            // directly without an extra withContext hop.
+            if (useProxy) {
+                // Prefer IPv4 when the filter hostname has a stale/unused AAAA (Android often
+                // tries IPv6 first and the CONNECT never reaches the proxy).
+                val proxyAddr = InetAddress.getAllByName(proxyConfig.host)
+                    .firstOrNull { it is Inet4Address }
+                    ?: InetAddress.getByName(proxyConfig.host)
+                socket.connect(InetSocketAddress(proxyAddr, proxyConfig.port), CONNECT_TIMEOUT_MS)
+                socket.tcpNoDelay = true
+                // Prefer a real hostname (from a DNS answer this device itself already saw) over
+                // the bare destination IP on the CONNECT line -- purely cosmetic/best-effort: the
+                // proxy determines the actual destination independently from the tunneled TLS
+                // ClientHello SNI / plaintext HTTP Host header either way, so a cache miss here
+                // (falling back to the IP) doesn't weaken filtering at all.
+                val targetHost = resolveHostname(connection.key.dstIp) ?: connection.key.dstIp
+                connection.socketInput = performHttpConnect(socket, targetHost, connection.key.dstPort)
+            } else {
+                socket.connect(InetSocketAddress(InetAddress.getByName(connection.key.dstIp), connection.key.dstPort), CONNECT_TIMEOUT_MS)
+                socket.tcpNoDelay = true
+            }
+            socket
+        } catch (error: Exception) {
+            Log.w(
+                TAG,
+                "${if (useProxy) "Proxy CONNECT via ${proxyConfig.host}:${proxyConfig.port} to" else "TCP connect to"} " +
+                    "${connection.key.dstIp}:${connection.key.dstPort} failed",
+                error,
+            )
+            runCatching { socket.close() }
+            null
+        }
     }
 
     /** The window field value to put on the wire for [connection]'s current advertised receive
@@ -581,6 +619,12 @@ class TcpRelayManager(
         // "real" 1500-byte Ethernet MTU.
         const val MAX_SEGMENT_SIZE = 16 * 1024 - 100
         const val CONNECT_TIMEOUT_MS = 8_000
+        // How long to wait before the one proxy-CONNECT retry (see establish()). Long enough for a
+        // brief blip (mitmproxy restart, network handover, a DNS hiccup resolving the proxy host)
+        // to clear, short enough not to be a perceptible delay on a real page load. Worst case for a
+        // proxy that's genuinely down: ~2x CONNECT_TIMEOUT_MS + this, before failing closed -- still
+        // bounded, still far faster than the client's own eventual timeout.
+        const val RETRY_DELAY_MS = 250L
         // The CONNECT response is just a status line + a handful of short headers -- this only
         // needs to be big enough to avoid multiple refill syscalls for that, not sized for payload.
         const val CONNECT_RESPONSE_BUFFER_SIZE = 512

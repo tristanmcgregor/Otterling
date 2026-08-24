@@ -108,6 +108,20 @@ android {
             signingConfigs.findByName("release")?.let { signingConfig = it }
         }
     }
+
+    testOptions {
+        unitTests {
+            // Without this, any android.jar stub call (e.g. android.util.Log, hit by nearly every
+            // failure/logging branch in this codebase) throws "not mocked" under plain `./gradlew
+            // test` -- this project has no Robolectric/Mockito to route around that, so tests have
+            // historically had to avoid calling any method that logs at all (see e.g.
+            // TcpRelayManagerConnectBufferingTest only ever exercising Log-free private methods).
+            // Returning default values (false/0/null) instead of throwing lets JVM unit tests
+            // exercise real logging code paths -- including failure/retry logic that logs on every
+            // branch -- without pulling in a new test framework.
+            isReturnDefaultValues = true
+        }
+    }
 }
 
 dependencies {
