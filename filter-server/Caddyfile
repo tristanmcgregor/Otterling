@@ -172,9 +172,11 @@
 		# NOTE: /dashboard-api/pin (the raw plaintext PIN) is deliberately NOT in this GET
 		# allowlist -- see GUARDIAN_PIN_PATH's comment in lockprofile_service.py. Only
 		# /pin/exists (a boolean, no secret) and /pin/verify (POST, one guess in/correct-or-not
-		# out) are device-reachable.
+		# out) are device-reachable. /habitshare-account GET IS the full credential (unlike
+		# /pin) -- see HABITSHARE_ACCOUNT_PATH's comment for why that's fine here: it's an
+		# unrelated third-party account, not a gate anything Otterling enforces depends on.
 		@dashboardApiDeviceGet {
-			path /dashboard-api/devices/*/settings /dashboard-api/pin/exists /dashboard-api/habits
+			path /dashboard-api/devices/*/settings /dashboard-api/pin/exists /dashboard-api/habits /dashboard-api/habitshare-account
 			method GET
 			header Authorization *
 		}
@@ -291,9 +293,11 @@ http://192.168.0.254 {
 		# NOTE: /dashboard-api/pin (the raw plaintext PIN) is deliberately NOT in this GET
 		# allowlist -- see GUARDIAN_PIN_PATH's comment in lockprofile_service.py. Only
 		# /pin/exists (a boolean, no secret) and /pin/verify (POST, one guess in/correct-or-not
-		# out) are device-reachable.
+		# out) are device-reachable. /habitshare-account GET IS the full credential (unlike
+		# /pin) -- see HABITSHARE_ACCOUNT_PATH's comment for why that's fine here: it's an
+		# unrelated third-party account, not a gate anything Otterling enforces depends on.
 		@dashboardApiDeviceGet {
-			path /dashboard-api/devices/*/settings /dashboard-api/pin/exists /dashboard-api/habits
+			path /dashboard-api/devices/*/settings /dashboard-api/pin/exists /dashboard-api/habits /dashboard-api/habitshare-account
 			method GET
 			header Authorization *
 		}

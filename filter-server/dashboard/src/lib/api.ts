@@ -310,6 +310,34 @@ export const api = {
     request<{ status: string; notified: number; fcmConfigured: boolean }>("/poll-now", {
       method: "POST",
     }),
+
+  // One shared HabitShare login for the whole fleet -- the phone polls HabitShare's own servers
+  // directly with it. Unlike the PIN, knowing this doesn't unlock anything Otterling enforces, so
+  // (see lockprofile_service.py's HABITSHARE_ACCOUNT_PATH) the full credential round-trips here.
+  getHabitShareAccount: () =>
+    request<{ username: string | null; password: string | null; updatedAt: number | null }>("/habitshare-account"),
+  setHabitShareAccount: (username: string, password: string) =>
+    request<{ username: string; password: string; updatedAt: number }>("/habitshare-account", {
+      method: "POST",
+      body: JSON.stringify({ username, password }),
+    }),
+  removeHabitShareAccount: () =>
+    request<{ username: null; password: null; updatedAt: number }>("/habitshare-account", { method: "DELETE" }),
+
+  // Changes this dashboard's own login password. Requires the current one -- see
+  // lockprofile_service.py's dashboard-password route.
+  setDashboardPassword: (currentPassword: string, newPassword: string) =>
+    request<{ status: string }>("/dashboard-password", {
+      method: "POST",
+      body: JSON.stringify({ currentPassword, newPassword }),
+    }),
+  // Changes the /review login password. Invalidates every existing review session, including
+  // this browser's own if it's ever called from within /review itself.
+  setReviewPassword: (currentPassword: string, newPassword: string) =>
+    request<{ status: string }>("/review-password", {
+      method: "POST",
+      body: JSON.stringify({ currentPassword, newPassword }),
+    }),
 };
 
 // Not under BASE ("/dashboard-api") -- this is one of the two /dashboard-auth/* routes Caddy lets

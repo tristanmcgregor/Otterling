@@ -139,6 +139,15 @@ DASHBOARD_USER = os.environ.get("DASHBOARD_USER", "")
 DASHBOARD_LOGIN_PASSWORD = os.environ.get("DASHBOARD_LOGIN_PASSWORD", "")
 DASHBOARD_SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60  # 30 days
 
+# Guardian-changeable override for DASHBOARD_LOGIN_PASSWORD, set from the dashboard's own Global
+# Settings > Passwords screen (POST /dashboard-api/dashboard-password, guardian-session-only,
+# requires the current password) rather than only ever being settable by hand-editing .env and
+# recreating the container. The env var stays the bootstrap/first-run value; once a guardian
+# changes it here, this file wins. See _dashboard_login_password() below -- every place that used
+# to read the DASHBOARD_LOGIN_PASSWORD constant directly now goes through that instead, so a
+# change here takes effect on the very next request, no restart needed.
+DASHBOARD_LOGIN_PASSWORD_PATH = os.path.join(DATA_DIR, "dashboard_password_override.txt")
+
 # /review, /review-data/*, and /device-logs/view/* (AI code-review pipeline history, uploaded
 # phone diagnostic logs) used to be gated by Caddy's own basic_auth against a bcrypt hash
 # (REVIEW_DASHBOARD_PASSWORD_HASH in docker-compose.yml). That got removed 2026-08-18 for the same
@@ -151,6 +160,38 @@ DASHBOARD_SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60  # 30 days
 # DASHBOARD_LOGIN_PASSWORD so dashboard and review access can be handed out independently.
 REVIEW_LOGIN_PASSWORD = os.environ.get("REVIEW_LOGIN_PASSWORD", "")
 REVIEW_SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60  # 30 days, same as the dashboard's
+
+# Same guardian-changeable-override pattern as DASHBOARD_LOGIN_PASSWORD_PATH above, for
+# REVIEW_LOGIN_PASSWORD. Since the review session HMAC key IS this password (see
+# _review_session_create/_valid), changing it also invalidates every existing review session --
+# a deliberate side effect, not a bug: a password change should log everyone else out.
+REVIEW_LOGIN_PASSWORD_PATH = os.path.join(DATA_DIR, "review_password_override.txt")
+
+
+def _load_password_override(path: str, env_default: str) -> str:
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            value = fh.read().strip()
+            return value if value else env_default
+    except FileNotFoundError:
+        return env_default
+
+
+def _save_password_override(path: str, password: str) -> None:
+    with _password_override_lock:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        tmp_path = path + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as fh:
+            fh.write(password)
+        os.replace(tmp_path, path)
+
+
+def _dashboard_login_password() -> str:
+    return _load_password_override(DASHBOARD_LOGIN_PASSWORD_PATH, DASHBOARD_LOGIN_PASSWORD)
+
+
+def _review_login_password() -> str:
+    return _load_password_override(REVIEW_LOGIN_PASSWORD_PATH, REVIEW_LOGIN_PASSWORD)
 
 NTFY_SERVER = os.environ.get("NTFY_SERVER", "https://ntfy.sh").rstrip("/")
 NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "")
@@ -305,6 +346,16 @@ SETTINGS_PATH = os.path.join(DATA_DIR, "device_settings.json")
 # escalating lockout (_PIN_VERIFY_LOCKOUT) -- the PIN itself never crosses that boundary.
 GUARDIAN_PIN_PATH = os.path.join(DATA_DIR, "guardian_pin.json")
 
+# HabitShare (the third-party habit-tracking app/service HabitShareApiClient.kt polls directly)
+# account credentials -- one shared login for the whole fleet, same "global, not per-device"
+# reasoning as the Guardian PIN, but a very different risk profile: unlike the PIN or a habit
+# completion, knowing this credential doesn't unlock anything Otterling itself protects (it's an
+# unrelated third-party account, not a gate). So GET is device-bearer-reachable (see Caddyfile) --
+# the phone needs the actual username/password to log into HabitShare's own servers, not just a
+# yes/no -- while POST/DELETE (setting or clearing it) stay guardian-browser-session-only, same as
+# every other guardian-authored config.
+HABITSHARE_ACCOUNT_PATH = os.path.join(DATA_DIR, "habitshare_account.json")
+
 # Habits are a single shared library across every device, same reasoning as the Guardian PIN
 # above -- a habit ("Read 30 min") verified on the phone needs to be referenceable by a rule
 # stored under ANY device's record (e.g. a Mac rule gating an app on that habit), so it can't
@@ -339,6 +390,8 @@ _settings_lock = threading.Lock()
 _pin_lock = threading.Lock()
 _habits_lock = threading.Lock()
 _habit_completions_lock = threading.Lock()
+_habitshare_account_lock = threading.Lock()
+_password_override_lock = threading.Lock()
 
 # Rate limit for POST /dashboard-api/pin/verify. Global (not per-device/IP): every device shares
 # the one LOCKPROFILE_TOKEN, so a guesser can't be told apart from a legitimate device by identity
@@ -581,7 +634,7 @@ def _dashboard_cookie_from_headers(headers) -> str | None:
 # here is never accepted as a dashboard session or vice versa.
 def _review_session_create() -> str:
     expiry = str(int(time.time()) + REVIEW_SESSION_MAX_AGE_SECONDS)
-    signature = hmac.new(REVIEW_LOGIN_PASSWORD.encode("utf-8"), expiry.encode("utf-8"), hashlib.sha256).hexdigest()
+    signature = hmac.new(_review_login_password().encode("utf-8"), expiry.encode("utf-8"), hashlib.sha256).hexdigest()
     return f"{expiry}.{signature}"
 
 
@@ -589,14 +642,15 @@ def _review_session_valid(token: str) -> bool:
     # No configured password must never validate -- otherwise HMAC-with-empty-key would make
     # every token mint/verify against the same fixed (empty) secret, which is not "unconfigured
     # and therefore locked out", it's "unconfigured and therefore a fixed, guessable key".
-    if not REVIEW_LOGIN_PASSWORD:
+    password = _review_login_password()
+    if not password:
         return False
     if not token or "." not in token:
         return False
     expiry, _, signature = token.partition(".")
     if not expiry.isdigit() or int(expiry) < time.time():
         return False
-    expected = hmac.new(REVIEW_LOGIN_PASSWORD.encode("utf-8"), expiry.encode("utf-8"), hashlib.sha256).hexdigest()
+    expected = hmac.new(password.encode("utf-8"), expiry.encode("utf-8"), hashlib.sha256).hexdigest()
     return secrets.compare_digest(signature, expected)
 
 
@@ -813,6 +867,36 @@ def _save_guardian_pin(pin: str) -> dict:
         with open(tmp_path, "w", encoding="utf-8") as fh:
             json.dump(record, fh, indent=2, sort_keys=True)
         os.replace(tmp_path, GUARDIAN_PIN_PATH)
+        return record
+
+
+def _load_habitshare_account() -> dict:
+    try:
+        with open(HABITSHARE_ACCOUNT_PATH, "r", encoding="utf-8") as fh:
+            return json.load(fh)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {"username": None, "password": None, "updatedAt": None}
+
+
+def _save_habitshare_account(username: str, password: str) -> dict:
+    with _habitshare_account_lock:
+        record = {"username": username, "password": password, "updatedAt": time.time()}
+        os.makedirs(DATA_DIR, exist_ok=True)
+        tmp_path = HABITSHARE_ACCOUNT_PATH + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as fh:
+            json.dump(record, fh, indent=2, sort_keys=True)
+        os.replace(tmp_path, HABITSHARE_ACCOUNT_PATH)
+        return record
+
+
+def _clear_habitshare_account() -> dict:
+    with _habitshare_account_lock:
+        record = {"username": None, "password": None, "updatedAt": time.time()}
+        os.makedirs(DATA_DIR, exist_ok=True)
+        tmp_path = HABITSHARE_ACCOUNT_PATH + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as fh:
+            json.dump(record, fh, indent=2, sort_keys=True)
+        os.replace(tmp_path, HABITSHARE_ACCOUNT_PATH)
         return record
 
 
@@ -1445,12 +1529,13 @@ class Handler(BaseHTTPRequestHandler):
         )
 
     def _handle_dashboard_login(self) -> None:
-        if not DASHBOARD_USER or not DASHBOARD_LOGIN_PASSWORD:
+        current_password = _dashboard_login_password()
+        if not DASHBOARD_USER or not current_password:
             return self._send_json(503, {"error": "dashboard login not configured -- set DASHBOARD_USER/DASHBOARD_LOGIN_PASSWORD"})
         body = self._read_json_body()
         username = (body or {}).get("username", "")
         password = (body or {}).get("password", "")
-        if not (secrets.compare_digest(username, DASHBOARD_USER) and secrets.compare_digest(password, DASHBOARD_LOGIN_PASSWORD)):
+        if not (secrets.compare_digest(username, DASHBOARD_USER) and secrets.compare_digest(password, current_password)):
             return self._send_json(401, {"error": "invalid username or password"})
         token = _dashboard_session_create()
         payload = json.dumps({"status": "ok"}).encode("utf-8")
@@ -1503,11 +1588,12 @@ class Handler(BaseHTTPRequestHandler):
         )
 
     def _handle_review_login(self) -> None:
-        if not REVIEW_LOGIN_PASSWORD:
+        current_password = _review_login_password()
+        if not current_password:
             return self._send_json(503, {"error": "review login not configured -- set REVIEW_LOGIN_PASSWORD"})
         body = self._read_json_body()
         password = (body or {}).get("password", "")
-        if not secrets.compare_digest(password, REVIEW_LOGIN_PASSWORD):
+        if not secrets.compare_digest(password, current_password):
             return self._send_json(401, {"error": "invalid password"})
         token = _review_session_create()
         payload = json.dumps({"status": "ok"}).encode("utf-8")
@@ -1769,6 +1855,59 @@ class Handler(BaseHTTPRequestHandler):
             correct = isinstance(guess, str) and secrets.compare_digest(guess, actual)
             _pin_verify_record_result(correct)
             self._send_json(200, {"hasPin": True, "correct": correct})
+            return True
+
+        # HabitShare account: see HABITSHARE_ACCOUNT_PATH's comment for why GET is device-bearer
+        # reachable (Caddyfile allowlist) while POST/DELETE are guardian-browser-session-only.
+        if path == "/dashboard-api/habitshare-account" and method == "GET":
+            self._send_json(200, _load_habitshare_account())
+            return True
+
+        if path == "/dashboard-api/habitshare-account" and method == "POST":
+            username = ((body or {}).get("username") or "").strip()
+            password = (body or {}).get("password") or ""
+            if not username or not password:
+                self._send_json(400, {"error": "username and password required"})
+                return True
+            self._send_json(200, _save_habitshare_account(username, password))
+            return True
+
+        if path == "/dashboard-api/habitshare-account" and method == "DELETE":
+            self._send_json(200, _clear_habitshare_account())
+            return True
+
+        # Guardian-only (browser session): change the dashboard's own login password. Requires
+        # the current password, not just possession of the session cookie -- a modest extra check
+        # matching how most "change password" flows work, even though the cookie alone already
+        # proves this request came from a logged-in session.
+        if path == "/dashboard-api/dashboard-password" and method == "POST":
+            current = (body or {}).get("currentPassword", "")
+            new_password = (body or {}).get("newPassword", "")
+            if not secrets.compare_digest(current, _dashboard_login_password()):
+                self._send_json(401, {"error": "current password is incorrect"})
+                return True
+            if len(new_password) < 8:
+                self._send_json(400, {"error": "new password must be at least 8 characters"})
+                return True
+            _save_password_override(DASHBOARD_LOGIN_PASSWORD_PATH, new_password)
+            self._send_json(200, {"status": "ok"})
+            return True
+
+        # Same as dashboard-password above, for the review login. Changing this also invalidates
+        # every existing review session (see REVIEW_LOGIN_PASSWORD_PATH's comment) -- including
+        # the one making this very request, so the dashboard UI should expect to need a fresh
+        # /review-auth/login afterward if it ever calls this from within /review itself.
+        if path == "/dashboard-api/review-password" and method == "POST":
+            current = (body or {}).get("currentPassword", "")
+            new_password = (body or {}).get("newPassword", "")
+            if not secrets.compare_digest(current, _review_login_password()):
+                self._send_json(401, {"error": "current password is incorrect"})
+                return True
+            if len(new_password) < 8:
+                self._send_json(400, {"error": "new password must be at least 8 characters"})
+                return True
+            _save_password_override(REVIEW_LOGIN_PASSWORD_PATH, new_password)
+            self._send_json(200, {"status": "ok"})
             return True
 
         # Global habit library: one shared list for the whole fleet, not per-device -- see

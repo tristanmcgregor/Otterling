@@ -11,7 +11,7 @@ import type {
   DeviceSettings, DeviceSummary, ActivityEvent, Rule, RuleSchedule, AppBudget, ProtectedApp, Habit,
 } from "../lib/api";
 
-type Screen = "Dashboard" | "Settings" | "Wizard" | "Friction" | "AccessibilityNag";
+type Screen = "Dashboard" | "Settings" | "GlobalSettings" | "Wizard" | "Friction" | "AccessibilityNag";
 
 interface NavDef {
   id: Screen;
@@ -22,6 +22,15 @@ interface NavDef {
 const NAV: NavDef[] = [
   { id: "Dashboard", label: "Overview", icon: Home },
   { id: "Settings", label: "Settings", icon: SettingsIcon },
+];
+
+// Fleet-wide, not scoped to whichever device is selected in the switcher above -- Guardian PIN,
+// the habit library, HabitShare account, and the dashboard/review login passwords all live here
+// instead of inside per-device Settings, where they used to be mixed in despite already being
+// global data (see GlobalSettingsScreen's doc comment). Its own nav section so it doesn't read as
+// "a setting of whichever device happens to be selected right now".
+const FLEET_NAV: NavDef[] = [
+  { id: "GlobalSettings", label: "Global Settings", icon: Globe },
 ];
 
 // These two are genuinely phone-side *previews* -- read-only mockups of screens the child's
@@ -128,6 +137,11 @@ export default function App() {
     if (loadError) {
       return <ErrorScreen message={loadError} onRetry={reload} />;
     }
+    // Global Settings is fleet-wide, not scoped to a device, so it's reachable even before any
+    // device has ever registered -- unlike every other screen below, which needs one selected.
+    if (screen === "GlobalSettings") {
+      return <GlobalSettingsScreen habits={habits} onHabitsChanged={reloadHabits} />;
+    }
     if (!deviceId) {
       return <NoDeviceScreen devices={devices} />;
     }
@@ -156,11 +170,9 @@ export default function App() {
           <SettingsScreen
             deviceId={deviceId}
             settings={settings}
-            habits={habits}
             onNavigate={navigate}
             onAddRule={startNewRule}
             onChanged={reload}
-            onHabitsChanged={reloadHabits}
             onDeviceRemoved={() => { setDeviceId(""); reload(); }}
           />
         );
@@ -188,6 +200,7 @@ export default function App() {
         screen={screen}
         nav={NAV}
         previewNav={PREVIEW_NAV}
+        fleetNav={FLEET_NAV}
         onNavigate={navigate}
         devices={devices}
         deviceId={deviceId}
@@ -207,11 +220,12 @@ export default function App() {
 // ─── Chrome ──────────────────────────────────────────────────────────────────
 
 function Sidebar({
-  screen, nav, previewNav, onNavigate, devices, deviceId, onSelectDevice, settings, dark, onToggleDark, onLogout,
+  screen, nav, previewNav, fleetNav, onNavigate, devices, deviceId, onSelectDevice, settings, dark, onToggleDark, onLogout,
 }: {
   screen: Screen;
   nav: NavDef[];
   previewNav: NavDef[];
+  fleetNav: NavDef[];
   onNavigate: (s: Screen) => void;
   devices: DeviceSummary[];
   deviceId: string;
@@ -307,6 +321,13 @@ function Sidebar({
             ))}
           </>
         )}
+        <div className="h-px bg-outline-variant/40 my-2" />
+        <p className="text-[9px] font-bold uppercase tracking-[0.12em] text-on-surface-variant/50 px-3 py-1.5">
+          Fleet
+        </p>
+        {fleetNav.map((item) => (
+          <SidebarItem key={item.id} item={item} active={screen === item.id} onClick={() => onNavigate(item.id)} />
+        ))}
       </nav>
 
       <div className="p-3 border-t border-outline-variant/30 space-y-2">
@@ -800,30 +821,21 @@ function describeSchedule(schedule: RuleSchedule): string {
 // ─── Settings ────────────────────────────────────────────────────────────────
 
 function SettingsScreen({
-  deviceId, settings, habits, onNavigate, onAddRule, onChanged, onHabitsChanged, onDeviceRemoved,
+  deviceId, settings, onNavigate, onAddRule, onChanged, onDeviceRemoved,
 }: {
   deviceId: string;
   settings: DeviceSettings | null;
-  habits: Habit[];
   onNavigate: (s: Screen) => void;
   onAddRule: () => void;
   onChanged: () => void;
-  onHabitsChanged: () => void;
   onDeviceRemoved: () => void;
 }) {
-  const [pinModalOpen, setPinModalOpen] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [removing, setRemoving] = useState(false);
-  const [pinStatus, setPinStatus] = useState<{ pin: string | null; updatedAt: number | null } | null>(null);
   const [emailDraft, setEmailDraft] = useState("");
   const [nameDraft, setNameDraft] = useState("");
   const [cooldownDraft, setCooldownDraft] = useState("");
   const [cloudFilterHostDraft, setCloudFilterHostDraft] = useState("");
-
-  const reloadPinStatus = () => api.getPin().then(setPinStatus).catch(() => setPinStatus(null));
-  useEffect(() => {
-    reloadPinStatus();
-  }, []);
 
   useEffect(() => {
     setEmailDraft(settings?.guardianEmail ?? "");
@@ -1167,30 +1179,15 @@ function SettingsScreen({
         </div>
         )}
 
-        {/* Habit library -- global, shared across every device on this account. A habit
-            verified on the phone can gate a rule on the Mac and vice versa. */}
-        <div className="space-y-3">
-          <SectionLabel>Habit Library</SectionLabel>
-          <Card className="rounded-2xl">
-            <p className="text-xs text-on-surface-variant mb-2">
-              Shared across every device on this account — not per-device. A habit checked off
-              (and verified) on the phone can satisfy a rule on the Mac. Turn on "Requires proof"
-              for a habit and the server will reject a completion report with no photo attached —
-              without it, the device's own app-embedded token alone is enough to fake any habit
-              done and unlock whatever it gates, fleet-wide.
-            </p>
-            <HabitLibraryList habits={habits} onChanged={onHabitsChanged} />
-          </Card>
-        </div>
-
         {/* Rules -- per-device (targets an app on THIS device specifically), but no longer
-            Android-only: a rule can now block an app on the Mac too. */}
+            Android-only: a rule can now block an app on the Mac too. The habit library itself
+            moved to Global Settings (fleet-wide, not per-device) -- see GlobalSettingsScreen. */}
         <div className="space-y-3">
           <SectionLabel>Rules</SectionLabel>
           <Card className="rounded-2xl">
             <p className="text-xs text-on-surface-variant mb-2">
-              Blocks an app on {settings.device_name || deviceId} until required habits from the
-              library above are done, during a schedule window.
+              Blocks an app on {settings.device_name || deviceId} until required habits from
+              Global Settings → Habit Library are done, during a schedule window.
             </p>
             <Button variant="text" size="sm" className="px-0 text-xs h-7" onClick={onAddRule}>
               Add new rule →
@@ -1227,24 +1224,11 @@ function SettingsScreen({
         </div>
         )}
 
-        {/* PIN & Security */}
+        {/* Recovery email -- per-device (this Mac/phone's own reset-notification address). The
+            Guardian PIN moved to Global Settings -- see GlobalSettingsScreen. */}
         <div className="space-y-3">
           <SectionLabel>Guardian Access</SectionLabel>
           <Card className="rounded-2xl space-y-0 divide-y divide-outline-variant/30">
-            <div className="py-3 px-1 flex items-center justify-between">
-              <div>
-                <div className="flex items-center gap-2">
-                  <p className="text-sm font-medium">Guardian PIN</p>
-                  <Pill variant={pinStatus?.pin ? "success" : "default"}>
-                    {pinStatus?.pin ? "Set" : "Not set"}
-                  </Pill>
-                </div>
-                <p className="text-xs text-on-surface-variant">
-                  Shared across every Otterling device on this account — not per-device
-                </p>
-              </div>
-              <Button variant="outlined" size="sm" onClick={() => setPinModalOpen(true)}>Change PIN</Button>
-            </div>
             <div className="py-3 px-1 flex items-center gap-3">
               <input
                 type="email"
@@ -1319,6 +1303,99 @@ function SettingsScreen({
           ← Back to Overview
         </Button>
       </div>
+    </div>
+  );
+}
+
+// ─── Global Settings ───────────────────────────────────────────────────────────
+// Fleet-wide config, not scoped to whichever device happens to be selected in the sidebar's
+// device switcher -- Guardian PIN and the habit library were already global data (one PIN, one
+// habit library shared across every device) but used to live inside per-device SettingsScreen,
+// which read as "a setting of this device" when it wasn't. HabitShare account and the dashboard/
+// review login passwords are new here.
+function GlobalSettingsScreen({
+  habits, onHabitsChanged,
+}: {
+  habits: Habit[];
+  onHabitsChanged: () => void;
+}) {
+  const [pinModalOpen, setPinModalOpen] = useState(false);
+  const [pinStatus, setPinStatus] = useState<{ pin: string | null; updatedAt: number | null } | null>(null);
+  const reloadPinStatus = () => api.getPin().then(setPinStatus).catch(() => setPinStatus(null));
+  useEffect(() => { reloadPinStatus(); }, []);
+
+  return (
+    <div className="p-7 max-w-[900px] space-y-6">
+      <div>
+        <h1 className="text-xl font-bold">Global Settings</h1>
+        <p className="text-sm text-on-surface-variant mt-0.5">
+          Shared across every device on this account — not specific to whichever device is
+          selected in the sidebar.
+        </p>
+      </div>
+
+      <div className="space-y-3">
+        <SectionLabel>Guardian PIN</SectionLabel>
+        <Card className="rounded-2xl">
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="flex items-center gap-2">
+                <p className="text-sm font-medium">Guardian PIN</p>
+                <Pill variant={pinStatus?.pin ? "success" : "default"}>
+                  {pinStatus?.pin ? "Set" : "Not set"}
+                </Pill>
+              </div>
+              <p className="text-xs text-on-surface-variant">
+                Shared across every Otterling device on this account — gates Settings on the phone.
+              </p>
+            </div>
+            <Button variant="outlined" size="sm" onClick={() => setPinModalOpen(true)}>Change PIN</Button>
+          </div>
+        </Card>
+      </div>
+
+      <div className="space-y-3">
+        <SectionLabel>Habit Library</SectionLabel>
+        <Card className="rounded-2xl">
+          <p className="text-xs text-on-surface-variant mb-2">
+            Shared across every device on this account — not per-device. A habit checked off
+            (and verified) on the phone can satisfy a rule on the Mac. Turn on "Requires proof"
+            for a habit and the server will reject a completion report with no photo attached —
+            without it, the device's own app-embedded token alone is enough to fake any habit
+            done and unlock whatever it gates, fleet-wide.
+          </p>
+          <HabitLibraryList habits={habits} onChanged={onHabitsChanged} />
+        </Card>
+      </div>
+
+      <div className="space-y-3">
+        <SectionLabel>HabitShare Account</SectionLabel>
+        <Card className="rounded-2xl">
+          <p className="text-xs text-on-surface-variant mb-2">
+            The HabitShare login every phone on this account uses to poll HabitShare's own
+            servers directly for done/not-done status. Unlike the Guardian PIN, this doesn't gate
+            anything Otterling enforces — it's a separate third-party account.
+          </p>
+          <HabitShareAccountCard />
+        </Card>
+      </div>
+
+      <div className="space-y-3">
+        <SectionLabel>Passwords</SectionLabel>
+        <Card className="rounded-2xl space-y-4">
+          <PasswordChangeForm
+            title="Dashboard login"
+            sub="Signs into this website."
+            onSubmit={(current, next) => api.setDashboardPassword(current, next)}
+          />
+          <div className="h-px bg-outline-variant/40" />
+          <PasswordChangeForm
+            title="Review login"
+            sub="Signs into /review (AI review history, device diagnostic logs). Changing this signs out every other review session."
+            onSubmit={(current, next) => api.setReviewPassword(current, next)}
+          />
+        </Card>
+      </div>
 
       {pinModalOpen && (
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-md flex items-center justify-center">
@@ -1332,6 +1409,144 @@ function SettingsScreen({
           />
         </div>
       )}
+    </div>
+  );
+}
+
+function HabitShareAccountCard() {
+  const [account, setAccount] = useState<{ username: string | null; password: string | null } | null>(null);
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState("");
+
+  const reload = () => api.getHabitShareAccount().then(setAccount).catch(() => setAccount(null));
+  useEffect(() => { reload(); }, []);
+
+  const connect = async () => {
+    if (!username.trim() || !password) return;
+    setBusy(true);
+    setStatus("");
+    try {
+      await api.setHabitShareAccount(username.trim(), password);
+      setPassword("");
+      setStatus("Connected.");
+      reload();
+    } catch (err) {
+      setStatus(err instanceof ApiError ? err.message : "Couldn't reach the server");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const disconnect = async () => {
+    setBusy(true);
+    try {
+      await api.removeHabitShareAccount();
+      setStatus("Disconnected.");
+      reload();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (account?.username) {
+    return (
+      <div className="flex items-center justify-between">
+        <div>
+          <div className="flex items-center gap-2">
+            <p className="text-sm font-medium">{account.username}</p>
+            <Pill variant="success">Connected</Pill>
+          </div>
+          {status && <p className="text-xs text-on-surface-variant mt-0.5">{status}</p>}
+        </div>
+        <Button variant="outlined" size="sm" disabled={busy} onClick={disconnect}>Disconnect</Button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center gap-2">
+        <input
+          value={username}
+          onChange={(e) => setUsername(e.target.value)}
+          placeholder="HabitShare username or email"
+          className="flex-1 h-9 px-3 rounded-xl border border-outline bg-surface text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+        />
+        <input
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          type="password"
+          placeholder="Password"
+          autoComplete="new-password"
+          className="flex-1 h-9 px-3 rounded-xl border border-outline bg-surface text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+        />
+        <Button variant="tonal" size="sm" disabled={busy || !username.trim() || !password} onClick={connect}>
+          Connect
+        </Button>
+      </div>
+      {status && <p className="text-xs text-on-surface-variant">{status}</p>}
+    </div>
+  );
+}
+
+function PasswordChangeForm({
+  title, sub, onSubmit,
+}: {
+  title: string;
+  sub: string;
+  onSubmit: (currentPassword: string, newPassword: string) => Promise<unknown>;
+}) {
+  const [current, setCurrent] = useState("");
+  const [next, setNext] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState("");
+
+  const submit = async () => {
+    if (!current || next.length < 8) return;
+    setBusy(true);
+    setStatus("");
+    try {
+      await onSubmit(current, next);
+      setCurrent("");
+      setNext("");
+      setStatus("Changed.");
+    } catch (err) {
+      setStatus(err instanceof ApiError ? err.message : "Couldn't reach the server");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="space-y-2">
+      <div>
+        <p className="text-sm font-medium">{title}</p>
+        <p className="text-xs text-on-surface-variant">{sub}</p>
+      </div>
+      <div className="flex items-center gap-2">
+        <input
+          value={current}
+          onChange={(e) => setCurrent(e.target.value)}
+          type="password"
+          placeholder="Current password"
+          autoComplete="current-password"
+          className="flex-1 h-9 px-3 rounded-xl border border-outline bg-surface text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+        />
+        <input
+          value={next}
+          onChange={(e) => setNext(e.target.value)}
+          type="password"
+          placeholder="New password (min 8 chars)"
+          autoComplete="new-password"
+          className="flex-1 h-9 px-3 rounded-xl border border-outline bg-surface text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+        />
+        <Button variant="tonal" size="sm" disabled={busy || !current || next.length < 8} onClick={submit}>
+          Change
+        </Button>
+      </div>
+      {status && <p className="text-xs text-on-surface-variant">{status}</p>}
     </div>
   );
 }
