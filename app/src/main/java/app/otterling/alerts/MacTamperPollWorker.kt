@@ -49,9 +49,9 @@ class MacTamperPollWorker(context: Context, params: WorkerParameters) : Coroutin
         ReportConfigStore(applicationContext).refresh()
         // Same best-effort piggyback as ReportConfigStore above -- see SERVER_DRIVEN_CONFIG_PLAN.md.
         DashboardConfigStore(applicationContext).refresh()
-        // Same best-effort piggyback -- see DashboardConfigStore.syncPin's doc comment for why
-        // this is a separate call rather than folded into refresh()'s cached snapshot.
-        DashboardConfigStore(applicationContext).syncPin()
+        // Same best-effort piggyback -- see DashboardConfigStore.refreshPinExists's doc comment
+        // for why this is a separate call rather than folded into refresh()'s cached snapshot.
+        DashboardConfigStore(applicationContext).refreshPinExists()
         // Global habit library + live completion state (shared across every device, not this
         // phone's own settings record) -- HabitRuleManager reads this on its own separate
         // ~5-minute evaluation cadence (HabitShareSyncManager), so this just needs to stay

@@ -278,11 +278,15 @@ SETTINGS_PATH = os.path.join(DATA_DIR, "device_settings.json")
 
 # Guardian PIN is deliberately NOT part of per-device settings: it's one shared secret for a
 # guardian's whole fleet (see /dashboard-api/pin below), not something that varies per device.
-# Stored as plaintext, not a hash: the server relays the raw PIN so each phone can feed it
-# straight into its own existing PinAuthManager.setPin(), which is what actually seals it behind
-# Android Keystore-backed encryption on-device. A 4-digit PIN only has 10,000 possible values, so
-# a server-side hash would add no real protection over plaintext if this file were ever read --
-# the on-device Keystore sealing is the only thing that meaningfully protects this secret either way.
+# Stored as plaintext on disk (a 4-digit PIN can't meaningfully be protected by hashing it at
+# rest anyway -- 10,000 combinations is nothing to brute force once a hash is in hand). What
+# matters is who can ask the server for it over the network: GET /dashboard-api/pin (which
+# returns the raw value) is guardian-browser-session-only, never reachable via the device
+# LOCKPROFILE_TOKEN bearer -- that token ships inside the APK and is trivially extractable by the
+# same person the PIN is meant to gate, so a device-reachable plaintext read would hand them the
+# real PIN directly. Devices instead call POST /dashboard-api/pin/verify (see below), which
+# checks a guess against this file server-side and returns only correct/incorrect, under
+# escalating lockout (_PIN_VERIFY_LOCKOUT) -- the PIN itself never crosses that boundary.
 GUARDIAN_PIN_PATH = os.path.join(DATA_DIR, "guardian_pin.json")
 
 # Habits are a single shared library across every device, same reasoning as the Guardian PIN
@@ -302,6 +306,21 @@ _settings_lock = threading.Lock()
 _pin_lock = threading.Lock()
 _habits_lock = threading.Lock()
 _habit_completions_lock = threading.Lock()
+
+# Rate limit for POST /dashboard-api/pin/verify. Global (not per-device/IP): every device shares
+# the one LOCKPROFILE_TOKEN, so a guesser can't be told apart from a legitimate device by identity
+# alone anyway -- same reasoning PinAuthManager's old *local* lockout used, just moved server-side
+# now that verification itself moved server-side. Same escalating shape as that local lockout
+# (PinAuthManager.kt) had: 5 free wrong guesses, then a doubling backoff up to 5 minutes. In-memory
+# only (resets on a service restart) -- acceptable since only the operator can restart this, and a
+# perfect-forever counter isn't the point; raising the cost of guessing from "instant, unlimited"
+# to "a few guesses per lockout window" is.
+_pin_verify_lock = threading.Lock()
+_pin_verify_failed_attempts = 0
+_pin_verify_lockout_until = 0.0
+_PIN_VERIFY_LOCKOUT_THRESHOLD = 5
+_PIN_VERIFY_BASE_LOCKOUT_SECONDS = 5.0
+_PIN_VERIFY_MAX_LOCKOUT_SECONDS = 5 * 60.0
 
 
 def _load_state() -> dict:
@@ -724,6 +743,31 @@ def _save_guardian_pin(pin: str) -> dict:
             json.dump(record, fh, indent=2, sort_keys=True)
         os.replace(tmp_path, GUARDIAN_PIN_PATH)
         return record
+
+
+def _pin_verify_lockout_remaining_seconds() -> float:
+    with _pin_verify_lock:
+        return max(0.0, _pin_verify_lockout_until - time.time())
+
+
+def _pin_verify_record_result(correct: bool) -> None:
+    """Escalating lockout, mirrors the shape PinAuthManager's old local-only lockout used (see
+    GUARDIAN_PIN_PATH's comment) -- 5 free wrong guesses, then a doubling backoff up to 5 minutes.
+    A correct guess resets the counter."""
+    global _pin_verify_failed_attempts, _pin_verify_lockout_until
+    with _pin_verify_lock:
+        if correct:
+            _pin_verify_failed_attempts = 0
+            _pin_verify_lockout_until = 0.0
+            return
+        _pin_verify_failed_attempts += 1
+        if _pin_verify_failed_attempts >= _PIN_VERIFY_LOCKOUT_THRESHOLD:
+            doublings = _pin_verify_failed_attempts - _PIN_VERIFY_LOCKOUT_THRESHOLD
+            lockout_seconds = min(
+                _PIN_VERIFY_BASE_LOCKOUT_SECONDS * (2 ** doublings),
+                _PIN_VERIFY_MAX_LOCKOUT_SECONDS,
+            )
+            _pin_verify_lockout_until = time.time() + lockout_seconds
 
 
 def _load_habits() -> list:
@@ -1544,10 +1588,11 @@ class Handler(BaseHTTPRequestHandler):
             return True
 
         # Guardian PIN: one shared secret for the whole fleet, not per-device -- see
-        # GUARDIAN_PIN_PATH's comment for why this is plaintext rather than a hash, and why it
-        # lives outside device_settings.json entirely. GET is used both by the dashboard (to show
-        # whether a PIN is currently set) and by each phone's periodic sync (to pull the raw PIN
-        # and feed it into its own local PinAuthManager.setPin()).
+        # GUARDIAN_PIN_PATH's comment. GET here returns the raw plaintext and is guardian-
+        # browser-session-only (Caddy does NOT let the device bearer through to this path -- see
+        # its route{} block) so the dashboard can show/copy the PIN the guardian themselves set.
+        # Devices verify a guess via POST .../pin/verify below instead, which never reveals the
+        # actual value.
         if path == "/dashboard-api/pin" and method == "GET":
             self._send_json(200, _load_guardian_pin())
             return True
@@ -1559,6 +1604,34 @@ class Handler(BaseHTTPRequestHandler):
                 return True
             record = _save_guardian_pin(pin)
             self._send_json(200, record)
+            return True
+
+        # Device-safe: reveals only whether a PIN is currently configured, never the value itself
+        # -- PinAuthManager.kt caches this to decide whether Settings needs a PIN at all (defaults
+        # to "yes, needs one" until a fetch says otherwise, so a fresh/not-yet-synced device fails
+        # closed, not open).
+        if path == "/dashboard-api/pin/exists" and method == "GET":
+            self._send_json(200, {"hasPin": _load_guardian_pin().get("pin") is not None})
+            return True
+
+        # Device-safe PIN check: the phone submits one guess, gets back correct/incorrect and
+        # nothing else, under escalating lockout (_pin_verify_record_result). This is the ONLY way
+        # a device is allowed to check a PIN guess -- see GUARDIAN_PIN_PATH's comment for why GET
+        # .../pin itself is kept off the device bearer's allowlist entirely.
+        if path == "/dashboard-api/pin/verify" and method == "POST":
+            remaining = _pin_verify_lockout_remaining_seconds()
+            if remaining > 0:
+                self._send_json(429, {"error": "locked out", "retryAfterMs": int(remaining * 1000)})
+                return True
+            guess = (body or {}).get("pin", "")
+            record = _load_guardian_pin()
+            actual = record.get("pin")
+            if actual is None:
+                self._send_json(200, {"hasPin": False, "correct": False})
+                return True
+            correct = isinstance(guess, str) and secrets.compare_digest(guess, actual)
+            _pin_verify_record_result(correct)
+            self._send_json(200, {"hasPin": True, "correct": correct})
             return True
 
         # Global habit library: one shared list for the whole fleet, not per-device -- see

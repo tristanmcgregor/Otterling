@@ -1,192 +1,103 @@
-@file:Suppress("DEPRECATION")
-
 package app.otterling.pin
 
 import android.content.Context
-import android.content.SharedPreferences
-import android.util.Base64
 import android.util.Log
-import androidx.security.crypto.EncryptedSharedPreferences
-import androidx.security.crypto.MasterKey
-import java.security.GeneralSecurityException
-import java.security.SecureRandom
-import javax.crypto.SecretKeyFactory
-import javax.crypto.spec.PBEKeySpec
+import app.otterling.alerts.MacTamperPollSettings
+import app.otterling.content.CloudFilterSettings
+import java.net.HttpURLConnection
+import java.net.URL
+import org.json.JSONObject
 
 /**
- * Gates the Settings screen behind a PIN. Only a salted PBKDF2 hash is retained, inside
- * [EncryptedSharedPreferences]; the PIN itself is never stored.
+ * Verifies the Settings-screen Guardian PIN server-side -- see [app.otterling.ui.PinLockScreen]
+ * and `lockprofile_service.py`'s `POST /dashboard-api/pin/verify`.
  *
- * Every operation is wrapped to recover from a corrupted/undecryptable prefs file (observed as
- * `SecurityException: Could not decrypt key` from Tink) instead of crashing: this can happen if
- * the Keystore-backed master key and the on-disk encrypted file ever fall out of sync (e.g. an
- * interrupted write). Since a corrupt file can't be trusted anyway, recovery just wipes it and
- * starts fresh -- functionally equivalent to no PIN being set yet, which is the safe default.
+ * This used to fetch the plaintext PIN from `GET /dashboard-api/pin` (via the same
+ * LOCKPROFILE_TOKEN bearer this app ships with) and hash-verify it locally with PBKDF2 +
+ * Keystore. That broke the entire point of a Guardian PIN: LOCKPROFILE_TOKEN is embedded in the
+ * shipped APK and trivially extractable by the same person the PIN is meant to gate, so they
+ * could call that GET directly and read the real PIN in plaintext -- no local brute force
+ * needed. Shipping down a *hash* instead wouldn't have helped either: a 4-digit PIN is only
+ * 10,000 combinations, trivial to brute force offline against a leaked hash regardless of how
+ * slow the KDF is. The only sound fix for a PIN this weak, given a bearer token that isn't
+ * actually secret from the attacker, is server-side comparison with server-side rate limiting --
+ * the device submits one guess at a time over the network and learns nothing beyond
+ * correct-or-not, exactly like a SIM PIN or ATM PIN. See lockprofile_service.py's
+ * `_pin_verify_record_result` for the matching server-side lockout.
+ *
+ * Trade-off: verifying a PIN now requires connectivity. That's intentional -- this project's
+ * standing rule (see [app.otterling.content.DashboardConfigStore]'s doc comments) is fail toward
+ * more restrictive, never less, and "Settings is unreachable until you're back online" is
+ * strictly more restrictive than the plaintext-leak-plus-fail-open bypass this replaces.
  */
-class PinAuthManager(private val context: Context) {
-    private val masterKey = MasterKey.Builder(context)
-        .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-        .build()
-    // Must recover-on-failure here too, not just in `safely{}` below: this runs at field-init
-    // time, before `prefs` exists, so a corrupt/undecryptable file at construction time (the
-    // exact scenario this class is meant to survive) used to throw straight out of the
-    // PinAuthManager constructor -- which is built inside a Compose `remember{}`, so it crashed
-    // app startup on every launch until the file was manually cleared. On a Device Owner app
-    // that's a serious lockout, not just an inconvenience.
-    private var prefs: SharedPreferences = createPrefsOrRecover()
+class PinAuthManager(context: Context) {
+    private val appContext = context.applicationContext
+    private val prefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
-    init {
-        migrateLegacyPlaintextPinIfNeeded(context)
+    enum class VerifyResult { CORRECT, INCORRECT, NO_PIN_SET, LOCKED_OUT, NETWORK_ERROR }
+
+    data class VerifyOutcome(val result: VerifyResult, val retryAfterMs: Long = 0L)
+
+    /** Best-effort local cache of whether the dashboard currently has a PIN configured, refreshed
+     *  by [app.otterling.content.DashboardConfigStore] on its normal sync cadence via `GET
+     *  /dashboard-api/pin/exists` (a boolean, never the PIN itself -- safe to cache in plain
+     *  SharedPreferences). Defaults to `true` (assume a PIN exists, gate Settings) when never
+     *  fetched, so a fresh install or a device that hasn't synced yet fails CLOSED -- the
+     *  opposite of the old "no PIN yet, let the caller straight through" default this replaces. */
+    fun cachedHasPin(): Boolean = prefs.getBoolean(KEY_HAS_PIN_CACHED, true)
+
+    fun setCachedHasPin(hasPin: Boolean) {
+        prefs.edit().putBoolean(KEY_HAS_PIN_CACHED, hasPin).apply()
     }
 
-    private fun createPrefs(): SharedPreferences = EncryptedSharedPreferences.create(
-        context,
-        PREFS_NAME,
-        masterKey,
-        EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-        EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
-    )
+    /** Blocking network call -- caller must invoke this off the main thread (e.g.
+     *  `withContext(Dispatchers.IO)` from a Compose coroutine scope). */
+    fun verify(pin: String): VerifyOutcome {
+        val settings = MacTamperPollSettings(appContext)
+        if (!settings.isConfigured()) return VerifyOutcome(VerifyResult.NETWORK_ERROR)
+        val host = CloudFilterSettings(appContext).host()
+        if (host.isBlank()) return VerifyOutcome(VerifyResult.NETWORK_ERROR)
 
-    private fun createPrefsOrRecover(): SharedPreferences = try {
-        createPrefs()
-    } catch (error: SecurityException) {
-        deleteAndRecreate(error)
-    } catch (error: GeneralSecurityException) {
-        deleteAndRecreate(error)
-    }
-
-    /** Wipes the (corrupt) prefs file and returns a freshly created one. */
-    private fun deleteAndRecreate(error: Exception): SharedPreferences {
-        Log.e(TAG, "PIN prefs file undecryptable, resetting to no-PIN state", error)
-        context.deleteSharedPreferences(PREFS_NAME)
-        return createPrefs()
-    }
-
-    /** Wipes the (corrupt) prefs file and reopens a fresh one -- called on any decrypt failure
-     * after construction (see [createPrefsOrRecover] for the construction-time equivalent). */
-    private fun recoverFromCorruption(error: Exception) {
-        prefs = deleteAndRecreate(error)
-    }
-
-    private fun <T> safely(default: T, block: () -> T): T = try {
-        block()
-    } catch (error: SecurityException) {
-        recoverFromCorruption(error)
-        default
-    } catch (error: GeneralSecurityException) {
-        recoverFromCorruption(error)
-        default
-    }
-
-    /**
-     * An earlier build stored the PIN hash in a plain (unencrypted) `SharedPreferences` file
-     * under this same name. `EncryptedSharedPreferences` encrypts key names as well as values, so
-     * it can't see those old plaintext entries -- [hasPin] looks empty and users get dropped back
-     * into the "create a PIN" flow even though their PIN is still sitting on disk. Copy it over
-     * once, then scrub the plaintext copy so it doesn't linger unencrypted.
-     */
-    private fun migrateLegacyPlaintextPinIfNeeded(context: Context) {
-        if (hasPin()) return
-        val legacyPrefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val legacySalt = legacyPrefs.getString(KEY_SALT, null)
-        val legacyHash = legacyPrefs.getString(KEY_HASH, null)
-        if (legacySalt != null && legacyHash != null) {
-            safely(Unit) {
-                prefs.edit()
-                    .putString(KEY_SALT, legacySalt)
-                    .putString(KEY_HASH, legacyHash)
-                    .apply()
+        var connection: HttpURLConnection? = null
+        return try {
+            connection = (URL("https://$host/dashboard-api/pin/verify").openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                doOutput = true
+                connectTimeout = 10_000
+                readTimeout = 10_000
+                setRequestProperty("Authorization", "Bearer ${settings.token()}")
+                setRequestProperty("Content-Type", "application/json")
             }
-        }
-        if (legacyPrefs.contains(KEY_SALT) || legacyPrefs.contains(KEY_HASH)) {
-            legacyPrefs.edit().remove(KEY_SALT).remove(KEY_HASH).apply()
-        }
-    }
+            connection.outputStream.use { it.write(JSONObject().put("pin", pin).toString().toByteArray()) }
 
-    fun hasPin(): Boolean = safely(false) { prefs.contains(KEY_HASH) }
-
-    fun setPin(pin: String) {
-        val salt = ByteArray(SALT_LENGTH_BYTES).also { SecureRandom().nextBytes(it) }
-        val hash = hash(pin, salt)
-        safely(Unit) {
-            prefs.edit()
-                .putString(KEY_SALT, Base64.encodeToString(salt, Base64.NO_WRAP))
-                .putString(KEY_HASH, Base64.encodeToString(hash, Base64.NO_WRAP))
-                .apply()
-        }
-    }
-
-    /**
-     * True only if [pin] is correct AND no lockout is currently in effect. Unlimited guessing
-     * used to be allowed here -- a 4-8 digit PIN is only ~10,000-100,000,000 combinations, which
-     * is a feasible on-device brute force with no rate limit at all. Failed attempts now trigger
-     * an escalating lockout (see [recordFailedAttempt]); a successful verify clears it.
-     */
-    fun verifyPin(pin: String): Boolean {
-        if (lockoutRemainingMillis() > 0) return false
-        val correct = safely(false) {
-            val saltEncoded = prefs.getString(KEY_SALT, null) ?: return@safely false
-            val expectedHashEncoded = prefs.getString(KEY_HASH, null) ?: return@safely false
-            val salt = Base64.decode(saltEncoded, Base64.NO_WRAP)
-            val expectedHash = Base64.decode(expectedHashEncoded, Base64.NO_WRAP)
-            hash(pin, salt).contentEquals(expectedHash)
-        }
-        if (correct) resetFailedAttempts() else recordFailedAttempt()
-        return correct
-    }
-
-    /** How long the caller must still wait before another [verifyPin] attempt is honored, or 0
-     * if none is in effect. Lets the UI show "try again in Ns" instead of a bare rejection. */
-    fun lockoutRemainingMillis(): Long = safely(0L) {
-        val until = prefs.getLong(KEY_LOCKOUT_UNTIL, 0L)
-        (until - System.currentTimeMillis()).coerceAtLeast(0L)
-    }
-
-    /** Escalating lockout once [LOCKOUT_THRESHOLD] wrong PINs have been entered in a row: starts
-     * short ([BASE_LOCKOUT_MS]) and doubles per additional failure up to [MAX_LOCKOUT_MS], same
-     * shape as Android's own lockscreen backoff. */
-    private fun recordFailedAttempt() {
-        safely(Unit) {
-            val attempts = prefs.getInt(KEY_FAILED_ATTEMPTS, 0) + 1
-            val lockoutMs = if (attempts >= LOCKOUT_THRESHOLD) {
-                val doublings = (attempts - LOCKOUT_THRESHOLD).coerceAtMost(MAX_LOCKOUT_DOUBLINGS)
-                (BASE_LOCKOUT_MS shl doublings).coerceAtMost(MAX_LOCKOUT_MS)
-            } else {
-                0L
+            val code = connection.responseCode
+            if (code == 429) {
+                val body = connection.errorStream?.bufferedReader()?.readText().orEmpty()
+                val retryAfterMs = runCatching { JSONObject(body).optLong("retryAfterMs", 0L) }.getOrDefault(0L)
+                return VerifyOutcome(VerifyResult.LOCKED_OUT, retryAfterMs)
             }
-            prefs.edit()
-                .putInt(KEY_FAILED_ATTEMPTS, attempts)
-                .putLong(KEY_LOCKOUT_UNTIL, if (lockoutMs > 0) System.currentTimeMillis() + lockoutMs else 0L)
-                .apply()
+            if (code !in 200..299) return VerifyOutcome(VerifyResult.NETWORK_ERROR)
+
+            val body = connection.inputStream.bufferedReader().readText()
+            val json = JSONObject(body)
+            val hasPin = json.optBoolean("hasPin", true)
+            setCachedHasPin(hasPin)
+            when {
+                !hasPin -> VerifyOutcome(VerifyResult.NO_PIN_SET)
+                json.optBoolean("correct", false) -> VerifyOutcome(VerifyResult.CORRECT)
+                else -> VerifyOutcome(VerifyResult.INCORRECT)
+            }
+        } catch (error: Exception) {
+            Log.w(TAG, "PIN verify failed", error)
+            VerifyOutcome(VerifyResult.NETWORK_ERROR)
+        } finally {
+            connection?.disconnect()
         }
-    }
-
-    private fun resetFailedAttempts() {
-        safely(Unit) { prefs.edit().remove(KEY_FAILED_ATTEMPTS).remove(KEY_LOCKOUT_UNTIL).apply() }
-    }
-
-    fun clearPin() {
-        safely(Unit) { prefs.edit().clear().apply() }
-    }
-
-    private fun hash(pin: String, salt: ByteArray): ByteArray {
-        val spec = PBEKeySpec(pin.toCharArray(), salt, ITERATIONS, KEY_LENGTH_BITS)
-        return SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").generateSecret(spec).encoded
     }
 
     private companion object {
         const val TAG = "PinAuthManager"
         const val PREFS_NAME = "pin_auth"
-        const val KEY_SALT = "salt"
-        const val KEY_HASH = "hash"
-        const val SALT_LENGTH_BYTES = 16
-        const val ITERATIONS = 120_000
-        const val KEY_LENGTH_BITS = 256
-        const val KEY_FAILED_ATTEMPTS = "failed_attempts"
-        const val KEY_LOCKOUT_UNTIL = "lockout_until"
-        const val LOCKOUT_THRESHOLD = 5
-        const val BASE_LOCKOUT_MS = 5_000L
-        const val MAX_LOCKOUT_DOUBLINGS = 5
-        val MAX_LOCKOUT_MS = 5 * 60 * 1000L
+        const val KEY_HAS_PIN_CACHED = "has_pin_cached"
     }
 }

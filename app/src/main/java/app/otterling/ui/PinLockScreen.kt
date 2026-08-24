@@ -27,6 +27,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -34,21 +35,24 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import app.otterling.pin.PinAuthManager
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private const val MIN_PIN_LENGTH = 4
 private const val MAX_PIN_LENGTH = 8
 
 /**
  * Gate shown before Settings, a numeric keypad. The Guardian PIN is set exclusively from the
- * guardian dashboard (see [PinAuthManager.setPin] -- its only caller anywhere in this app is
- * [app.otterling.content.DashboardConfigStore.syncPin], on the same ~15-minute cadence as the
- * rest of that dashboard sync) and reaches this device automatically; this screen never lets
- * anyone create, change, or clear a PIN locally, so the one 4-digit PIN set on the website is the
- * only one that ever exists anywhere in the Otterling ecosystem. If no PIN has synced down yet,
- * [NoPinYetScreen] explains that and lets the caller straight through -- there's nothing to gate
- * against yet, and blocking Settings entirely until the guardian's very first dashboard visit
- * would strand a fresh install with no way in. Once a PIN exists, every future visit gates on it
- * for real, with escalating lockout on wrong guesses (see [PinAuthManager.verifyPin]).
+ * guardian dashboard and verified live against the server on every attempt (see
+ * [PinAuthManager.verify] -- the PIN itself never reaches this device, only correct/incorrect
+ * answers to one guess at a time, under server-side lockout). This screen never lets anyone
+ * create, change, or clear a PIN locally, so the one 4-digit PIN set on the website is the only
+ * one that ever exists anywhere in the Otterling ecosystem.
+ *
+ * [NoPinYetScreen] is shown instead of the keypad only when [PinAuthManager.cachedHasPin] is
+ * confirmed false by a real server response -- its default (`true`) until that first successful
+ * fetch means a fresh install or a device that hasn't synced yet gates Settings shut, not open.
  */
 @Composable
 fun PinLockScreen(
@@ -56,25 +60,42 @@ fun PinLockScreen(
     onUnlocked: () -> Unit,
     onCancel: () -> Unit,
 ) {
-    val hasPin = remember { pinAuthManager.hasPin() }
+    val hasPin = remember { pinAuthManager.cachedHasPin() }
     if (!hasPin) {
         NoPinYetScreen(onContinue = onUnlocked, onCancel = onCancel)
         return
     }
 
+    val scope = rememberCoroutineScope()
     var pin by remember { mutableStateOf("") }
     var errorMessage by remember { mutableStateOf("") }
+    var verifying by remember { mutableStateOf(false) }
 
     fun submit() {
-        val lockoutMs = pinAuthManager.lockoutRemainingMillis()
-        if (lockoutMs > 0) {
-            errorMessage = "Too many wrong PINs -- try again in ${(lockoutMs / 1000) + 1}s"
-            pin = ""
-        } else if (pinAuthManager.verifyPin(pin)) {
-            onUnlocked()
-        } else {
-            errorMessage = "Incorrect PIN"
-            pin = ""
+        if (verifying) return
+        verifying = true
+        errorMessage = ""
+        scope.launch {
+            val outcome = withContext(Dispatchers.IO) { pinAuthManager.verify(pin) }
+            verifying = false
+            when (outcome.result) {
+                // A genuine server-confirmed "no PIN configured" is trusted the same as every
+                // other dashboard-driven config in this app -- the guardian removed protection
+                // deliberately, not something this screen decides on its own.
+                PinAuthManager.VerifyResult.CORRECT, PinAuthManager.VerifyResult.NO_PIN_SET -> onUnlocked()
+                PinAuthManager.VerifyResult.INCORRECT -> {
+                    errorMessage = "Incorrect PIN"
+                    pin = ""
+                }
+                PinAuthManager.VerifyResult.LOCKED_OUT -> {
+                    errorMessage = "Too many wrong PINs -- try again in ${(outcome.retryAfterMs / 1000) + 1}s"
+                    pin = ""
+                }
+                PinAuthManager.VerifyResult.NETWORK_ERROR -> {
+                    errorMessage = "Can't verify PIN right now -- check your connection"
+                    pin = ""
+                }
+            }
         }
     }
 
@@ -133,7 +154,14 @@ fun PinLockScreen(
             PinDots(count = maxOf(MIN_PIN_LENGTH, pin.length), filled = pin.length, error = errorMessage.isNotEmpty())
             Spacer(Modifier.height(16.dp))
             Box(modifier = Modifier.height(24.dp), contentAlignment = Alignment.Center) {
-                if (errorMessage.isNotEmpty()) {
+                if (verifying) {
+                    Text(
+                        "Verifying...",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodyMedium,
+                        textAlign = TextAlign.Center,
+                    )
+                } else if (errorMessage.isNotEmpty()) {
                     Text(
                         errorMessage,
                         color = MaterialTheme.colorScheme.error,
@@ -148,14 +176,14 @@ fun PinLockScreen(
                 onDigit = ::press,
                 onBackspace = { if (pin.isNotEmpty()) pin = pin.dropLast(1) },
                 onSubmit = ::submit,
-                submitEnabled = pin.length >= MIN_PIN_LENGTH,
+                submitEnabled = pin.length >= MIN_PIN_LENGTH && !verifying,
             )
         }
     }
 }
 
-/** Shown in place of the keypad when [PinAuthManager.hasPin] is false -- see [PinLockScreen]'s
- *  doc comment for why there's no local create-a-PIN fallback anymore. */
+/** Shown in place of the keypad when [PinAuthManager.cachedHasPin] is false -- see
+ *  [PinLockScreen]'s doc comment for why there's no local create-a-PIN fallback anymore. */
 @Composable
 private fun NoPinYetScreen(onContinue: () -> Unit, onCancel: () -> Unit) {
     Box(

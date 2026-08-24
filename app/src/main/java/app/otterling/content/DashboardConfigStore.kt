@@ -77,45 +77,29 @@ class DashboardConfigStore(context: Context) {
         }
     }
 
-    /** Pulls the guardian PIN from `GET /dashboard-api/pin` (see lockprofile_service.py's
-     *  GUARDIAN_PIN_PATH -- one shared PIN for the whole fleet, not per-device) and mirrors it
-     *  into [PinAuthManager] so this phone's *existing* PBKDF2 + Keystore-sealed verify path
-     *  ([app.otterling.ui.PinLockScreen]) just works unchanged. Deliberately does NOT go through
-     *  [snapshot]/[KEY_SNAPSHOT] -- that cache is plain unencrypted SharedPreferences, fine for
-     *  website lists and app budgets but not for a raw PIN; nothing from this call is persisted
-     *  outside PinAuthManager's Keystore-backed store. Re-applies setPin() on every poll rather
-     *  than tracking "did it change" (a few hundred ms of PBKDF2 every ~15 minutes on a
-     *  background worker is cheap, and setPin is idempotent -- simpler and more robust than
-     *  comparing timestamps/hashes).
-     *
-     *  True mirror, both directions: [PinAuthManager.setPin] is called ONLY from here anywhere in
-     *  this app (see [app.otterling.ui.PinLockScreen]'s doc comment -- there is no local
-     *  create/change-PIN flow left), and if the dashboard's PIN is null (never set, or since
-     *  cleared), this calls [PinAuthManager.clearPin] rather than leaving a stale local copy
-     *  behind -- the one 4-digit PIN set on the website is meant to be the only one that ever
-     *  exists anywhere in the Otterling ecosystem, not just the default until something else
-     *  takes over. */
-    fun syncPin() {
+    /** Refreshes [PinAuthManager.cachedHasPin] from `GET /dashboard-api/pin/exists` (see
+     *  lockprofile_service.py's GUARDIAN_PIN_PATH -- one shared PIN for the whole fleet, not
+     *  per-device). Deliberately only ever touches the *existence* boolean, never the PIN value
+     *  itself -- see [PinAuthManager]'s doc comment for why the plaintext PIN must never reach
+     *  this device at all, let alone through plain-SharedPreferences [snapshot]/[KEY_SNAPSHOT].
+     *  An actual PIN guess is checked by [PinAuthManager.verify] at entry time instead, live
+     *  against the server -- this is only a cache of "does Settings need a PIN right now",
+     *  refreshed on the same cadence as the rest of this class's sync. A failed fetch leaves the
+     *  existing cached value in place (same fail-toward-last-known-good stance as [refresh]) --
+     *  and [PinAuthManager.cachedHasPin]'s own default (`true` until the first successful fetch)
+     *  already fails closed for a device that has never synced at all. */
+    fun refreshPinExists() {
         val settings = MacTamperPollSettings(appContext)
         if (!settings.isConfigured()) return
         val host = CloudFilterSettings(appContext).host()
         if (host.isBlank()) return
         try {
-            val response = httpGet("https://$host/dashboard-api/pin", settings.token())
-            val json = JSONObject(response)
-            val pin = if (json.isNull("pin")) null else json.optString("pin", "")
-            if (pin.isNullOrEmpty()) {
-                val pinAuthManager = PinAuthManager(appContext)
-                // Only touch the Keystore-backed store when there's actually something to clear
-                // -- the common "dashboard has no PIN yet" case would otherwise do a pointless
-                // encrypted-prefs write every ~15 minutes forever.
-                if (pinAuthManager.hasPin()) pinAuthManager.clearPin()
-                return
-            }
-            PinAuthManager(appContext).setPin(pin)
-            Log.i(TAG, "guardian PIN synced from dashboard")
+            val response = httpGet("https://$host/dashboard-api/pin/exists", settings.token())
+            val hasPin = JSONObject(response).optBoolean("hasPin", true)
+            PinAuthManager(appContext).setCachedHasPin(hasPin)
+            Log.i(TAG, "guardian PIN existence synced from dashboard: hasPin=$hasPin")
         } catch (error: Exception) {
-            Log.w(TAG, "guardian PIN sync failed", error)
+            Log.w(TAG, "guardian PIN existence sync failed", error)
         }
     }
 

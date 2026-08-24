@@ -141,18 +141,22 @@
 		# through here (see those files); every guardian-authoring route -- PIN POST, settings
 		# PATCH, add/remove endpoints, device removal, poll-now -- still requires the browser
 		# session cookie via forward_auth below, same as before this device bypass existed at all.
+		# NOTE: /dashboard-api/pin (the raw plaintext PIN) is deliberately NOT in this GET
+		# allowlist -- see GUARDIAN_PIN_PATH's comment in lockprofile_service.py. Only
+		# /pin/exists (a boolean, no secret) and /pin/verify (POST, one guess in/correct-or-not
+		# out) are device-reachable.
 		@dashboardApiDeviceGet {
-			path /dashboard-api/devices/*/settings /dashboard-api/pin /dashboard-api/habits
+			path /dashboard-api/devices/*/settings /dashboard-api/pin/exists /dashboard-api/habits
 			method GET
 			header Authorization *
 		}
-		@dashboardApiDeviceComplete {
-			path /dashboard-api/habits/*/complete
+		@dashboardApiDevicePost {
+			path /dashboard-api/habits/*/complete /dashboard-api/pin/verify
 			method POST
 			header Authorization *
 		}
 		reverse_proxy @dashboardApiDeviceGet 127.0.0.1:8091
-		reverse_proxy @dashboardApiDeviceComplete 127.0.0.1:8091
+		reverse_proxy @dashboardApiDevicePost 127.0.0.1:8091
 
 		@dashboard path /dashboard /dashboard/* /dashboard-api/*
 		forward_auth @dashboard 127.0.0.1:8091 {
@@ -239,18 +243,22 @@ http://192.168.0.254 {
 	# route{} and why the bearer-passthrough check has to run before forward_auth -- including why
 	# it's a tight path+method allowlist rather than "any request with an Authorization header".
 	route {
+		# NOTE: /dashboard-api/pin (the raw plaintext PIN) is deliberately NOT in this GET
+		# allowlist -- see GUARDIAN_PIN_PATH's comment in lockprofile_service.py. Only
+		# /pin/exists (a boolean, no secret) and /pin/verify (POST, one guess in/correct-or-not
+		# out) are device-reachable.
 		@dashboardApiDeviceGet {
-			path /dashboard-api/devices/*/settings /dashboard-api/pin /dashboard-api/habits
+			path /dashboard-api/devices/*/settings /dashboard-api/pin/exists /dashboard-api/habits
 			method GET
 			header Authorization *
 		}
-		@dashboardApiDeviceComplete {
-			path /dashboard-api/habits/*/complete
+		@dashboardApiDevicePost {
+			path /dashboard-api/habits/*/complete /dashboard-api/pin/verify
 			method POST
 			header Authorization *
 		}
 		reverse_proxy @dashboardApiDeviceGet 127.0.0.1:8091
-		reverse_proxy @dashboardApiDeviceComplete 127.0.0.1:8091
+		reverse_proxy @dashboardApiDevicePost 127.0.0.1:8091
 
 		@dashboard path /dashboard /dashboard/* /dashboard-api/*
 		forward_auth @dashboard 127.0.0.1:8091 {
