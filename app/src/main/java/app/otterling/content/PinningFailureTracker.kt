@@ -15,11 +15,17 @@ import android.util.Log
  *
  * AI REVIEW NOTE -- [FAILURE_THRESHOLD] was previously 3, then briefly dropped to 1 (exempt on
  * the very first match); AI review correctly rejected that as making it materially easier, via a
- * false positive or a single crafted connection, to get silently exempted from content filtering,
- * since [MAX_AUTO_EXEMPTIONS] alone doesn't stop one weak signal per package from working up to
- * that cap. Settled on 2: still a corroboration requirement (a lone matching connection is never
- * enough), but half the wait of the original 3 for genuinely pinned apps, which fail the same way
- * on essentially every connection attempt until exempted.
+ * false positive or a single crafted connection, to get silently exempted from content filtering.
+ * Settled on 2: still a corroboration requirement (a lone matching connection is never enough),
+ * but half the wait of the original 3 for genuinely pinned apps, which fail the same way on
+ * essentially every connection attempt until exempted.
+ *
+ * There used to be a per-install cap ([FAILURE_THRESHOLD]'s neighbor, MAX_AUTO_EXEMPTIONS) on how
+ * many packages this path could auto-exempt in total, meant to bound a hypothetical abuse pattern
+ * (deliberately shaping connections to get many packages auto-exempted). Removed at the Guardian's
+ * explicit request: in practice it just meant a real pinned app stopped getting fixed once the
+ * count ran out, with no clear benefit to show for it -- [FAILURE_THRESHOLD]'s corroboration
+ * requirement is still the actual defense against a single crafted connection.
  *
  * The root-cause bug this class used to have: the per-uid failure count lived only in an
  * in-memory map, which was thrown away and rebuilt empty every time [VpnFilterService]
@@ -55,24 +61,11 @@ class PinningFailureTracker(context: Context) {
             return false
         }
 
-        // Any Play-Store-installable app can deliberately shape a few short HTTPS connections to
-        // match this heuristic and get itself auto-exempted from content filtering -- there's no
-        // stronger corroborating signal available at this layer (no visibility into the actual TLS
-        // alert). A per-install cap bounds how many packages this path can silently exempt before
-        // a Guardian has to look: a genuine broken-pinning case is rare enough that this ceiling
-        // should essentially never bind in practice, while a self-triggered abuse pattern hits it
-        // fast and then requires manual action instead of being able to repeat indefinitely.
+        // No cap on how many packages this path can auto-exempt in total -- see the class doc's
+        // note on why that cap was removed. [FAILURE_THRESHOLD]'s corroboration requirement (not
+        // a totals ceiling) is what stops a single crafted connection from getting an app
+        // auto-exempted.
         val autoExemptCount = prefs.getInt(KEY_AUTO_EXEMPT_COUNT, 0)
-        if (autoExemptCount >= MAX_AUTO_EXEMPTIONS) {
-            Log.w(
-                TAG,
-                "Auto-exemption cap ($MAX_AUTO_EXEMPTIONS) reached -- refusing to auto-exempt " +
-                    "uid=$uid (${packages.joinToString()}); a Guardian must add it manually in " +
-                    "Settings if it's a genuine pinning break",
-            )
-            return false
-        }
-
         val recentFailures = recordAndPruneFailureTimes(uid)
         if (recentFailures.size < FAILURE_THRESHOLD) {
             Log.d(
@@ -115,21 +108,11 @@ class PinningFailureTracker(context: Context) {
 
     private fun failureTimesKey(uid: Int) = "$KEY_FAILURE_TIMES_PREFIX$uid"
 
-    /** How many auto-exemptions have been used, out of [MAX_AUTO_EXEMPTIONS] -- surfaced in
-     *  Settings so a Guardian can tell *why* a new pinned app stopped getting auto-exempted
-     *  (previously this cap had no visibility at all: it just silently stopped working, logging
-     *  only to logcat). */
+    /** How many auto-exemptions have happened in total -- surfaced in Settings purely for
+     *  Guardian visibility (no cap tied to it anymore, see the class doc's note). */
     fun autoExemptCount(): Int = prefs.getInt(KEY_AUTO_EXEMPT_COUNT, 0)
 
-    /** Frees up the cap again, e.g. once a Guardian has reviewed the apps it already auto-exempted
-     *  (still visible/removable individually in Settings' exempt list either way). Doesn't touch
-     *  [exemptManager]'s list itself -- this only resets how many *more* auto-exemptions can happen. */
-    fun resetAutoExemptCount() {
-        prefs.edit().putInt(KEY_AUTO_EXEMPT_COUNT, 0).apply()
-    }
-
     companion object {
-        const val MAX_AUTO_EXEMPTIONS = 10
         private const val TAG = "PinningFailureTracker"
         private const val PREFS_NAME = "pinning_failure_tracker_prefs"
         private const val KEY_AUTO_EXEMPT_COUNT = "auto_exempt_count"

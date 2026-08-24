@@ -383,25 +383,9 @@ fun VpnFilterSection(context: Context) {
             Text("Add exempt app")
         }
         Text(
-            "Automatic exemptions used: $autoExemptCount/${PinningFailureTracker.MAX_AUTO_EXEMPTIONS}" +
-                if (autoExemptCount >= PinningFailureTracker.MAX_AUTO_EXEMPTIONS) {
-                    " -- cap reached, a newly pinned app won't be auto-added until this is reset " +
-                        "(you can still add one manually above)"
-                } else {
-                    ""
-                },
+            "Automatic exemptions used: $autoExemptCount -- no cap, a newly pinned app is always auto-added",
             style = MaterialTheme.typography.bodySmall,
         )
-        if (autoExemptCount > 0) {
-            OutlinedButton(
-                onClick = {
-                    pinningFailureTracker.resetAutoExemptCount()
-                    autoExemptCount = 0
-                },
-            ) {
-                Text("Reset automatic-exemption count")
-            }
-        }
         OutlinedButton(
             enabled = !logUploadBusy,
             onClick = {

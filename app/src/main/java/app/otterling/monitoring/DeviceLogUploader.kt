@@ -40,7 +40,7 @@ object DeviceLogUploader {
             val header = buildString {
                 appendLine("device_id=$deviceId")
                 appendLine("uploaded_at_millis=${System.currentTimeMillis()}")
-                appendLine("auto_exempt_count=${tracker.autoExemptCount()}/${PinningFailureTracker.MAX_AUTO_EXEMPTIONS}")
+                appendLine("auto_exempt_count=${tracker.autoExemptCount()}")
                 appendLine("exempt_packages=${exemptManager.exemptPackages().sorted().joinToString()}")
                 appendLine("--- logcat (this app's own process only) ---")
             }
