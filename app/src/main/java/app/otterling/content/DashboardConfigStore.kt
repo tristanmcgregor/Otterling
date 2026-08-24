@@ -53,8 +53,17 @@ class DashboardConfigStore(context: Context) {
 
     /** Best-effort: a failed fetch just leaves the existing [snapshot] in place rather than
      *  throwing, so a network hiccup during [app.otterling.alerts.MacTamperPollWorker]'s poll
-     *  never blocks or fails that poll over this. */
-    fun refresh() {
+     *  never blocks or fails that poll over this.
+     *
+     *  `suspend` (its one call site is already inside [app.otterling.alerts.MacTamperPollWorker]'s
+     *  own suspend `doWork()`) so a `"removed": true` response -- the server's authenticated
+     *  signal that the guardian deleted this device from the dashboard, see
+     *  `lockprofile_service.py`'s `REMOVED_DEVICES_PATH` -- can call straight into
+     *  [app.otterling.monitoring.DeviceRemovalHandler.handle], itself suspend. Deliberately NOT
+     *  driven by the FCM push payload that may have woken this poll early -- see
+     *  [app.otterling.alerts.MacTamperMessagingService]'s doc comment on why that payload is
+     *  untrusted; only this authenticated HTTPS response is. */
+    suspend fun refresh() {
         val settings = MacTamperPollSettings(appContext)
         if (!settings.isConfigured()) return
         val host = CloudFilterSettings(appContext).host()
@@ -64,9 +73,12 @@ class DashboardConfigStore(context: Context) {
                 "https://$host/dashboard-api/devices/${deviceId()}/settings",
                 settings.token(),
             )
-            // Parse-validate before caching so a malformed response can't clobber the last
-            // known-good snapshot with garbage.
-            JSONObject(response)
+            val json = JSONObject(response) // parse-validate before acting on or caching it
+            if (json.optBoolean("removed", false)) {
+                Log.w(TAG, "This device was removed from the dashboard -- self-decommissioning")
+                app.otterling.monitoring.DeviceRemovalHandler.handle(appContext)
+                return
+            }
             prefs.edit()
                 .putString(KEY_SNAPSHOT, response)
                 .putLong(KEY_LAST_FETCHED, System.currentTimeMillis())

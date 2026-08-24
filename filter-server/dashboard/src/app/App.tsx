@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import {
   Shield, Lock, Clock, Globe, CheckCircle, Bug, RefreshCw,
   Plus, Settings as SettingsIcon, X, Trash2, LogOut, Laptop,
-  Home, ListChecks, Timer, AlertTriangle, Moon, Sun,
+  Home, ListChecks, AlertTriangle, Moon, Sun,
   BarChart3, Check, Wifi, ChevronDown,
 } from "lucide-react";
 import { cn, Card, Button, Switch, Pill } from "./components/ui";
@@ -11,7 +11,7 @@ import type {
   DeviceSettings, DeviceSummary, ActivityEvent, Rule, RuleSchedule, AppBudget, ProtectedApp, Habit,
 } from "../lib/api";
 
-type Screen = "Dashboard" | "Settings" | "GlobalSettings" | "Wizard" | "Friction" | "AccessibilityNag";
+type Screen = "Dashboard" | "Settings" | "GlobalSettings" | "Wizard";
 
 interface NavDef {
   id: Screen;
@@ -31,17 +31,6 @@ const NAV: NavDef[] = [
 // "a setting of whichever device happens to be selected right now".
 const FLEET_NAV: NavDef[] = [
   { id: "GlobalSettings", label: "Global Settings", icon: Globe },
-];
-
-// These two are genuinely phone-side *previews* -- read-only mockups of screens the child's
-// Android phone shows (see each screen's PreviewBanner), not something you configure here.
-// "Rules"/Wizard used to be listed alongside them, but it's the real add/edit-rule flow (it
-// calls api.addRule/updateRule), not a preview -- it's reachable via the "Add Rule" buttons on
-// the Dashboard/Settings screens instead. Both previews are Android-only concepts (the Mac has no
-// equivalent screens), so the sidebar only shows this section for an android-platform device.
-const PREVIEW_NAV: NavDef[] = [
-  { id: "Friction", label: "Delay Timer", icon: Timer },
-  { id: "AccessibilityNag", label: "Accessibility", icon: AlertTriangle },
 ];
 
 const DEVICE_STORAGE_KEY = "otterling.deviceId";
@@ -145,13 +134,7 @@ export default function App() {
     if (!deviceId) {
       return <NoDeviceScreen devices={devices} />;
     }
-    // Friction/AccessibilityNag are literal mockups of Android-phone screens, so they stay
-    // Android-only -- if a guardian was on one of these and then switched the device dropdown to
-    // the Mac, fall back to Dashboard. Wizard (rule creation) is NOT Android-only anymore: a rule
-    // can now target the Mac too (see HabitRuleWizard's platform-conditional Step 1).
-    const androidOnlyScreen = screen === "Friction" || screen === "AccessibilityNag";
-    const effectiveScreen = settings?.platform === "macos" && androidOnlyScreen ? "Dashboard" : screen;
-    switch (effectiveScreen) {
+    switch (screen) {
       case "Dashboard":
         return (
           <DashboardScreen
@@ -187,10 +170,6 @@ export default function App() {
             onSaved={reload}
           />
         );
-      case "Friction":
-        return <FrictionDelayScreen onNavigate={navigate} seconds={settings?.frictionDelay.seconds ?? 30} />;
-      case "AccessibilityNag":
-        return <AccessibilityNagScreen onNavigate={navigate} />;
     }
   };
 
@@ -199,7 +178,6 @@ export default function App() {
       <Sidebar
         screen={screen}
         nav={NAV}
-        previewNav={PREVIEW_NAV}
         fleetNav={FLEET_NAV}
         onNavigate={navigate}
         devices={devices}
@@ -220,11 +198,10 @@ export default function App() {
 // ─── Chrome ──────────────────────────────────────────────────────────────────
 
 function Sidebar({
-  screen, nav, previewNav, fleetNav, onNavigate, devices, deviceId, onSelectDevice, settings, dark, onToggleDark, onLogout,
+  screen, nav, fleetNav, onNavigate, devices, deviceId, onSelectDevice, settings, dark, onToggleDark, onLogout,
 }: {
   screen: Screen;
   nav: NavDef[];
-  previewNav: NavDef[];
   fleetNav: NavDef[];
   onNavigate: (s: Screen) => void;
   devices: DeviceSummary[];
@@ -310,17 +287,6 @@ function Sidebar({
         {nav.map((item) => (
           <SidebarItem key={item.id} item={item} active={screen === item.id} onClick={() => onNavigate(item.id)} />
         ))}
-        {!isMac && (
-          <>
-            <div className="h-px bg-outline-variant/40 my-2" />
-            <p className="text-[9px] font-bold uppercase tracking-[0.12em] text-on-surface-variant/50 px-3 py-1.5">
-              Phone previews
-            </p>
-            {previewNav.map((item) => (
-              <SidebarItem key={item.id} item={item} active={screen === item.id} onClick={() => onNavigate(item.id)} />
-            ))}
-          </>
-        )}
         <div className="h-px bg-outline-variant/40 my-2" />
         <p className="text-[9px] font-bold uppercase tracking-[0.12em] text-on-surface-variant/50 px-3 py-1.5">
           Fleet
@@ -437,15 +403,6 @@ function ErrorScreen({ message, onRetry }: { message: string; onRetry: () => voi
         <p className="text-sm text-on-surface-variant">{message}</p>
         <Button size="sm" onClick={onRetry}>Try again</Button>
       </div>
-    </div>
-  );
-}
-
-function PreviewBanner({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="flex items-start gap-2.5 px-4 py-2.5 bg-tertiary-container/40 border-b border-tertiary/20 text-xs text-on-surface-variant">
-      <AlertTriangle className="w-3.5 h-3.5 text-tertiary shrink-0 mt-0.5" />
-      <span>{children}</span>
     </div>
   );
 }
@@ -832,17 +789,15 @@ function SettingsScreen({
 }) {
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [removing, setRemoving] = useState(false);
-  const [emailDraft, setEmailDraft] = useState("");
   const [nameDraft, setNameDraft] = useState("");
   const [cooldownDraft, setCooldownDraft] = useState("");
   const [cloudFilterHostDraft, setCloudFilterHostDraft] = useState("");
 
   useEffect(() => {
-    setEmailDraft(settings?.guardianEmail ?? "");
     setNameDraft(settings?.device_name ?? "");
     setCooldownDraft(settings?.cooldownHours != null ? String(settings.cooldownHours) : "");
     setCloudFilterHostDraft(settings?.cloudFilterHost ?? "");
-  }, [settings?.guardianEmail, settings?.device_name, settings?.cooldownHours, settings?.cloudFilterHost]);
+  }, [settings?.device_name, settings?.cooldownHours, settings?.cloudFilterHost]);
 
   if (!settings) {
     return <div className="p-7 text-sm text-on-surface-variant">Loading…</div>;
@@ -874,9 +829,16 @@ function SettingsScreen({
         </p>
       </div>
 
-      <div className="grid grid-cols-2 gap-4 items-start">
+      {/* CSS multi-column, not CSS Grid: a grid row's height is set by its tallest cell, which
+          left large dead space below shorter cards (e.g. Blocked Websites next to Tamper
+          Protection) with no way for a card further down to flow up and fill it. Multi-column
+          lets each card just stack in the shorter of its two columns, like a masonry layout,
+          with no JS measurement needed. break-inside-avoid keeps a single card from being split
+          across the column break; mb-4 replaces the grid's row-gap (multi-column has no row-gap
+          equivalent for stacked in-flow items, only a column-gap via `gap-4` itself). */}
+      <div className="columns-2 gap-4 [&>*]:mb-4 [&>*]:break-inside-avoid">
         {/* Device name */}
-        <div className="space-y-3 col-span-2">
+        <div className="space-y-3 [column-span:all]">
           <SectionLabel>Device</SectionLabel>
           <Card className="rounded-2xl">
             <div className="flex items-center gap-3">
@@ -898,7 +860,7 @@ function SettingsScreen({
 
         {isMac && (
           <>
-          <div className="space-y-3 col-span-2">
+          <div className="space-y-3 [column-span:all]">
             <SectionLabel>Mac Protection</SectionLabel>
             <Card className="rounded-2xl">
               <h3 className="font-semibold text-sm mb-1.5 flex items-center gap-2">
@@ -1001,7 +963,7 @@ function SettingsScreen({
           </div>
 
           {/* Protected apps */}
-          <div className="space-y-3 col-span-2">
+          <div className="space-y-3 [column-span:all]">
             <SectionLabel>Protected Apps</SectionLabel>
             <Card className="rounded-2xl">
               <p className="text-xs text-on-surface-variant mb-2">
@@ -1224,30 +1186,6 @@ function SettingsScreen({
         </div>
         )}
 
-        {/* Recovery email -- per-device (this Mac/phone's own reset-notification address). The
-            Guardian PIN moved to Global Settings -- see GlobalSettingsScreen. */}
-        <div className="space-y-3">
-          <SectionLabel>Guardian Access</SectionLabel>
-          <Card className="rounded-2xl space-y-0 divide-y divide-outline-variant/30">
-            <div className="py-3 px-1 flex items-center gap-3">
-              <input
-                type="email"
-                value={emailDraft}
-                onChange={(e) => setEmailDraft(e.target.value)}
-                placeholder="Recovery email"
-                className="flex-1 h-9 px-3 rounded-xl border border-outline bg-surface text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-              />
-              <Button
-                variant="text"
-                size="sm"
-                className="text-xs h-9"
-                onClick={() => api.patchSettings(deviceId, { guardianEmail: emailDraft }).then(onChanged)}
-              >
-                Save
-              </Button>
-            </div>
-          </Card>
-        </div>
       </div>
 
       <div className="space-y-3">
@@ -1257,9 +1195,9 @@ function SettingsScreen({
             <div>
               <p className="text-sm font-medium">Remove this device</p>
               <p className="text-xs text-on-surface-variant">
-                Deletes {settings.device_name || deviceId}'s settings record from the dashboard.
-                Tamper alert history is kept. If the device connects again, it'll reappear with
-                default settings.
+                {settings.platform === "macos"
+                  ? "Deletes this Mac's settings record from the dashboard. Tamper alert history is kept. If the Mac connects again, it'll reappear with default settings."
+                  : `Turns off every protection on ${settings.device_name || deviceId} (VPN, restrictions, blocks) and offers to uninstall Otterling -- within seconds if the phone is online, or the next time it checks in otherwise. Tamper alert history is kept. This can't be undone from the dashboard.`}
               </p>
             </div>
             {confirmRemove ? (
@@ -1294,11 +1232,6 @@ function SettingsScreen({
       </div>
 
       <div className="flex gap-3 pt-2">
-        {!isMac && (
-          <Button variant="outlined" size="sm" onClick={() => onNavigate("AccessibilityNag")}>
-            Preview accessibility screen
-          </Button>
-        )}
         <Button variant="text" size="sm" onClick={() => onNavigate("Dashboard")}>
           ← Back to Overview
         </Button>
@@ -1609,6 +1542,8 @@ function HabitLibraryList({ habits, onChanged }: { habits: Habit[]; onChanged: (
   const [draftRequiresProof, setDraftRequiresProof] = useState(false);
   const [busy, setBusy] = useState(false);
   const [viewingProofId, setViewingProofId] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [importMessage, setImportMessage] = useState<string | null>(null);
 
   const submit = async () => {
     const name = draft.trim();
@@ -1624,8 +1559,36 @@ function HabitLibraryList({ habits, onChanged }: { habits: Habit[]; onChanged: (
     }
   };
 
+  // Pulls habit names from the connected HabitShare account (see HabitShareAccountCard above)
+  // and creates a matching library entry for any not already here by name -- see
+  // HabitCompletionReporter.kt's doc comment for why a name match is what actually makes
+  // completion reporting work; this just saves retyping each one.
+  const importFromHabitShare = async () => {
+    setImporting(true);
+    setImportMessage(null);
+    try {
+      const result = await api.importHabitsFromHabitShare();
+      setImportMessage(
+        result.imported > 0
+          ? `Imported ${result.imported} new habit${result.imported === 1 ? "" : "s"}.`
+          : "No new habits found -- everything in HabitShare is already in this list.",
+      );
+      onChanged();
+    } catch (error) {
+      setImportMessage(error instanceof ApiError ? error.message : "Import failed -- check the connected HabitShare account.");
+    } finally {
+      setImporting(false);
+    }
+  };
+
   return (
     <div className="space-y-2">
+      <div className="flex items-center gap-2">
+        <Button variant="outlined" size="sm" className="h-8 px-3 text-xs" disabled={importing} onClick={importFromHabitShare}>
+          {importing ? "Importing…" : "Import from HabitShare"}
+        </Button>
+        {importMessage && <span className="text-xs text-on-surface-variant">{importMessage}</span>}
+      </div>
       {habits.length > 0 && (
         <div className="space-y-1.5">
           {habits.map((h) => (
@@ -2272,128 +2235,6 @@ function HabitRuleWizard({
           >
             {saving ? "Saving…" : step < 3 ? "Continue →" : "Save Rule"}
           </Button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── Friction Delay (phone-side preview only) ─────────────────────────────────
-
-function FrictionDelayScreen({ onNavigate, seconds }: { onNavigate: (s: Screen) => void; seconds: number }) {
-  const [timeLeft, setTimeLeft] = useState(seconds);
-
-  useEffect(() => setTimeLeft(seconds), [seconds]);
-
-  useEffect(() => {
-    if (timeLeft > 0) {
-      const t = setTimeout(() => setTimeLeft((p) => p - 1), 1000);
-      return () => clearTimeout(t);
-    }
-  }, [timeLeft]);
-
-  const pct = seconds > 0 ? ((seconds - timeLeft) / seconds) * 100 : 100;
-
-  return (
-    <div className="h-full flex flex-col">
-      <PreviewBanner>
-        Preview only — this is what your child's phone shows before opening a "mindful" app. The
-        {" "}{seconds}s delay reflects your current Friction Delay setting; nothing here is enforced from the browser.
-      </PreviewBanner>
-      <div className="flex-1 flex items-center justify-center bg-secondary-container/30">
-        <div className="max-w-sm w-full px-8 text-center">
-          <h1 className="text-4xl font-bold text-secondary mb-3">Pause.</h1>
-          <p className="text-base text-on-secondary-container/80 leading-relaxed mb-12">
-            Is opening this app the best use of your time right now?
-          </p>
-          <div className="relative w-36 h-36 mx-auto mb-12">
-            <svg className="w-full h-full -rotate-90" viewBox="0 0 144 144">
-              <circle cx="72" cy="72" r="66" fill="none" stroke="currentColor" strokeWidth="6" className="text-secondary/15" />
-              <circle
-                cx="72" cy="72" r="66" fill="none" stroke="currentColor" strokeWidth="6" strokeLinecap="round"
-                strokeDasharray={Math.PI * 2 * 66}
-                strokeDashoffset={Math.PI * 2 * 66 * (1 - pct / 100)}
-                className="text-secondary transition-all duration-1000 ease-linear"
-              />
-            </svg>
-            <div className="absolute inset-0 flex items-center justify-center">
-              {timeLeft > 0 ? (
-                <span className="text-4xl font-light tabular-nums text-on-secondary-container">{timeLeft}</span>
-              ) : (
-                <CheckCircle className="w-12 h-12 text-secondary" />
-              )}
-            </div>
-          </div>
-          <div className="space-y-3">
-            <Button
-              className={cn("w-full transition-all", timeLeft === 0 ? "bg-secondary text-on-secondary hover:bg-secondary/90" : "bg-secondary/30 text-secondary cursor-not-allowed")}
-              disabled={timeLeft > 0}
-              onClick={() => onNavigate("Dashboard")}
-            >
-              {timeLeft > 0 ? `Wait ${timeLeft}s...` : "Continue to app →"}
-            </Button>
-            <Button variant="text" className="w-full text-on-secondary-container/60" onClick={() => onNavigate("Dashboard")}>
-              Close without opening
-            </Button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── Accessibility Nag (phone-side preview only) ──────────────────────────────
-
-function AccessibilityNagScreen({ onNavigate }: { onNavigate: (s: Screen) => void }) {
-  return (
-    <div className="h-full flex flex-col">
-      <PreviewBanner>
-        Preview only — this is the un-dismissable nag your child's phone shows if the required
-        accessibility service gets turned off. It's tied to the phone's own OS state; nothing here
-        is enforced from the browser.
-      </PreviewBanner>
-      <div className="flex-1 flex items-center justify-center p-8">
-        <div className="max-w-2xl w-full">
-          <div className="grid grid-cols-2 gap-8 items-start">
-            <div className="flex flex-col items-start">
-              <div className="w-16 h-16 bg-error-container rounded-2xl flex items-center justify-center mb-5">
-                <Shield className="w-8 h-8 text-error" />
-              </div>
-              <h1 className="text-2xl font-bold text-error mb-2">Protection Disabled</h1>
-              <p className="text-sm text-on-surface-variant leading-relaxed mb-6">
-                The required accessibility service was turned off. Otterling cannot monitor or block apps until it is re-enabled.
-              </p>
-              <div className="p-4 bg-error-container/40 rounded-2xl border border-error/20 w-full mb-6">
-                <div className="flex items-center gap-2 text-error font-semibold text-sm mb-1">
-                  <AlertTriangle className="w-4 h-4" /> Children are unprotected
-                </div>
-                <p className="text-xs text-on-surface-variant">All rules and habits are currently bypassed.</p>
-              </div>
-              <Button variant="text" size="sm" className="w-full mt-2" onClick={() => onNavigate("Dashboard")}>
-                ← Back to Overview
-              </Button>
-            </div>
-            <div>
-              <h2 className="font-semibold text-base mb-4">How to re-enable protection</h2>
-              <div className="space-y-3">
-                {[
-                  { n: 1, title: "Open System Settings", sub: 'Tap the gear icon → "Accessibility"' },
-                  { n: 2, title: "Find \"Otterling\"", sub: "Scroll the list until you see the Otterling entry" },
-                  { n: 3, title: "Turn the toggle ON", sub: "You may need to authenticate to confirm" },
-                ].map((s) => (
-                  <div key={s.n} className="flex items-start gap-3 p-3.5 bg-surface rounded-2xl border border-outline-variant/30">
-                    <div className="w-6 h-6 rounded-full bg-primary-container flex items-center justify-center shrink-0 mt-0.5">
-                      <span className="text-xs font-bold text-primary">{s.n}</span>
-                    </div>
-                    <div>
-                      <p className="text-sm font-semibold">{s.title}</p>
-                      <p className="text-xs text-on-surface-variant mt-0.5">{s.sub}</p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
         </div>
       </div>
     </div>

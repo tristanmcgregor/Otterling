@@ -371,12 +371,25 @@ HABIT_COMPLETIONS_PATH = os.path.join(DATA_DIR, "habit_completions.json")
 HABIT_PROOFS_DIR = os.path.join(DATA_DIR, "habit_proofs")
 MAX_HABIT_PROOF_BYTES = 1_500_000
 
+# Tombstone of device_ids the guardian has explicitly removed via DELETE /dashboard-api/devices/<id>
+# (see _delete_device/_mark_device_removed) -- kept separate from device_settings.json (which no
+# longer has a record for a removed device at all) because a removed device still needs to be
+# distinguishable from one that's simply never checked in before, the next time it polls GET
+# .../settings: a never-seen device gets fresh defaults (unremarkable, first run); a removed one
+# gets {"removed": true} instead, which DashboardConfigStore.kt on the phone reads as "disable
+# everything and offer to uninstall" (see DeviceRemovalHandler.kt) rather than "here are your
+# settings". Deliberately one-way once set -- there is no dashboard "undo" for this, matching how
+# every other guardian-side protection-reducing action in this project requires deliberate,
+# hard-to-reverse action rather than something that can silently un-happen.
+REMOVED_DEVICES_PATH = os.path.join(DATA_DIR, "removed_devices.json")
+
 _state_lock = threading.Lock()
 _alerts_lock = threading.Lock()
 _settings_lock = threading.Lock()
 _pin_lock = threading.Lock()
 _habits_lock = threading.Lock()
 _habit_completions_lock = threading.Lock()
+_removed_devices_lock = threading.Lock()
 _habitshare_account_lock = threading.Lock()
 _password_override_lock = threading.Lock()
 
@@ -845,7 +858,7 @@ HABIT_ITEM_RE = re.compile(r"^/dashboard-api/habits/([A-Za-z0-9]+)(/complete|/pr
 # keeps "the guardian genuinely wants this value" distinct from "this device record's updatedAt
 # happened to be set by an unrelated edit" -- see that file's reconcile() doc comment.
 SETTINGS_PATCH_ALLOWED_KEYS = {
-    "device_name", "protections", "vpnFilter", "frictionDelay", "guardianEmail",
+    "device_name", "protections", "vpnFilter", "frictionDelay",
     "cooldownHours", "proxyFilter", "cloudFilterHost", "cloudFilterEnabled",
 }
 
@@ -913,6 +926,60 @@ def _clear_habitshare_account() -> dict:
             json.dump(record, fh, indent=2, sort_keys=True)
         os.replace(tmp_path, HABITSHARE_ACCOUNT_PATH)
         return record
+
+
+HABITSHARE_LOGIN_URL = "https://habitshare.herokuapp.com/rest-auth/login/"
+HABITSHARE_HABITS_URL = "https://habitshare.herokuapp.com/habits"
+
+
+def _fetch_habitshare_habit_names(username: str, password: str) -> list:
+    """Logs into HabitShare with the stored third-party account credentials and returns the
+    account's habit names, for the dashboard's "Import from HabitShare" button (see
+    /dashboard-api/habits/import-from-habitshare below). Mirrors HabitShareApiClient.kt's own
+    login-then-fetch flow and its defensive parsing (title -> name -> habitName field priority;
+    response may be a bare array or wrapped in results/habits/data) -- server-side so this doesn't
+    need the phone to be reachable, since the credentials are already held here (see
+    HABITSHARE_ACCOUNT_PATH's comment: this is an unrelated third-party account, not a guardian
+    secret, so the server already has full custody of it for the phone's own use).
+
+    Raises on any failure (bad credentials, network error, unexpected response shape) -- the
+    caller turns that into a clean error response, not a crash.
+    """
+    login_body = json.dumps({"username": username, "password": password}).encode("utf-8")
+    login_req = urllib.request.Request(
+        HABITSHARE_LOGIN_URL,
+        data=login_body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(login_req, timeout=15) as resp:
+        login_data = json.loads(resp.read().decode("utf-8"))
+    token = login_data.get("key") if isinstance(login_data, dict) else None
+    if not token:
+        raise ValueError("HabitShare login did not return a token")
+
+    habits_req = urllib.request.Request(
+        HABITSHARE_HABITS_URL,
+        headers={"Authorization": f"Token {token}"},
+    )
+    with urllib.request.urlopen(habits_req, timeout=15) as resp:
+        habits_data = json.loads(resp.read().decode("utf-8"))
+
+    if isinstance(habits_data, list):
+        items = habits_data
+    elif isinstance(habits_data, dict):
+        items = habits_data.get("results") or habits_data.get("habits") or habits_data.get("data") or []
+    else:
+        items = []
+
+    names = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("title") or item.get("name") or item.get("habitName")
+        if isinstance(name, str) and name.strip():
+            names.append(name.strip())
+    return names
 
 
 def _pin_verify_lockout_remaining_seconds() -> float:
@@ -1040,7 +1107,6 @@ def _default_device_settings(device_id: str = "") -> dict:
         # settings PATCH is for guardian opinions, this is a device fact the guardian only ever
         # reads (to search/pick an app for a rule), never writes directly.
         "installedApps": [],
-        "guardianEmail": "",
         # macos-only, deliberately None ("no opinion") rather than a concrete value that would
         # only coincidentally match a fresh Mac install's own defaults -- see
         # SETTINGS_PATCH_ALLOWED_KEYS's comment for why. A guardian must explicitly interact with
@@ -1098,7 +1164,9 @@ def _delete_device(device_id: str) -> bool:
     since device_id is canonicalized before storage/lookup (see DEVICE_ID_ALIASES), a deleted
     settings record won't resurrect itself from old alerts unless that device reports again.
     Returns False if device_id had no settings record (caller can still 200 -- DELETE is
-    idempotent)."""
+    idempotent). Does NOT tombstone device_id itself -- see _mark_device_removed, called
+    separately by the route handler only when this returns True, so a delete of a device_id that
+    was never actually registered doesn't tombstone a possibly-mistyped/unrelated id."""
     with _settings_lock:
         settings = _load_settings()
         if device_id not in settings:
@@ -1106,6 +1174,26 @@ def _delete_device(device_id: str) -> bool:
         del settings[device_id]
         _save_settings(settings)
         return True
+
+
+def _load_removed_devices() -> set:
+    try:
+        with open(REMOVED_DEVICES_PATH, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+            return set(data.get("device_ids", [])) if isinstance(data, dict) else set()
+    except (FileNotFoundError, json.JSONDecodeError):
+        return set()
+
+
+def _mark_device_removed(device_id: str) -> None:
+    with _removed_devices_lock:
+        removed = _load_removed_devices()
+        removed.add(device_id)
+        os.makedirs(DATA_DIR, exist_ok=True)
+        tmp_path = REMOVED_DEVICES_PATH + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as fh:
+            json.dump({"device_ids": sorted(removed)}, fh, indent=2, sort_keys=True)
+        os.replace(tmp_path, REMOVED_DEVICES_PATH)
 
 
 def _list_item_add(device_id: str, list_key: str, item: dict) -> dict:
@@ -1937,6 +2025,38 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(200, {"habits": _habits_with_completion_status()})
             return True
 
+        # Guardian-only (not in Caddy's device-bearer allowlist, same as the plain POST above) --
+        # pulls the connected HabitShare account's habit names and creates any not already in the
+        # library by name (case-insensitive), so the guardian doesn't have to retype each one to
+        # get HabitCompletionReporter.kt's name-matching working. See
+        # _fetch_habitshare_habit_names's doc for why this is safe to do server-side.
+        if path == "/dashboard-api/habits/import-from-habitshare" and method == "POST":
+            account = _load_habitshare_account()
+            username, password = account.get("username"), account.get("password")
+            if not username or not password:
+                self._send_json(400, {"error": "Connect a HabitShare account first"})
+                return True
+            try:
+                habitshare_names = _fetch_habitshare_habit_names(username, password)
+            except Exception as error:  # noqa: BLE001 -- any failure just fails the import cleanly
+                print(f"[lockprofile] HabitShare import failed: {error}", flush=True)
+                self._send_json(502, {"error": "Could not reach HabitShare -- check the connected account"})
+                return True
+            with _habits_lock:
+                habits = _load_habits()
+                existing_lower = {(h.get("name") or "").strip().lower() for h in habits}
+                imported = 0
+                for name in habitshare_names:
+                    if name.lower() in existing_lower:
+                        continue
+                    habits.append({"id": uuid.uuid4().hex, "name": name, "requiresProof": False})
+                    existing_lower.add(name.lower())
+                    imported += 1
+                if imported:
+                    _save_habits(habits)
+            self._send_json(200, {"habits": _habits_with_completion_status(), "imported": imported})
+            return True
+
         habit_match = HABIT_ITEM_RE.match(path)
         if habit_match:
             habit_id, suffix = habit_match.group(1), habit_match.group(2)
@@ -2093,11 +2213,31 @@ class Handler(BaseHTTPRequestHandler):
         parts = [p for p in (match.group(2) or "").split("/") if p]
 
         if not parts and method == "DELETE":
-            _delete_device(device_id)
+            # Android-only: tombstoning + the remote disable/uninstall signal below is
+            # DeviceRemovalHandler.kt's territory (Device Owner clearing, self-uninstall) -- macOS
+            # has no equivalent mechanism (no Device Owner concept, a completely different
+            # daemon-based enforcement model), so a Mac device_id keeps the old plain-delete
+            # behavior: settings record removed, reappears with defaults if it connects again.
+            # _detect_platform is a pure function of device_id's own shape (UUID = macos), so this
+            # still works correctly even though the settings record is already gone by this point.
+            existed = _delete_device(device_id)
+            if existed and _detect_platform(device_id) == "android":
+                # Unlike this route's old behavior, this is no longer just a bookkeeping delete:
+                # the next authenticated settings poll from this device_id gets {"removed": true}
+                # instead of defaults, which DashboardConfigStore.kt on the phone reads as
+                # "disable everything and offer to uninstall" (DeviceRemovalHandler.kt). Reuses the
+                # same synchronous FCM wake the "Poll Now" button already uses (same reasoning: at
+                # most a couple of tokens, brief blocking is fine) so this reaches the device in
+                # seconds instead of waiting out the ~15-minute poll floor.
+                _mark_device_removed(device_id)
+                _send_fcm_wake({"type": "dashboard_poll_requested"})
             self._send_json(200, {"status": "ok"})
             return True
 
         if parts == ["settings"] and method in ("GET", "PATCH"):
+            if method == "GET" and device_id in _load_removed_devices():
+                self._send_json(200, {"removed": True})
+                return True
             updates = None
             if method == "PATCH":
                 if body is None:

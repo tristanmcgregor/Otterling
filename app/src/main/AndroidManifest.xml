@@ -116,6 +116,13 @@
             android:theme="@style/Theme.Otterling" />
 
         <activity
+            android:name=".tamper.DeviceRemovedActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:theme="@style/Theme.Otterling" />
+
+        <activity
             android:name=".focus.HabitProofActivity"
             android:exported="false"
             android:excludeFromRecents="true"

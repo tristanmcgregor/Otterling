@@ -110,7 +110,6 @@ export interface DeviceSettings {
   appBudgets: AppBudget[];
   triggerWords: TriggerWord[];
   blockedApps: BlockedApp[];
-  guardianEmail: string;
   updatedAt: number | null;
   // macos-only -- null means "no opinion yet" (see lockprofile_service.py's
   // _default_device_settings comment). The dashboard UI only shows these controls when
@@ -233,6 +232,11 @@ export const api = {
   // deleting the habit itself -- see lockprofile_service.py's HABIT_PROOFS_DIR comment.
   revokeHabitCompletion: (id: string) =>
     request<{ habits: Habit[] }>(`/habits/${enc(id)}/complete`, { method: "DELETE" }),
+  // Logs into the connected HabitShare account server-side and creates a library entry (by name,
+  // skipping any already present) for each habit found there -- see lockprofile_service.py's
+  // _fetch_habitshare_habit_names for why this is safe to do without the phone being involved.
+  importHabitsFromHabitShare: () =>
+    request<{ habits: Habit[]; imported: number }>("/habits/import-from-habitshare", { method: "POST" }),
   // Browser-session-authed image fetch (not JSON) -- callers build an <img src> from this rather
   // than calling it directly; see the GET /dashboard-api/habits/<id>/proof route.
   habitProofUrl: (id: string) => `${BASE}/habits/${enc(id)}/proof`,
