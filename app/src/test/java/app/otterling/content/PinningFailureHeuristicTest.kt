@@ -38,7 +38,9 @@ class PinningFailureHeuristicTest {
 
     @Test
     fun tooLongElapsedIsNotARejection() {
-        assertFalse(PinningFailureHeuristic.looksLikeRejection(elapsedMs = 5_000, bytesFromPeer = 3_000, readCount = 2))
+        // 5_000ms is MAX_ELAPSED_MS itself -- an inclusive boundary that legitimately matches (see
+        // matchesRealCapturedRejectionShapes) -- so "too long" needs a value past it, not at it.
+        assertFalse(PinningFailureHeuristic.looksLikeRejection(elapsedMs = 5_001, bytesFromPeer = 3_000, readCount = 2))
     }
 
     @Test
