@@ -39,6 +39,13 @@ class HabitProofManager(context: Context) {
     suspend fun hasProofToday(habitName: String): Boolean =
         dao.getLog(habitName.trim(), LocalDate.now().toEpochDay()) != null
 
+    /** Path to today's already-matched proof photo for [habitName], or null if there isn't one --
+     *  used by [HabitCompletionReporter] to attach the same photo [HabitRuleManager] already
+     *  trusted locally to the server's completion report, since the server's own `requiresProof`
+     *  check (lockprofile_service.py's HABIT_PROOFS_DIR) has no way to see this local Room DB. */
+    suspend fun todaysProofPhotoPath(habitName: String): String? =
+        dao.getLog(habitName.trim(), LocalDate.now().toEpochDay())?.photoPath
+
     /** Called only once a submitted photo has already been checked to visually match the
      * reference photo (see [ImageMatcher]) -- this is the "approved" record itself. */
     suspend fun recordProof(habitName: String, photoPath: String, note: String = "") {

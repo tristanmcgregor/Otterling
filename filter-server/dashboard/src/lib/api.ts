@@ -25,12 +25,21 @@ export interface BlockedWebsite {
 }
 
 // Global, shared across every device (see lockprofile_service.py's HABITS_PATH) -- a rule on
-// ANY device can reference a habit verified on a different one. doneToday/verifiedAt are
+// ANY device can reference a habit verified on a different one. doneToday/hasProof/verifiedAt are
 // computed server-side from whichever device most recently reported this habit's completion.
+//
+// requiresProof: a completion report for this habit must include a photo (checked server-side,
+// see lockprofile_service.py's HABIT_PROOFS_DIR) -- without it, a device holding nothing but the
+// shared LOCKPROFILE_TOKEN (embedded in the shipped APK, extractable by the person being
+// filtered) could otherwise fake ANY habit done and unlock every app any rule gates on it,
+// fleet-wide, with a single request and zero evidence. hasProof reflects whether today's
+// completion actually included one.
 export interface Habit {
   id: string;
   name: string;
+  requiresProof: boolean;
   doneToday: boolean;
+  hasProof: boolean;
   verifiedAt: number | null;
 }
 
@@ -203,13 +212,25 @@ export const api = {
 
   // Global, shared across every device -- NOT scoped under /devices/<id>, see Habit's doc comment.
   getHabits: () => request<{ habits: Habit[] }>("/habits"),
-  addHabit: (name: string) =>
+  addHabit: (name: string, requiresProof = false) =>
     request<{ habits: Habit[] }>("/habits", {
       method: "POST",
-      body: JSON.stringify({ name }),
+      body: JSON.stringify({ name, requiresProof }),
     }),
   removeHabit: (id: string) =>
     request<{ habits: Habit[] }>(`/habits/${enc(id)}`, { method: "DELETE" }),
+  setHabitRequiresProof: (id: string, requiresProof: boolean) =>
+    request<{ habits: Habit[] }>(`/habits/${enc(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ requiresProof }),
+    }),
+  // Revokes just today's completion (e.g. a suspicious one spotted in the Activity Log) without
+  // deleting the habit itself -- see lockprofile_service.py's HABIT_PROOFS_DIR comment.
+  revokeHabitCompletion: (id: string) =>
+    request<{ habits: Habit[] }>(`/habits/${enc(id)}/complete`, { method: "DELETE" }),
+  // Browser-session-authed image fetch (not JSON) -- callers build an <img src> from this rather
+  // than calling it directly; see the GET /dashboard-api/habits/<id>/proof route.
+  habitProofUrl: (id: string) => `${BASE}/habits/${enc(id)}/proof`,
 
   addRule: (deviceId: string, rule: Partial<Rule>) =>
     request<{ rules: Rule[] }>(`/devices/${enc(deviceId)}/rules`, {

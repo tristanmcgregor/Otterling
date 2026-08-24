@@ -1174,14 +1174,12 @@ function SettingsScreen({
           <Card className="rounded-2xl">
             <p className="text-xs text-on-surface-variant mb-2">
               Shared across every device on this account — not per-device. A habit checked off
-              (and verified) on the phone can satisfy a rule on the Mac.
+              (and verified) on the phone can satisfy a rule on the Mac. Turn on "Requires proof"
+              for a habit and the server will reject a completion report with no photo attached —
+              without it, the device's own app-embedded token alone is enough to fake any habit
+              done and unlock whatever it gates, fleet-wide.
             </p>
-            <TagList
-              items={habits.map((h) => ({ id: h.id, label: h.doneToday ? `${h.name} ✓` : h.name }))}
-              placeholder="New habit…"
-              onAdd={(name) => api.addHabit(name).then(onHabitsChanged)}
-              onRemove={(id) => api.removeHabit(id).then(onHabitsChanged)}
-            />
+            <HabitLibraryList habits={habits} onChanged={onHabitsChanged} />
           </Card>
         </div>
 
@@ -1393,6 +1391,110 @@ function TagList({
           <Plus className="w-3.5 h-3.5" />
         </Button>
       </div>
+    </div>
+  );
+}
+
+function HabitLibraryList({ habits, onChanged }: { habits: Habit[]; onChanged: () => void }) {
+  const [draft, setDraft] = useState("");
+  const [draftRequiresProof, setDraftRequiresProof] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [viewingProofId, setViewingProofId] = useState<string | null>(null);
+
+  const submit = async () => {
+    const name = draft.trim();
+    if (!name) return;
+    setBusy(true);
+    try {
+      await api.addHabit(name, draftRequiresProof);
+      setDraft("");
+      setDraftRequiresProof(false);
+      onChanged();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="space-y-2">
+      {habits.length > 0 && (
+        <div className="space-y-1.5">
+          {habits.map((h) => (
+            <div
+              key={h.id}
+              className="flex items-center gap-2 pl-3 pr-1.5 py-1.5 rounded-xl bg-surface-variant text-sm"
+            >
+              <span className="flex-1 min-w-0 truncate">
+                {h.name}
+                {h.doneToday && <span className="text-secondary ml-1">✓</span>}
+              </span>
+              {h.doneToday && h.hasProof && (
+                <button
+                  onClick={() => setViewingProofId(h.id)}
+                  className="text-[11px] font-medium text-primary hover:underline shrink-0"
+                >
+                  View proof
+                </button>
+              )}
+              {h.doneToday && (
+                <button
+                  onClick={() => api.revokeHabitCompletion(h.id).then(onChanged)}
+                  title="Revoke today's completion"
+                  className="text-[11px] font-medium text-error hover:underline shrink-0"
+                >
+                  Revoke
+                </button>
+              )}
+              <label className="flex items-center gap-1 text-[11px] text-on-surface-variant shrink-0">
+                <input
+                  type="checkbox"
+                  checked={h.requiresProof}
+                  onChange={(e) => api.setHabitRequiresProof(h.id, e.target.checked).then(onChanged)}
+                />
+                Requires proof
+              </label>
+              <button
+                onClick={() => api.removeHabit(h.id).then(onChanged)}
+                className="w-5 h-5 rounded-full flex items-center justify-center hover:bg-error-container hover:text-error transition-colors shrink-0"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="flex items-center gap-2">
+        <input
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
+          placeholder="New habit…"
+          className="flex-1 h-9 px-3 rounded-xl border border-outline bg-surface text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+        />
+        <label className="flex items-center gap-1 text-[11px] text-on-surface-variant whitespace-nowrap">
+          <input
+            type="checkbox"
+            checked={draftRequiresProof}
+            onChange={(e) => setDraftRequiresProof(e.target.checked)}
+          />
+          Requires proof
+        </label>
+        <Button variant="tonal" size="sm" className="h-9 px-3" disabled={busy || !draft.trim()} onClick={submit}>
+          <Plus className="w-3.5 h-3.5" />
+        </Button>
+      </div>
+      {viewingProofId && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-8"
+          onClick={() => setViewingProofId(null)}
+        >
+          <img
+            src={api.habitProofUrl(viewingProofId)}
+            alt="Habit completion proof"
+            className="max-w-full max-h-full rounded-2xl shadow-xl"
+          />
+        </div>
+      )}
     </div>
   );
 }

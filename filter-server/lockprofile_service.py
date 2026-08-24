@@ -77,6 +77,8 @@ Caddy puts these behind the `/review` dashboard's Basic Auth and injects the bea
 
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import hmac
 import json
@@ -84,6 +86,7 @@ import os
 import plistlib
 import re
 import secrets
+import shutil
 import threading
 import time
 import urllib.error
@@ -299,6 +302,23 @@ GUARDIAN_PIN_PATH = os.path.join(DATA_DIR, "guardian_pin.json")
 # often (every habit check-in) than the library itself (only edited by the guardian).
 HABITS_PATH = os.path.join(DATA_DIR, "habits.json")
 HABIT_COMPLETIONS_PATH = os.path.join(DATA_DIR, "habit_completions.json")
+
+# A completion report otherwise carries NO proof at all -- POST .../complete is device-bearer
+# authenticated the same as every other low-stakes phone->server call (see Caddyfile), but that
+# bearer is embedded in the shipped APK and extractable by the same person a habit-gated app
+# block is meant to restrain. Unlike the Guardian PIN (a secret only the guardian knows, so the
+# server can just compare), "I did this habit" isn't something the server can verify from a
+# claim alone. For habits the guardian has flagged `requiresProof` (mirrors HabitProofManager.kt's
+# existing on-device photo-matching, which already gates *local* rule satisfaction the same way --
+# this extends that same guardian-configured bar to the cross-device-visible server state), the
+# completion POST must include the same photo HabitProofManager already matched against its
+# reference before calling HabitCompletionReporter -- see that class's doc comment. This doesn't
+# independently re-verify the image server-side (no image-matching pipeline here); what it does is
+# turn an invisible, instant, zero-evidence bypass into one that requires producing an actual photo
+# and leaves an audit trail the guardian can review or revoke (GET/DELETE .../proof,
+# DELETE .../complete -- all guardian-browser-session only, never device-bearer, see Caddyfile).
+HABIT_PROOFS_DIR = os.path.join(DATA_DIR, "habit_proofs")
+MAX_HABIT_PROOF_BYTES = 1_500_000
 
 _state_lock = threading.Lock()
 _alerts_lock = threading.Lock()
@@ -688,8 +708,12 @@ MAC_OWN_EXECUTABLE_NAMES = {
 }
 
 DASHBOARD_DEVICE_RE = re.compile(r"^/dashboard-api/devices/([A-Za-z0-9_.-]{1,128})((?:/.+)?)$")
-# Matches /dashboard-api/habits/<id> (DELETE) and /dashboard-api/habits/<id>/complete (POST).
-HABIT_ITEM_RE = re.compile(r"^/dashboard-api/habits/([A-Za-z0-9]+)(/complete)?$")
+# Matches /dashboard-api/habits/<id> (PATCH requiresProof, DELETE the whole habit),
+# /dashboard-api/habits/<id>/complete (POST to report done, DELETE to revoke just today's report),
+# and /dashboard-api/habits/<id>/proof (GET today's stored proof photo). The bare (no suffix) and
+# /complete forms are the only two Caddy ever lets a device bearer reach (POST /complete only) --
+# /proof and every other verb here are guardian-browser-session only, see Caddyfile.
+HABIT_ITEM_RE = re.compile(r"^/dashboard-api/habits/([A-Za-z0-9]+)(/complete|/proof)?$")
 
 # PATCH .../settings is allowlisted to these keys -- everything else in _default_device_settings
 # (rules, blockedWebsites, vpnBypassApps, appBudgets, triggerWords, blockedApps, protectedApps,
@@ -812,22 +836,30 @@ def _today_str() -> str:
     return time.strftime("%Y-%m-%d")
 
 
+def _habit_proof_path(habit_id: str, date: str) -> str:
+    return os.path.join(HABIT_PROOFS_DIR, habit_id, f"{date}.jpg")
+
+
 def _habits_with_completion_status() -> list:
-    """{id, name, doneToday, verifiedAt} for every habit in the global library -- doneToday is
-    computed by comparing the stored completion's `date` against today's server-local date, not
-    stored as its own persisted boolean (so it naturally resets at local midnight without a
-    separate daily-reset job)."""
+    """{id, name, requiresProof, doneToday, hasProof, verifiedAt} for every habit in the global
+    library -- doneToday is computed by comparing the stored completion's `date` against today's
+    server-local date, not stored as its own persisted boolean (so it naturally resets at local
+    midnight without a separate daily-reset job). requiresProof defaults to False for habits
+    created before this field existed (see HABIT_PROOFS_DIR's comment)."""
     habits = _load_habits()
     completions = _load_habit_completions()
     today = _today_str()
     result = []
     for habit in habits:
-        completion = completions.get(habit.get("id", ""))
+        habit_id = habit.get("id", "")
+        completion = completions.get(habit_id)
         done_today = bool(completion) and completion.get("date") == today
         result.append({
-            "id": habit.get("id"),
+            "id": habit_id,
             "name": habit.get("name"),
+            "requiresProof": bool(habit.get("requiresProof", False)),
             "doneToday": done_today,
+            "hasProof": bool(completion.get("hasProof")) if completion else False,
             "verifiedAt": completion.get("verifiedAt") if completion else None,
         })
     return result
@@ -1551,7 +1583,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_json(200, {"status": "ok", "filename": filename})
 
         if self.path.startswith("/dashboard-api/"):
-            body = self._read_json_body()
+            # Habit completions can carry a base64 photo (see HABIT_PROOFS_DIR) -- needs more
+            # room than every other dashboard-api POST body.
+            max_bytes = MAX_LOG_BODY_BYTES if HABIT_ITEM_RE.match(self.path) else MAX_BODY_BYTES
+            body = self._read_json_body(max_bytes)
             if self._handle_dashboard_route("POST", self.path, urllib.parse.urlparse(self.path), body):
                 return
 
@@ -1648,44 +1683,133 @@ class Handler(BaseHTTPRequestHandler):
             if not name:
                 self._send_json(400, {"error": "name required"})
                 return True
+            requires_proof = bool((body or {}).get("requiresProof", False))
             with _habits_lock:
                 habits = _load_habits()
-                habits.append({"id": uuid.uuid4().hex, "name": name})
+                habits.append({"id": uuid.uuid4().hex, "name": name, "requiresProof": requires_proof})
                 _save_habits(habits)
             self._send_json(200, {"habits": _habits_with_completion_status()})
             return True
 
         habit_match = HABIT_ITEM_RE.match(path)
         if habit_match:
-            habit_id, is_complete = habit_match.group(1), habit_match.group(2)
+            habit_id, suffix = habit_match.group(1), habit_match.group(2)
 
-            if is_complete and method == "POST":
+            # Guardian-only (never in Caddy's device-bearer allowlist, see Caddyfile): toggles
+            # whether this habit needs photo proof to satisfy a rule anywhere in the fleet -- see
+            # HABIT_PROOFS_DIR's comment.
+            if suffix is None and method == "PATCH":
+                with _habits_lock:
+                    habits = _load_habits()
+                    habit = next((h for h in habits if h.get("id") == habit_id), None)
+                    if habit is None:
+                        self._send_json(404, {"error": "no such habit"})
+                        return True
+                    if "requiresProof" in (body or {}):
+                        habit["requiresProof"] = bool(body["requiresProof"])
+                    _save_habits(habits)
+                self._send_json(200, {"habits": _habits_with_completion_status()})
+                return True
+
+            if suffix == "/complete" and method == "POST":
                 # Reported by whichever device just verified the habit (see
                 # HabitCompletionReporter.kt / the Mac equivalent once built) -- bearer-token
-                # authenticated like every other phone/mac -> server call, not gated further.
-                # `date` is the REPORTING DEVICE's own local calendar date, trusted as-is -- see
-                # _today_str's comment on why this server does no timezone conversion.
+                # authenticated like every other phone/mac -> server call. `date` is the
+                # REPORTING DEVICE's own local calendar date, trusted as-is -- see _today_str's
+                # comment on why this server does no timezone conversion.
                 date = ((body or {}).get("date") or "").strip()
                 if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date):
                     self._send_json(400, {"error": "date must be YYYY-MM-DD"})
                     return True
-                reporting_device_id = _safe_device_id(((body or {}).get("device_id") or "").strip()) or ""
                 with _habits_lock:
-                    if not any(h.get("id") == habit_id for h in _load_habits()):
-                        self._send_json(404, {"error": "no such habit"})
+                    habit = next((h for h in _load_habits() if h.get("id") == habit_id), None)
+                if habit is None:
+                    self._send_json(404, {"error": "no such habit"})
+                    return True
+                reporting_device_id = _safe_device_id(((body or {}).get("device_id") or "").strip()) or ""
+                has_proof = False
+                if habit.get("requiresProof"):
+                    # See HABIT_PROOFS_DIR's comment: this is what actually raises the bar above
+                    # "just has the shared bearer token" for a habit the guardian flagged as
+                    # needing it -- no photo, no completion, full stop.
+                    photo_b64 = (body or {}).get("photo")
+                    if not isinstance(photo_b64, str) or not photo_b64:
+                        self._send_json(400, {"error": "photo proof required for this habit"})
                         return True
+                    try:
+                        photo_bytes = base64.b64decode(photo_b64, validate=True)
+                    except (binascii.Error, ValueError):
+                        self._send_json(400, {"error": "photo must be valid base64"})
+                        return True
+                    if not photo_bytes or len(photo_bytes) > MAX_HABIT_PROOF_BYTES:
+                        self._send_json(400, {"error": "photo missing or too large"})
+                        return True
+                    proof_path = _habit_proof_path(habit_id, date)
+                    os.makedirs(os.path.dirname(proof_path), exist_ok=True)
+                    tmp_path = proof_path + ".tmp"
+                    with open(tmp_path, "wb") as fh:
+                        fh.write(photo_bytes)
+                    os.replace(tmp_path, proof_path)
+                    has_proof = True
                 with _habit_completions_lock:
                     completions = _load_habit_completions()
                     completions[habit_id] = {
                         "date": date,
                         "verifiedAt": time.time(),
                         "device_id": reporting_device_id,
+                        "hasProof": has_proof,
                     }
                     _save_habit_completions(completions)
+                # Audit trail: every completion (proof-required or not) shows up in the reporting
+                # device's Activity Log, so a guardian can catch a suspicious one even for habits
+                # they didn't mark requiresProof for -- see report_types.json's "habit_completed".
+                event = _append_alert({
+                    "device_id": reporting_device_id or "unknown-device",
+                    "type": "habit_completed",
+                    "details": f"\"{habit.get('name')}\" marked done for {date}" + (
+                        " (photo proof attached)" if has_proof else ""
+                    ),
+                    "reported_at": time.time(),
+                    "received_at": time.time(),
+                })
+                if event:
+                    _push_event(event)
                 self._send_json(200, {"status": "ok"})
                 return True
 
-            if not is_complete and method == "DELETE":
+            # Guardian-only: revoke just today's completion (e.g. a suspicious one spotted in the
+            # Activity Log) without deleting the habit itself -- see HABIT_PROOFS_DIR's comment.
+            if suffix == "/complete" and method == "DELETE":
+                with _habit_completions_lock:
+                    completions = _load_habit_completions()
+                    if completions.pop(habit_id, None) is not None:
+                        _save_habit_completions(completions)
+                for date_str in (_today_str(),):
+                    try:
+                        os.remove(_habit_proof_path(habit_id, date_str))
+                    except FileNotFoundError:
+                        pass
+                self._send_json(200, {"habits": _habits_with_completion_status()})
+                return True
+
+            # Guardian-only: today's stored proof photo for this habit, if any -- lets the
+            # guardian actually look at what was submitted, not just trust "hasProof: true".
+            if suffix == "/proof" and method == "GET":
+                proof_path = _habit_proof_path(habit_id, _today_str())
+                try:
+                    with open(proof_path, "rb") as fh:
+                        photo_bytes = fh.read()
+                except FileNotFoundError:
+                    self._send_json(404, {"error": "no proof for today"})
+                    return True
+                self.send_response(200)
+                self.send_header("Content-Type", "image/jpeg")
+                self.send_header("Content-Length", str(len(photo_bytes)))
+                self.end_headers()
+                self.wfile.write(photo_bytes)
+                return True
+
+            if suffix is None and method == "DELETE":
                 with _habits_lock:
                     habits = [h for h in _load_habits() if h.get("id") != habit_id]
                     _save_habits(habits)
@@ -1693,6 +1817,7 @@ class Handler(BaseHTTPRequestHandler):
                     completions = _load_habit_completions()
                     completions.pop(habit_id, None)
                     _save_habit_completions(completions)
+                shutil.rmtree(os.path.join(HABIT_PROOFS_DIR, habit_id), ignore_errors=True)
                 self._send_json(200, {"habits": _habits_with_completion_status()})
                 return True
 
