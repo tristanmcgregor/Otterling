@@ -36,6 +36,15 @@
 		root * /srv/updates
 		file_server
 	}
+	# Accumulated AI-classified-bad-domains list (see dns_classify_mux.py's _PersistedBadDomains) --
+	# fetched daily by the Android app's DomainBlocklistManager alongside its two public sources, so
+	# domains this deployment has already confirmed bad stay blocked even during a full outage of
+	# this filter-server host. No auth: same trust level as those public blocklist sources -- the
+	# data is "domains already judged bad," not private browsing history.
+	handle_path /filter-lists/* {
+		root * /srv/filter-lists
+		file_server
+	}
 
 	# Lock-profile provisioning + tamper-report ingestion (see lockprofile_service.py). Its own
 	# container publishes to loopback only (see docker-compose.yml); Caddy is the only path in.
@@ -216,6 +225,15 @@ http://192.168.0.254 {
 	}
 	handle_path /updates/* {
 		root * /srv/updates
+		file_server
+	}
+	# Accumulated AI-classified-bad-domains list (see dns_classify_mux.py's _PersistedBadDomains) --
+	# fetched daily by the Android app's DomainBlocklistManager alongside its two public sources, so
+	# domains this deployment has already confirmed bad stay blocked even during a full outage of
+	# this filter-server host. No auth: same trust level as those public blocklist sources -- the
+	# data is "domains already judged bad," not private browsing history.
+	handle_path /filter-lists/* {
+		root * /srv/filter-lists
 		file_server
 	}
 

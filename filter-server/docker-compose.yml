@@ -133,6 +133,14 @@ services:
       - ./dns_classify_mux.py:/opt/otterling/dns_classify_mux.py:ro
       - ./ai_classifier.py:/opt/otterling/ai_classifier.py:ro
       - ./domain_blocklist.py:/opt/otterling/domain_blocklist.py:ro
+      # Read-write: dns_classify_mux.py's _PersistedBadDomains appends every AI-BLOCKED domain here
+      # so it survives a container restart and can be synced to the Android app (see the `updates`
+      # service's read-only mount of this same host directory, served at /filter-lists/*). This
+      # container has no `USER` directive in dns-classifier.Dockerfile (runs as root for port 53),
+      # so it can write here regardless of the host directory's ownership; ./classified-domains-data
+      # must exist on the host (created automatically by Docker on first `up` if absent, as root:root
+      # 0755, which is sufficient for Caddy's container to traverse and read the file inside).
+      - ./classified-domains-data:/data/classified-domains
     environment:
       # Same subscription OAuth token as mitm_nsfw_addon.py's classifier -- see its docker-compose
       # comment for why ANTHROPIC_API_KEY is deliberately NOT also set here. Fails open (no block,
@@ -242,6 +250,9 @@ services:
       # Same standalone-login-page pattern as dashboard-login above, for /review et al -- see
       # Caddyfile's /review-auth/* + forward_auth.
       - ./review-login:/srv/review-login:ro
+      # Read-only mirror of dns-classifier's write-side mount above -- serves the accumulated
+      # AI-classified-bad-domains list to the Android app at /filter-lists/* (see Caddyfile).
+      - ./classified-domains-data:/srv/filter-lists:ro
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - ./caddy-data:/data
       - ./caddy-config:/config

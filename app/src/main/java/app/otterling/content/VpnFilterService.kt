@@ -499,15 +499,20 @@ class VpnFilterService : VpnService() {
     /**
      * Forwards a non-locally-blocked query to the cloud filter first (the Canopy-style category
      * filter is the primary decision-maker for everything the local list doesn't already know
-     * about), falling back to [UPSTREAM_DNS] only if the cloud filter is unconfigured or
-     * unreachable -- so a cloud outage degrades to "unfiltered beyond the local adult list"
-     * instead of "no DNS at all".
+     * about). Two different fallbacks depending on *why* the cloud filter isn't answering: if it's
+     * unconfigured/deliberately disabled by the Guardian, [UPSTREAM_DNS] (permissive) is the right
+     * choice -- that's an intentional policy decision, not a fault. If it's enabled but
+     * unreachable (a real outage), fall back to [FAMILY_DNS] (stricter) instead -- the device is
+     * about to lose the AI/page-content-aware cloud filter's nuance entirely, so failing toward
+     * MORE restrictive during that window is the safer default, same "assume unknown = discourage"
+     * philosophy as the `useStrictDns` branch in [handleDnsPacket].
      */
     private fun forwardQuery(queryBytes: ByteArray, cloudFilterSettings: CloudFilterSettings): ByteArray? {
         if (cloudFilterSettings.isEnabled()) {
             val cloudResponse = forwardToHost(queryBytes, cloudFilterSettings.host(), cloudFilterSettings.port())
             if (cloudResponse != null) return cloudResponse
-            Log.w(TAG, "Cloud filter unreachable -- falling back to last-resort upstream")
+            Log.w(TAG, "Cloud filter unreachable -- falling back to stricter Family DNS")
+            return forwardToHost(queryBytes, FAMILY_DNS, DNS_PORT)
         }
         return forwardToHost(queryBytes, UPSTREAM_DNS, DNS_PORT)
     }

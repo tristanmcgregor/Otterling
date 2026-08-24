@@ -17,6 +17,7 @@ class DomainBlocklistManager(private val context: Context) {
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     private val blocklistFile = File(context.filesDir, "blocked_domains.txt")
     private val customBlocklist = CustomBlocklistManager(context)
+    private val cloudFilterSettings = CloudFilterSettings(context)
 
     @Volatile
     private var cachedDomains: Set<String>? = null
@@ -50,6 +51,21 @@ class DomainBlocklistManager(private val context: Context) {
     }
 
     /**
+     * The Guardian's own deployed filter-server also serves an accumulated list of every domain
+     * its AI classifier has judged bad (see `filter-server/dns_classify_mux.py`'s
+     * `_PersistedBadDomains`) -- fetched here alongside the two public sources so those domains
+     * stay blocked even during a full filter-server outage (see `VpnFilterService.forwardQuery()`,
+     * whose only other fallback during an outage is a public resolver). Deliberately NOT folded
+     * into [sourceUrls]/[setSourceUrls] (which back a Guardian-configurable list surfaced in
+     * Settings) -- this URL is derived automatically from the configured cloud filter host, not
+     * something the Guardian explicitly added and should be able to remove.
+     */
+    private fun classifiedDomainsUrl(): String? {
+        val host = cloudFilterSettings.host().trim()
+        return if (host.isNotEmpty()) "https://$host/filter-lists/classified-bad-domains.txt" else null
+    }
+
+    /**
      * Downloads and parses the configured hosts-format blocklist(s). Blocking -- call off the main thread.
      *
      * These sources are third-party lists that legitimately change daily, so (unlike the app's own
@@ -62,8 +78,8 @@ class DomainBlocklistManager(private val context: Context) {
      * was already on disk, rather than silently trusted.
      */
     fun refresh(): Result<Int> = runCatching {
-        val domains = HashSet<String>()
-        sourceUrls().forEach { url -> downloadHostsFile(url, domains) }
+        val urls = combineSourceUrls(sourceUrls(), classifiedDomainsUrl())
+        val domains = fetchAllSources(urls, ::downloadHostsFile)
         // A source returning HTTP 200 with a body that doesn't parse to any hosts-file entries
         // (format change, captive portal page, empty response, etc.) isn't an exception, so it
         // used to sail through to writeText() below and silently replace a real blocklist with
@@ -138,5 +154,34 @@ class DomainBlocklistManager(private val context: Context) {
         const val DEFAULT_SOURCE_2 =
             "https://raw.githubusercontent.com/blocklistproject/Lists/master/porn.txt"
         val DEFAULT_SOURCES = setOf(DEFAULT_SOURCE, DEFAULT_SOURCE_2)
+
+        /**
+         * Unions the auto-derived classified-domains URL (if any) onto the Guardian-configured
+         * source list, without mutating either -- kept as a pure, [Context]-free function
+         * (unlike the rest of this class) so it's directly unit-testable. See
+         * [classifiedDomainsUrl]'s own doc for why this union happens here, not inside
+         * [sourceUrls]/[setSourceUrls] themselves.
+         */
+        internal fun combineSourceUrls(sourceUrls: List<String>, classifiedDomainsUrl: String?): List<String> =
+            sourceUrls + listOfNotNull(classifiedDomainsUrl)
+
+        /**
+         * Calls [fetch] once per URL in [urls], collecting whatever every *successful* call adds
+         * to the shared result set and logging (never propagating) an individual failure -- so
+         * one bad source (network blip, timeout, 5xx) can't discard what the other sources already
+         * fetched. Previously this loop had no per-URL try/catch, so any single source's exception
+         * escaped straight through [refresh]'s outer `runCatching`, aborting the *entire* refresh.
+         * That mattered less when both sources were reliable public CDNs; it matters much more now
+         * that [classifiedDomainsUrl] adds a less-reliable home-server URL into the same list.
+         * Pure aside from calling [fetch] itself, so it's unit-testable with fake fetch functions.
+         */
+        internal fun fetchAllSources(urls: List<String>, fetch: (String, MutableSet<String>) -> Unit): Set<String> {
+            val domains = HashSet<String>()
+            urls.forEach { url ->
+                runCatching { fetch(url, domains) }
+                    .onFailure { Log.w(TAG, "Failed to download blocklist source $url", it) }
+            }
+            return domains
+        }
     }
 }

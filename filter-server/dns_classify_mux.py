@@ -55,6 +55,14 @@ LISTEN_PORT = int(os.environ.get("DNS_MUX_LISTEN_PORT", "53"))
 UPSTREAM_DNS_HOST = os.environ.get("UPSTREAM_DNS_HOST", "adguardhome")
 UPSTREAM_DNS_PORT = int(os.environ.get("UPSTREAM_DNS_PORT", "53"))
 
+# Durable record of every domain this deployment's AI classifier has ever judged BLOCKED --
+# volume-mounted read-write here and read-only into the `updates` (Caddy) container, which serves
+# it to the Android app at /filter-lists/classified-bad-domains.txt. See _PersistedBadDomains.
+CLASSIFIED_BAD_DOMAINS_PATH = os.environ.get(
+    "CLASSIFIED_BAD_DOMAINS_PATH", "/data/classified-domains/classified-bad-domains.txt"
+)
+CLASSIFIED_BAD_DOMAINS_MAX_ENTRIES = 50_000
+
 CLASSIFY_CACHE_TTL_SECONDS = 24 * 60 * 60
 HOMEPAGE_FETCH_TIMEOUT_SECONDS = 5
 # Overall budget for fetch + AI classification together (ai_classifier's own call already caps at
@@ -145,6 +153,113 @@ class _ClassifyCache:
         self._entries[domain] = (verdict, time.time() + CLASSIFY_CACHE_TTL_SECONDS)
 
 
+class _PersistedBadDomains:
+    """Durable record of every domain this deployment's AI classifier has ever judged BLOCKED
+    (verdict is True in _handle_query below -- never the allowed/False verdict), so the Android
+    app's daily DomainBlocklistManager.refresh() can sync them down and keep blocking previously-
+    confirmed-bad domains even during a full filter-server outage (see VpnFilterService.kt's
+    forwardQuery(), which otherwise has nothing but a public resolver to fall back to for domains
+    not already on the static StevenBlack/BlocklistProject lists).
+
+    Deliberately NOT the same TTL/lifecycle as _ClassifyCache above: that cache exists purely to
+    avoid re-running an expensive AI classification on every repeat query, and 24h is tuned for
+    that cost-control purpose. A domain that's actually bad doesn't stop being bad after 24h, so
+    this store has no expiry -- only a generous entry cap as a safety valve against unbounded
+    growth over months/years, evicting the oldest-classified entries first if that cap is ever hit.
+
+    File format matches the same hosts-file convention domain_blocklist.py's own sources use
+    (`0.0.0.0 <domain>`), plus a third whitespace-separated column (unix timestamp) -- the Android
+    parser (DomainBlocklistManager.downloadHostsFile) only ever reads the first two columns, so
+    this needs zero changes on the Android side to consume.
+    """
+
+    def __init__(self, path: str):
+        self._path = path
+        self._lock = threading.Lock()
+        self._domains: dict[str, float] = {}  # domain -> first-classified unix timestamp
+        self._load()
+
+    def _load(self):
+        try:
+            with open(self._path, "r", encoding="utf-8") as handle:
+                lines = handle.readlines()
+        except FileNotFoundError:
+            return
+        except OSError as error:
+            log.warning("failed to load persisted bad-domains file %s: %s", self._path, error)
+            return
+        loaded: dict[str, float] = {}
+        for raw_line in lines:
+            line = raw_line.strip()
+            if not line:
+                continue
+            parts = line.split()
+            if len(parts) < 2 or parts[0] != "0.0.0.0":
+                continue  # malformed line -- skip it, don't fail the whole load
+            domain = parts[1].lower().rstrip(".")
+            if not domain:
+                continue
+            try:
+                classified_at = float(parts[2]) if len(parts) >= 3 else time.time()
+            except ValueError:
+                classified_at = time.time()
+            loaded[domain] = classified_at
+        with self._lock:
+            self._domains = loaded
+        log.info("loaded %d persisted bad domain(s) from %s", len(loaded), self._path)
+
+    def contains(self, domain: str) -> bool:
+        with self._lock:
+            return domain in self._domains
+
+    def record(self, domain: str):
+        """Appends `domain` if it's not already recorded -- a no-op past the first call for a
+        given domain, so calling this once per BLOCKED verdict (even though _ClassifyCache already
+        suppresses most repeat classifications for 24h) is cheap and safe."""
+        with self._lock:
+            if domain in self._domains:
+                return
+            now = time.time()
+            self._domains[domain] = now
+            entry_count = len(self._domains)
+            entries_snapshot = dict(self._domains) if entry_count > CLASSIFIED_BAD_DOMAINS_MAX_ENTRIES else None
+        self._append_line(domain, now)
+        if entries_snapshot is not None:
+            self._evict_oldest(entries_snapshot)
+
+    def _append_line(self, domain: str, classified_at: float):
+        try:
+            os.makedirs(os.path.dirname(self._path), exist_ok=True)
+            with open(self._path, "a", encoding="utf-8") as handle:
+                handle.write(f"0.0.0.0 {domain} {int(classified_at)}\n")
+            os.chmod(self._path, 0o644)
+        except OSError as error:
+            log.warning("failed to persist bad domain %s: %s", domain, error)
+
+    def _evict_oldest(self, entries: dict[str, float]):
+        """Rare path (only once CLASSIFIED_BAD_DOMAINS_MAX_ENTRIES is exceeded) -- rewrites the
+        whole file keeping only the most-recently-classified entries, rather than maintaining a
+        more complex bounded structure for a case that essentially never triggers in practice."""
+        kept = dict(
+            sorted(entries.items(), key=lambda item: item[1], reverse=True)[:CLASSIFIED_BAD_DOMAINS_MAX_ENTRIES]
+        )
+        with self._lock:
+            self._domains = kept
+        try:
+            with open(self._path, "w", encoding="utf-8") as handle:
+                for domain, classified_at in kept.items():
+                    handle.write(f"0.0.0.0 {domain} {int(classified_at)}\n")
+            os.chmod(self._path, 0o644)
+        except OSError as error:
+            log.warning("failed to rewrite persisted bad-domains file during eviction: %s", error)
+            return
+        log.info(
+            "persisted bad-domains file exceeded %d entries -- evicted down to newest %d",
+            CLASSIFIED_BAD_DOMAINS_MAX_ENTRIES,
+            len(kept),
+        )
+
+
 def _resolve_public_ipv4(domain: str) -> str:
     """Resolves `domain` and raises if it points at anything other than a public IPv4 address.
 
@@ -230,9 +345,10 @@ async def _query_upstream(loop: asyncio.AbstractEventLoop, data: bytes) -> bytes
 
 
 class _DnsMuxProtocol(asyncio.DatagramProtocol):
-    def __init__(self, domains: domain_blocklist.DomainList, cache: _ClassifyCache):
+    def __init__(self, domains: domain_blocklist.DomainList, cache: _ClassifyCache, persisted: _PersistedBadDomains):
         self.domains = domains
         self.cache = cache
+        self.persisted = persisted
         self.transport: asyncio.DatagramTransport | None = None
         # De-dupes concurrent classification requests for the same not-yet-cached domain --
         # without this, N simultaneous queries for a brand-new domain (e.g. several analytics/CDN
@@ -274,6 +390,10 @@ class _DnsMuxProtocol(asyncio.DatagramProtocol):
             self.transport.sendto(build_blocked_response(data), addr)
             return
 
+        if self.persisted.contains(domain):
+            self.transport.sendto(build_blocked_response(data), addr)
+            return
+
         cached = self.cache.get(domain)
         if cached is True:
             self.transport.sendto(build_blocked_response(data), addr)
@@ -286,6 +406,7 @@ class _DnsMuxProtocol(asyncio.DatagramProtocol):
 
         if verdict is True:
             self.cache.set(domain, True)
+            self.persisted.record(domain)
             log.info("AI classifier: BLOCKED %s", domain)
             self.transport.sendto(build_blocked_response(data), addr)
             return
@@ -344,10 +465,11 @@ async def main():
     domains = domain_blocklist.DomainList()
     domains.refresh_if_stale()
     cache = _ClassifyCache()
+    persisted = _PersistedBadDomains(CLASSIFIED_BAD_DOMAINS_PATH)
 
     loop = asyncio.get_running_loop()
     transport, _protocol = await loop.create_datagram_endpoint(
-        lambda: _DnsMuxProtocol(domains, cache),
+        lambda: _DnsMuxProtocol(domains, cache, persisted),
         local_addr=(LISTEN_HOST, LISTEN_PORT),
     )
     log.info(
