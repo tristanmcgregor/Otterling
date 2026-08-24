@@ -17,7 +17,7 @@ import org.json.JSONObject
  * to enforce dashboard-driven config). `GET
  * /dashboard-api/devices/<deviceId>/settings`, same [MacTamperPollSettings.token] bearer every
  * other phone->server call already uses, since Caddy injects the same `LOCKPROFILE_TOKEN` for
- * `/dashboard-api/*` server-side (see that plan doc's "Current state" section).
+ * every `/dashboard-api/` route server-side (see that plan doc's "Current state" section).
  *
  * [deviceId] is [Settings.Secure.ANDROID_ID], matching [app.otterling.monitoring.DeviceLogUploader]'s
  * existing pattern -- the plan's decision #4 requires one consistent device_id across every
