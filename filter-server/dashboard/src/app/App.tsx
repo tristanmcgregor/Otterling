@@ -874,7 +874,7 @@ function SettingsScreen({
         </p>
       </div>
 
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-2 gap-4 items-start">
         {/* Device name */}
         <div className="space-y-3 col-span-2">
           <SectionLabel>Device</SectionLabel>
@@ -1761,30 +1761,32 @@ function AppBudgetList({
           ))}
         </div>
       )}
-      <div className="flex items-center gap-2">
+      <div className="space-y-2">
         <input
           value={appId}
           onChange={(e) => setAppId(e.target.value)}
           placeholder="com.example.app"
-          className="flex-1 min-w-0 h-9 px-3 rounded-xl border border-outline bg-surface text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+          className="w-full h-9 px-3 rounded-xl border border-outline bg-surface text-sm focus:outline-none focus:ring-2 focus:ring-primary"
         />
-        <input
-          value={appName}
-          onChange={(e) => setAppName(e.target.value)}
-          placeholder="Display name (optional)"
-          className="flex-1 min-w-0 h-9 px-3 rounded-xl border border-outline bg-surface text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-        />
-        <input
-          type="number"
-          min={1}
-          value={minutes}
-          onChange={(e) => setMinutes(e.target.value)}
-          placeholder="min/day"
-          className="w-20 shrink-0 h-9 px-3 rounded-xl border border-outline bg-surface text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-        />
-        <Button variant="tonal" size="sm" className="h-9 px-3 shrink-0" disabled={busy || !appId.trim()} onClick={submit}>
-          <Plus className="w-3.5 h-3.5" />
-        </Button>
+        <div className="flex items-center gap-2">
+          <input
+            value={appName}
+            onChange={(e) => setAppName(e.target.value)}
+            placeholder="Display name (optional)"
+            className="flex-1 min-w-0 h-9 px-3 rounded-xl border border-outline bg-surface text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+          />
+          <input
+            type="number"
+            min={1}
+            value={minutes}
+            onChange={(e) => setMinutes(e.target.value)}
+            placeholder="min/day"
+            className="w-24 shrink-0 h-9 px-3 rounded-xl border border-outline bg-surface text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+          />
+          <Button variant="tonal" size="sm" className="h-9 px-3 shrink-0" disabled={busy || !appId.trim()} onClick={submit}>
+            <Plus className="w-3.5 h-3.5" />
+          </Button>
+        </div>
       </div>
     </div>
   );
@@ -1976,7 +1978,19 @@ function HabitRuleWizard({
     { n: 3, label: "Set Schedule", sub: "When rule applies" },
   ];
 
-  const filteredApps = COMMON_APPS.filter((a) => a.name.toLowerCase().includes(appQuery.toLowerCase()));
+  // Real installed apps this device reported (see api.ts's DeviceSettings.installedApps doc) --
+  // preferred over the hardcoded COMMON_APPS fallback whenever the device has actually synced any,
+  // since picking one of these fills in the exact id too, not just the display name. Once real
+  // data exists, COMMON_APPS stops being shown at all -- it's a bootstrap for a device that
+  // hasn't synced yet, not meant to be mixed in alongside real search results.
+  const installedApps = settings?.installedApps ?? [];
+  const hasInstalledApps = installedApps.length > 0;
+  const query = appQuery.trim().toLowerCase();
+  const filteredInstalled = query
+    ? installedApps.filter((a) => a.name.toLowerCase().includes(query) || a.id.toLowerCase().includes(query))
+    : installedApps;
+  const filteredCommon = COMMON_APPS.filter((a) => a.name.toLowerCase().includes(query));
+  const appResults = hasInstalledApps ? filteredInstalled : filteredCommon;
   const isMac = settings?.platform === "macos";
 
   const toggleHabit = (id: string) =>
@@ -2059,9 +2073,56 @@ function HabitRuleWizard({
                 type="text"
                 value={appQuery}
                 onChange={(e) => setAppQuery(e.target.value)}
-                placeholder="Search or type a custom app name…"
+                placeholder={hasInstalledApps ? `Search apps installed on ${settings?.device_name || deviceId}…` : "Search or type a custom app name…"}
                 className="w-full h-11 px-4 rounded-xl border border-outline bg-surface text-sm focus:outline-none focus:ring-2 focus:ring-primary"
               />
+              <div className="grid grid-cols-2 gap-2">
+                {hasInstalledApps ? (
+                  filteredInstalled.slice(0, 40).map((app) => (
+                    <button
+                      key={app.id}
+                      onClick={() => { setSelectedApp(app.name); setAppId(app.id); setStep(2); }}
+                      className={cn(
+                        "flex items-center gap-3 p-3.5 rounded-xl border transition-all text-left min-w-0",
+                        appId === app.id ? "border-primary bg-primary/5" : "border-outline-variant/40 hover:bg-surface-variant"
+                      )}
+                    >
+                      <div className="w-9 h-9 rounded-lg flex items-center justify-center text-xs font-bold bg-primary/10 text-primary shrink-0">
+                        {app.name.slice(0, 2).toUpperCase()}
+                      </div>
+                      <div className="min-w-0">
+                        <p className="font-medium text-sm truncate">{app.name}</p>
+                        <p className="text-[11px] text-on-surface-variant truncate">{app.id}</p>
+                      </div>
+                    </button>
+                  ))
+                ) : (
+                  filteredCommon.map((app) => (
+                    <button
+                      key={app.name}
+                      onClick={() => { setSelectedApp(app.name); setStep(2); }}
+                      className={cn(
+                        "flex items-center gap-3 p-3.5 rounded-xl border transition-all text-left",
+                        selectedApp === app.name ? "border-primary bg-primary/5" : "border-outline-variant/40 hover:bg-surface-variant"
+                      )}
+                    >
+                      <div className={cn("w-9 h-9 rounded-lg flex items-center justify-center text-xs font-bold", app.color)}>
+                        {app.name.slice(0, 2)}
+                      </div>
+                      <span className="font-medium text-sm">{app.name}</span>
+                    </button>
+                  ))
+                )}
+                {query && appResults.length === 0 && (
+                  <button
+                    onClick={() => { setSelectedApp(appQuery.trim()); setStep(2); }}
+                    className="flex items-center gap-3 p-3.5 rounded-xl border border-dashed border-outline-variant/60 hover:bg-surface-variant transition-all text-left col-span-2"
+                  >
+                    <Plus className="w-4 h-4 text-primary" />
+                    <span className="font-medium text-sm">Use "{appQuery.trim()}"</span>
+                  </button>
+                )}
+              </div>
               <div>
                 <label className="text-sm font-semibold block mb-1.5">
                   {isMac ? "Executable name" : "Android package name"}
@@ -2074,44 +2135,24 @@ function HabitRuleWizard({
                   className="w-full h-11 px-4 rounded-xl border border-outline bg-surface text-sm focus:outline-none focus:ring-2 focus:ring-primary"
                 />
                 <p className="text-xs text-on-surface-variant mt-1.5">
-                  {isMac ? (
+                  {hasInstalledApps ? (
+                    "Filled in automatically when you pick a search result above — only edit this if you need to target something not in that list."
+                  ) : isMac ? (
                     <>
                       The exact process/executable name as it appears in Activity Monitor (e.g.{" "}
                       <code>Steam</code>) — not the app's display name or bundle identifier.
+                      {" "}This device hasn't reported its installed apps yet, so search above only
+                      matches common apps.
                     </>
                   ) : (
                     <>
                       The exact Android package name (e.g. <code>com.zhiliaoapp.musically</code>) — the phone matches on
                       this literally, not the display name above.
+                      {" "}This device hasn't reported its installed apps yet, so search above only
+                      matches common apps.
                     </>
                   )}
                 </p>
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                {filteredApps.map((app) => (
-                  <button
-                    key={app.name}
-                    onClick={() => { setSelectedApp(app.name); setStep(2); }}
-                    className={cn(
-                      "flex items-center gap-3 p-3.5 rounded-xl border transition-all text-left",
-                      selectedApp === app.name ? "border-primary bg-primary/5" : "border-outline-variant/40 hover:bg-surface-variant"
-                    )}
-                  >
-                    <div className={cn("w-9 h-9 rounded-lg flex items-center justify-center text-xs font-bold", app.color)}>
-                      {app.name.slice(0, 2)}
-                    </div>
-                    <span className="font-medium text-sm">{app.name}</span>
-                  </button>
-                ))}
-                {appQuery.trim() && filteredApps.length === 0 && (
-                  <button
-                    onClick={() => { setSelectedApp(appQuery.trim()); setStep(2); }}
-                    className="flex items-center gap-3 p-3.5 rounded-xl border border-dashed border-outline-variant/60 hover:bg-surface-variant transition-all text-left col-span-2"
-                  >
-                    <Plus className="w-4 h-4 text-primary" />
-                    <span className="font-medium text-sm">Use "{appQuery.trim()}"</span>
-                  </button>
-                )}
               </div>
             </div>
           )}

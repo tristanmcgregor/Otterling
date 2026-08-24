@@ -121,6 +121,11 @@ export interface DeviceSettings {
   proxyFilter: { enabled: boolean; forceViaFirewall: boolean } | null;
   cloudFilterHost: string | null;
   cloudFilterEnabled: boolean | null;
+  // Self-reported by the device (see lockprofile_service.py's installed-apps route and Android's
+  // InstalledAppsReporter.kt / macOS's InstalledAppScanner.swift) -- id is a package name
+  // (Android) or executable name (macOS), matching what blockedApps/rules/etc. expect. Empty
+  // until the device's next sync cycle after this feature shipped, or if it's never synced at all.
+  installedApps: { id: string; name: string }[];
 }
 
 export interface DeviceSummary {

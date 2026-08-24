@@ -696,6 +696,34 @@ def _safe_device_id(raw: str) -> str | None:
     return _canonicalize_device_id(raw)
 
 
+# A phone can report ~a few hundred entries (every installed package); a Mac's /Applications is
+# usually much smaller. Cap well above either so a legitimate device is never truncated, but not
+# unbounded -- a malformed or hostile report shouldn't be able to grow device_settings.json
+# without limit.
+MAX_INSTALLED_APPS = 2000
+MAX_INSTALLED_APP_FIELD_LENGTH = 200
+
+
+def _sanitize_installed_apps(raw: list) -> list:
+    """Validates and caps a device's self-reported installed-apps list -- see the POST
+    .../installed-apps route. Silently drops malformed entries rather than rejecting the whole
+    report, since one bad entry in a list of hundreds shouldn't lose every good one."""
+    result = []
+    seen_ids = set()
+    for entry in raw:
+        if len(result) >= MAX_INSTALLED_APPS:
+            break
+        if not isinstance(entry, dict):
+            continue
+        app_id = str(entry.get("id", "")).strip()[:MAX_INSTALLED_APP_FIELD_LENGTH]
+        name = str(entry.get("name", "")).strip()[:MAX_INSTALLED_APP_FIELD_LENGTH]
+        if not app_id or not name or app_id in seen_ids:
+            continue
+        seen_ids.add(app_id)
+        result.append({"id": app_id, "name": name})
+    return result
+
+
 def _store_device_log(device_id: str, logs: str) -> str:
     """Writes `logs` to a new timestamped file under LOGS_DIR/<device_id>/, then prunes to the
     newest MAX_LOG_FILES_PER_DEVICE files for that device so a device stuck retrying uploads can't
@@ -1007,6 +1035,11 @@ def _default_device_settings(device_id: str = "") -> dict:
         "triggerWords": [],
         "blockedApps": [],
         "protectedApps": [],
+        # Reported by the device itself (POST .../installed-apps), NOT guardian-authored -- see
+        # that route's comment. Deliberately not in SETTINGS_PATCH_ALLOWED_KEYS: the generic
+        # settings PATCH is for guardian opinions, this is a device fact the guardian only ever
+        # reads (to search/pick an app for a rule), never writes directly.
+        "installedApps": [],
         "guardianEmail": "",
         # macos-only, deliberately None ("no opinion") rather than a concrete value that would
         # only coincidentally match a fresh Mac install's own defaults -- see
@@ -2077,6 +2110,23 @@ class Handler(BaseHTTPRequestHandler):
             # platform is computed, not stored -- see _detect_platform's doc comment. Lets the
             # dashboard show/hide Android-only sections (most of this record) per selected device.
             self._send_json(200, {**record, "platform": _detect_platform(device_id)})
+            return True
+
+        # Device-reported: what's actually installed on this phone/Mac, so the dashboard's Habit
+        # Rule Wizard can search real apps instead of a hardcoded common-apps list or requiring
+        # the guardian to type an exact package/executable name from memory. Device-bearer only
+        # (see Caddyfile's @dashboardApiDevicePost) -- a guardian never writes this directly, only
+        # ever reads it back via GET .../settings. Wholesale-replaces the list each report rather
+        # than merging, since a report is a full snapshot of what's currently installed (an
+        # uninstalled app should disappear, not linger forever).
+        if parts == ["installed-apps"] and method == "POST":
+            apps = (body or {}).get("apps")
+            if not isinstance(apps, list):
+                self._send_json(400, {"error": "apps must be a list"})
+                return True
+            sanitized = _sanitize_installed_apps(apps)
+            record = _device_settings(device_id, {"installedApps": sanitized})
+            self._send_json(200, {"installedApps": record.get("installedApps", [])})
             return True
 
         if parts == ["activity"] and method == "GET":

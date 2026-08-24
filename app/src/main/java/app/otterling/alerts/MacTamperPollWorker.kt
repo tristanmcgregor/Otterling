@@ -13,6 +13,7 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import app.otterling.content.CloudFilterSettings
 import app.otterling.content.DashboardConfigStore
+import app.otterling.content.InstalledAppsReporter
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.TimeUnit
@@ -57,6 +58,9 @@ class MacTamperPollWorker(context: Context, params: WorkerParameters) : Coroutin
         // ~5-minute evaluation cadence (HabitShareSyncManager), so this just needs to stay
         // reasonably fresh, not be triggered in lockstep with it.
         DashboardConfigStore(applicationContext).refreshGlobalHabits()
+        // Same best-effort piggyback -- lets the dashboard's Habit Rule Wizard search this
+        // phone's real installed apps. Changes rarely, so once per ~15-minute cycle is plenty.
+        InstalledAppsReporter(applicationContext).report()
         val sinceId = settings.lastSeenAlertId()
         try {
             val response = httpGet("https://$host/alerts/poll?since_id=$sinceId", settings.token())

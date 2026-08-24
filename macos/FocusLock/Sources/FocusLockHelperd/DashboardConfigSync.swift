@@ -132,6 +132,50 @@ enum DashboardConfigSync {
         }
     }
 
+    /// Reports this Mac's installed applications to `POST
+    /// /dashboard-api/devices/<device_id>/installed-apps` (see lockprofile_service.py's route
+    /// comment and Android's `InstalledAppsReporter.kt`, the equivalent for that platform) so the
+    /// dashboard's Habit Rule Wizard can search real installed apps instead of requiring the
+    /// guardian to type an exact executable name from memory. `id` here is the bundle's
+    /// `CFBundleExecutable` -- the same executable-name string `AppBlockEnforcer`/
+    /// `RuleBlockEnforcer` match running processes against -- not the bundle identifier or
+    /// display name, so a rule created by picking a dashboard search result actually matches.
+    /// Wholesale-replaces the server's copy on every report, same as the Android side. No local
+    /// state to cache (unlike `fetch`/`fetchGlobalHabits` above) -- this is purely an outbound
+    /// report, so it takes no `StateStore`.
+    static func reportInstalledApps() {
+        let host = nonEmpty(readTrimmed(FocusLockConstants.lockProfileHostPath))
+            ?? FocusLockConstants.defaultLockProfileHost
+        let token = nonEmpty(readTrimmed(FocusLockConstants.lockProfileTokenPath))
+            ?? FocusLockConstants.defaultLockProfileToken
+        guard !host.isEmpty, !token.isEmpty,
+              let deviceID = TamperReporter.deviceID(), !deviceID.isEmpty,
+              let url = URL(string: "https://\(host)/dashboard-api/devices/\(deviceID)/installed-apps") else {
+            return
+        }
+
+        let apps = InstalledAppScanner.listInstalledApps()
+        let body: [String: Any] = [
+            "apps": apps.map { ["id": $0.executableName, "name": $0.displayName] },
+        ]
+        guard let payload = try? JSONSerialization.data(withJSONObject: body) else { return }
+
+        var request = URLRequest(url: url, timeoutInterval: timeout)
+        request.httpMethod = "POST"
+        request.httpBody = payload
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+
+        URLSession.shared.dataTask(with: request) { _, response, error in
+            let succeeded = error == nil && (response as? HTTPURLResponse).map { $0.statusCode == 200 } == true
+            if !succeeded {
+                FileHandle.standardError.write(
+                    "[dashboard-sync] installed-apps report failed: \(error?.localizedDescription ?? "non-200 response")\n".data(using: .utf8)!
+                )
+            }
+        }.resume()
+    }
+
     /// "HH:MM" -> minutes since midnight, or nil if malformed -- mirrors Android's
     /// `HabitRuleManager.parseTimeToMinuteOfDay` exactly, same format the dashboard wizard writes.
     private static func parseTimeToMinuteOfDay(_ text: String) -> Int? {

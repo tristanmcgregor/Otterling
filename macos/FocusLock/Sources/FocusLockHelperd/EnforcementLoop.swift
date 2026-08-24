@@ -214,6 +214,9 @@ final class EnforcementLoop {
             if self.lastDashboardSyncAt == nil || dashboardSyncNow.timeIntervalSince(self.lastDashboardSyncAt!) >= self.dashboardSyncInterval {
                 DashboardConfigSync.fetch(stateStore: stateStore)
                 DashboardConfigSync.fetchGlobalHabits(stateStore: stateStore)
+                // Same cadence -- lets the dashboard's Habit Rule Wizard search this Mac's real
+                // installed apps. Changes rarely, so once per sync cycle is plenty.
+                DashboardConfigSync.reportInstalledApps()
                 self.lastDashboardSyncAt = dashboardSyncNow
             }
 
