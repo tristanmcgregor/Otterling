@@ -39,11 +39,18 @@ import kotlinx.coroutines.sync.withLock
  * DNS-over-HTTPS/DoT resolver IPs, refused outright) and, when the filter proxy is enabled,
  * routes every captured TCP 80/443 flow through a real HTTPS MITM proxy on the family's own
  * server ([CloudFilterSettings]) instead of relaying it directly -- that server decides whether
- * to block a whole request/page, giving page-content-aware filtering, not just DNS-level
- * category blocking. Every DNS query is still checked against a downloaded local domain blocklist
- * ([DomainBlocklistManager]) first -- always-on defense in depth -- then, if not already blocked,
- * forwarded to the same cloud filter server for DNS-level filtering, falling back to a hardcoded
- * public resolver only if that's unconfigured or unreachable.
+ * to block a whole request/page, giving page-content-aware filtering, not just DNS-level category
+ * blocking. This proxy decision is the ONLY *content-category* blocking that applies during
+ * normal operation -- every device on the account (this phone, a Mac running FocusLock) shares
+ * the exact same verdict, since they're all reviewed by the same server-side page-content check.
+ * The downloaded public domain blocklist and the AI-classified-domains cache
+ * ([DomainBlocklistManager.isPublicListBlocked], [ServerClassifiedDomainsManager]) are NOT
+ * consulted on top of that -- they're a fallback for when the proxy verdict genuinely isn't
+ * available for a flow (a MITM-exempt app, or a real proxy outage), not an always-on second layer
+ * that could disagree with it. The guardian's own per-device `blockedWebsites`
+ * ([DomainBlocklistManager.isCustomBlocked]) is separate from all of that: an explicit rule they
+ * set for this specific device, always enforced regardless of proxy state. See
+ * [handleDnsPacket]'s `blocked` computation for exactly when each applies.
  *
  * Captures a full default route (every IPv4 destination) because a [VpnService] that captures all
  * app traffic but only has routes for a handful of specific IPs makes every *other* destination
@@ -462,19 +469,25 @@ class VpnFilterService : VpnService() {
             protocol = OsConstants.IPPROTO_UDP,
         )
         val isMitmExempt = ownerUid == null || ownerUid in mitmExemptUids
-        // The local adult-domain list is always applied client-side first, regardless of whether
-        // the cloud filter is configured or reachable -- this is the "defense in depth" fail-safe:
-        // known adult domains stay blocked even offline or if the cloud filter server is down,
-        // rather than relying entirely on a network round-trip to a server outside this device's
-        // control. classifiedDomains (the server's own AI-classified list, coarser/less certain
-        // than mitm_nsfw_addon.py's full-page-content check) is only consulted when that
-        // more-informed check isn't going to happen for this flow anyway -- see that class's own
-        // doc for the full reasoning. When neither condition holds, an unclassified-by-the-local-
-        // list domain is left for the proxy itself to judge, on purpose: preempting it here with a
-        // coarser guess would work against the whole point of scoping this list differently from
-        // the always-on public blocklist above.
-        val blocked = blocklist.isBlocked(query.questionName) ||
-            ((isMitmExempt || isProxyUnavailable()) && classifiedDomains.isBlocked(query.questionName))
+        // The guardian's own dashboard-configured blockedWebsites for THIS device is always
+        // enforced -- an intentional, per-device rule they set directly (DNS is the only
+        // enforcement path for a domain-only entry, see CustomBlocklistManager's doc), not an
+        // incidental extra filtering layer. See blocklist.isCustomBlocked's own doc.
+        val customBlocked = blocklist.isCustomBlocked(query.questionName)
+        // Every device on the account gets the SAME blocking decision for everything else: the
+        // MITM proxy's page-content-aware review (mitm_nsfw_addon.py), same as macOS. Neither
+        // local list here (blocklist's curated public hosts files, classifiedDomains' coarser AI
+        // guess) runs unconditionally anymore -- a domain that only tripped one of these
+        // client-side lists but that the proxy itself wouldn't block used to get blocked on
+        // Android and nowhere else, which is exactly the inconsistency this condition exists to
+        // prevent. They're consulted ONLY when the proxy isn't going to make (or can't make) that
+        // decision for this flow at all: a MITM-exempt app (no page-content review ever happens
+        // for it, on any device) or a real proxy outage (isProxyUnavailable) -- see FAMILY_DNS's
+        // useStrictDns fallback below for the same "no proxy nuance available, fail toward more
+        // restrictive" reasoning applied to the DNS resolver choice.
+        val fallbackBlocked = (isMitmExempt || isProxyUnavailable()) &&
+            (blocklist.isPublicListBlocked(query.questionName) || classifiedDomains.isBlocked(query.questionName))
+        val blocked = customBlocked || fallbackBlocked
         if (blocked) {
             scope.launch {
                 runCatching {

@@ -7,17 +7,19 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 /**
- * A downloaded, cached, hosts-file-format domain blocklist used by [VpnFilterService] to decide
- * which DNS lookups to block -- the always-on, client-side defense-in-depth layer that stays
- * effective even if the cloud filter ([CloudFilterSettings]) is unreachable. Defaults to two
- * adult-focused hosts lists (StevenBlack's "porn-only" list plus The Blocklist Project's porn
- * list) so a single source going stale or changing format doesn't silently narrow coverage.
+ * A downloaded, cached, hosts-file-format domain blocklist used by [VpnFilterService] as a
+ * client-side fallback when the MITM proxy's own page-content review isn't going to happen for a
+ * given flow -- a MITM-exempt app, or the cloud filter ([CloudFilterSettings]) being genuinely
+ * unreachable. Defaults to two adult-focused hosts lists (StevenBlack's "porn-only" list plus The
+ * Blocklist Project's porn list) so a single source going stale or changing format doesn't
+ * silently narrow coverage.
  *
- * These are established, human-curated lists, unconditionally enforced -- unlike
- * [ServerClassifiedDomainsManager]'s AI-classified list, which is a coarser, less-certain guess
- * that's deliberately only consulted when [VpnFilterService]'s more-informed mitmproxy content
- * check won't get a chance to run for that flow anyway. See that class's doc for the full
- * reasoning; this class stays scoped to the two curated public sources only, on purpose.
+ * Deliberately NOT consulted when the proxy's own verdict is going to apply anyway -- every
+ * device on the account (this phone, a Mac running FocusLock) needs the same domain to get the
+ * same blocking decision, and this list existing only on Android used to mean a domain the proxy
+ * wouldn't block could still get blocked here and nowhere else. See [VpnFilterService.handleDnsPacket]'s
+ * `blocked` computation for exactly when this and [ServerClassifiedDomainsManager]'s coarser
+ * AI-classified list apply -- the same condition gates both.
  */
 class DomainBlocklistManager(private val context: Context) {
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -27,16 +29,29 @@ class DomainBlocklistManager(private val context: Context) {
     @Volatile
     private var cachedDomains: Set<String>? = null
 
-    /** True if [hostname] or any of its parent domains is on the blocklist. */
-    fun isBlocked(hostname: String): Boolean {
-        val domains = loadedDomains()
-        // Path rules (youtube.com/shorts) must NOT NXDOMAIN the whole host -- only domain-only
-        // custom entries participate in DNS blocking.
-        val customDomains = customBlocklist.domainOnlyHosts()
-        if (domains.isEmpty() && customDomains.isEmpty()) return false
+    /** True if [hostname] or any of its parent domains is on either the downloaded public lists
+     *  or the guardian's own custom blocklist. Combined for [DebugUnsuspendReceiver]'s ADB probe
+     *  (which wants "would this be DNS-blocked at all"); [VpnFilterService.handleDnsPacket] uses
+     *  [isPublicListBlocked] and [isCustomBlocked] separately instead, since only one of the two
+     *  is gated behind proxy-availability -- see this class's doc comment. */
+    fun isBlocked(hostname: String): Boolean = isPublicListBlocked(hostname) || isCustomBlocked(hostname)
+
+    /** The two curated public hosts lists only -- gated by [VpnFilterService.handleDnsPacket],
+     *  NOT the guardian's own explicit per-device rules (see [isCustomBlocked]). */
+    fun isPublicListBlocked(hostname: String): Boolean = matchesAny(hostname, loadedDomains())
+
+    /** The guardian's own dashboard-configured `blockedWebsites` for this specific device (see
+     *  [CustomBlocklistManager]'s doc) -- an intentional, per-device rule the guardian set
+     *  directly, not an incidental extra filtering layer, so [VpnFilterService.handleDnsPacket]
+     *  always enforces this regardless of proxy availability. Path rules (youtube.com/shorts)
+     *  must NOT NXDOMAIN the whole host -- only domain-only custom entries participate here. */
+    fun isCustomBlocked(hostname: String): Boolean = matchesAny(hostname, customBlocklist.domainOnlyHosts())
+
+    private fun matchesAny(hostname: String, domains: Set<String>): Boolean {
+        if (domains.isEmpty()) return false
         var candidate = hostname.lowercase().trimEnd('.')
         while (candidate.isNotEmpty()) {
-            if (candidate in domains || candidate in customDomains) return true
+            if (candidate in domains) return true
             val dotIndex = candidate.indexOf('.')
             if (dotIndex == -1) break
             candidate = candidate.substring(dotIndex + 1)

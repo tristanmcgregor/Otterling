@@ -8,7 +8,8 @@ import java.io.File
  * has ever judged bad (see `filter-server/dns_classify_mux.py`'s `_PersistedBadDomains`), served
  * at `https://<host>/filter-lists/classified-bad-domains.txt`. This is a deliberately **separate**
  * cache from [DomainBlocklistManager]'s two curated public adult-domain lists, held to a different
- * trust bar: those are established, human-curated ground truth, always enforced unconditionally.
+ * trust bar: those are established, human-curated ground truth. Both lists are gated by the exact
+ * same condition below though -- see [VpnFilterService.handleDnsPacket]'s `blocked` computation.
  * This list is a coarser, domain-only AI guess -- less certain than the *same* server's mitmproxy
  * content inspector (`mitm_nsfw_addon.py`), which sees the actual page content, not just the
  * domain name, and would normally be trusted to make the more informed per-request call instead.
@@ -35,8 +36,8 @@ class ServerClassifiedDomainsManager(private val context: Context) {
     private var cachedDomains: Set<String>? = null
 
     /** True if [hostname] or any of its parent domains is on this list. See the class doc for
-     *  when a caller should actually consult this -- it is NOT meant to be checked unconditionally
-     *  the way [DomainBlocklistManager.isBlocked] is. */
+     *  when a caller should actually consult this -- gated the same way [DomainBlocklistManager
+     *  .isBlocked] is, not checked unconditionally. */
     fun isBlocked(hostname: String): Boolean {
         val domains = loadedDomains()
         if (domains.isEmpty()) return false
