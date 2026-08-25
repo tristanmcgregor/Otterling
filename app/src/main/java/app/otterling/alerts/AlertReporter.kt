@@ -181,12 +181,20 @@ class AlertReporter(context: Context) {
      * partner reading an SMS). A type not in either bucket defaults to the tamper message rather
      * than benign passthrough, so a newly-added tamper type alerts loudly by default instead of
      * silently going out as raw text.
+     *
+     * A guardian-set [ReportConfigStore.customMessage] for [type] (report_types.json's
+     * `customMessage`, edited via the dashboard's Report Types panel) takes priority over all of
+     * the above when non-blank -- `{details}` inside it is substituted with [details], same
+     * placeholder convention as the server's own `_send_ntfy_notification`, so a reworded message
+     * can still reference what actually happened.
      */
     private fun formatBody(type: String, details: String, deviceName: String?): String {
         val device = deviceName?.takeIf { it.isNotBlank() } ?: Build.MODEL
         val time = DateFormat.getTimeInstance(DateFormat.SHORT).format(Date())
+        val customMessage = reportConfig.customMessage(type)
         val match = TRIGGER_WORD_DETAILS.find(details)
         val message = when {
+            customMessage.isNotBlank() -> customMessage.replace("{details}", details)
             match != null -> {
                 val (word, preposition, place) = match.destructured
                 "\"$word\" flagged $preposition $place"

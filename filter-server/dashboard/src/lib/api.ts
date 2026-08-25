@@ -60,6 +60,12 @@ export interface ReportType {
   enabled: boolean;
   source: "mac" | "server" | "android";
   description: string;
+  // Guardian-editable override for this report's actual wording -- "" (the default) means "use
+  // the built-in default message". `{details}` inside it is substituted with the event's own
+  // details text server-side (mac/server-origin, via _send_ntfy_notification) or on-device
+  // (android-origin, via AlertReporter.kt's formatBody) -- same placeholder, same substitution,
+  // different place it happens depending on where that report type's message actually gets sent.
+  customMessage: string;
 }
 
 export interface ReportTypesFile {
@@ -277,6 +283,12 @@ export const api = {
     request<ReportTypesFile>(`/report-types/${enc(type)}`, {
       method: "PATCH",
       body: JSON.stringify({ enabled }),
+    }),
+  // "" clears back to the built-in default wording -- see ReportType.customMessage's comment.
+  setReportTypeMessage: (type: string, customMessage: string) =>
+    request<ReportTypesFile>(`/report-types/${enc(type)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ customMessage }),
     }),
 
   // Guardian-only. GET returns the effective values (template merged onto the hardcoded

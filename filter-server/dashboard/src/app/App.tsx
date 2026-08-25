@@ -1449,6 +1449,12 @@ function ReportTypesPanel() {
     api.setReportTypeEnabled(type, enabled).then(setData).catch(() => setError(`Failed to update "${type}"`));
   };
 
+  const setMessage = (type: string, customMessage: string) =>
+    api.setReportTypeMessage(type, customMessage).then(setData).catch(() => {
+      setError(`Failed to update "${type}"'s message`);
+      throw new Error("failed"); // lets the row know the save didn't stick
+    });
+
   if (error) return <p className="text-xs text-error">{error}</p>;
   if (!data) return <p className="text-xs text-on-surface-variant">Loading…</p>;
 
@@ -1471,17 +1477,87 @@ function ReportTypesPanel() {
           </p>
           <Card className="rounded-2xl space-y-0 divide-y divide-outline-variant/30">
             {bySource[source].map(([type, info]) => (
-              <SettingsRow
+              <ReportTypeRow
                 key={type}
-                title={type}
-                sub={info.description}
-                checked={info.enabled}
-                onChange={(v) => toggle(type, v)}
+                type={type}
+                info={info}
+                onToggle={(v) => toggle(type, v)}
+                onSaveMessage={(msg) => setMessage(type, msg)}
               />
             ))}
           </Card>
         </div>
       ))}
+    </div>
+  );
+}
+
+function ReportTypeRow({
+  type, info, onToggle, onSaveMessage,
+}: {
+  type: string;
+  info: ReportType;
+  onToggle: (v: boolean) => void;
+  onSaveMessage: (customMessage: string) => Promise<unknown>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(info.customMessage);
+  const [saving, setSaving] = useState(false);
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await onSaveMessage(draft.trim());
+      setEditing(false);
+    } catch {
+      // onSaveMessage's caller already surfaced the error; leave the editor open with the draft
+      // intact so the guardian doesn't lose what they typed.
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="py-3 px-1">
+      <div className="flex items-center justify-between gap-4">
+        <div className="min-w-0">
+          <p className="text-sm font-medium">{type}</p>
+          <p className="text-xs text-on-surface-variant mt-0.5 leading-tight">{info.description}</p>
+        </div>
+        <Switch checked={info.enabled} onCheckedChange={onToggle} />
+      </div>
+      {!editing ? (
+        <button
+          className="mt-1.5 text-[11px] text-primary hover:underline"
+          onClick={() => { setDraft(info.customMessage); setEditing(true); }}
+        >
+          {info.customMessage ? "Edit message" : "Customize message"}
+        </button>
+      ) : (
+        <div className="mt-2 space-y-1.5">
+          <textarea
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder="Leave blank to use the default wording. Use {details} to include what actually happened."
+            rows={2}
+            className="w-full text-xs px-3 py-2 rounded-xl border border-outline bg-surface focus:outline-none focus:ring-2 focus:ring-primary resize-none"
+          />
+          <div className="flex items-center gap-2">
+            <Button size="sm" className="h-7 px-3 text-xs" disabled={saving} onClick={save}>
+              {saving ? "Saving…" : "Save"}
+            </Button>
+            <Button
+              variant="outlined"
+              size="sm"
+              className="h-7 px-3 text-xs"
+              disabled={saving}
+              onClick={() => setEditing(false)}
+            >
+              Cancel
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
