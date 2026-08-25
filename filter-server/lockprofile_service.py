@@ -1522,13 +1522,35 @@ def _build_list_item(kind: str, body: dict) -> dict | None:
             "addedAt": time.time(),
         }
     if kind == "rules":
+        # targetType "website" gates a domain (via the phone's DNS filter, see
+        # HabitRuleManager.kt's isWebsiteCurrentlyBlocked) instead of suspending an app package --
+        # same requiredHabitIds/schedule condition, different enforcement mechanism. Defaults to
+        # "app" so every rule created before this field existed keeps its old meaning.
+        target_type = body.get("targetType") if body.get("targetType") in ("app", "website") else "app"
+        if target_type == "website":
+            website_domain = (body.get("websiteDomain") or "").strip().lower()
+            if not website_domain:
+                return None
+            return {
+                "id": uuid.uuid4().hex,
+                "targetType": "website",
+                "appId": "",
+                "appName": website_domain,
+                "websiteDomain": website_domain,
+                "requiredHabitIds": body.get("requiredHabitIds") or [],
+                "schedule": body.get("schedule") or {},
+                "dailyBudgetMinutes": body.get("dailyBudgetMinutes"),
+                "createdAt": time.time(),
+            }
         app_name = (body.get("appName") or "").strip()
         if not app_name:
             return None
         return {
             "id": uuid.uuid4().hex,
+            "targetType": "app",
             "appId": body.get("appId", ""),
             "appName": app_name,
+            "websiteDomain": "",
             "requiredHabitIds": body.get("requiredHabitIds") or [],
             "schedule": body.get("schedule") or {},
             "dailyBudgetMinutes": body.get("dailyBudgetMinutes"),
