@@ -80,8 +80,15 @@ export interface RuleSchedule {
 
 export interface Rule {
   id: string;
+  // "website" gates a domain (enforced via the phone's DNS filter -- see
+  // HabitRuleManager.kt's isWebsiteCurrentlyBlocked) instead of suspending an app. Absent on
+  // rules created before this field existed, which are always "app". appName holds the domain
+  // itself for a website rule (server-side display label), so existing appName-only UI still
+  // shows something sensible without checking targetType.
+  targetType?: "app" | "website";
   appId: string;
   appName: string;
+  websiteDomain?: string;
   requiredHabitIds: string[];
   schedule: RuleSchedule;
   dailyBudgetMinutes: number | null;

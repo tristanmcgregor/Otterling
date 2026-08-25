@@ -528,7 +528,10 @@ function DashboardScreen({
                   <div className="flex items-center gap-3 min-w-0">
                     <AppIcon name={(rule.appName || "?").slice(0, 2).toUpperCase()} color="bg-primary/10 text-primary" />
                     <div className="min-w-0">
-                      <p className="font-semibold leading-tight truncate">{rule.appName}</p>
+                      <div className="flex items-center gap-1.5">
+                        <p className="font-semibold leading-tight truncate">{rule.appName}</p>
+                        {rule.targetType === "website" && <Pill>Website</Pill>}
+                      </div>
                       <p className="text-xs text-on-surface-variant">{describeSchedule(rule.schedule)}</p>
                     </div>
                   </div>
@@ -661,7 +664,10 @@ function DashboardScreen({
                 <div className="flex items-center gap-3 min-w-0">
                   <AppIcon name={(rule.appName || "?").slice(0, 2).toUpperCase()} color="bg-primary/10 text-primary" />
                   <div className="min-w-0">
-                    <p className="font-semibold leading-tight truncate">{rule.appName}</p>
+                    <div className="flex items-center gap-1.5">
+                      <p className="font-semibold leading-tight truncate">{rule.appName}</p>
+                      {rule.targetType === "website" && <Pill>Website</Pill>}
+                    </div>
                     <p className="text-xs text-on-surface-variant">{describeSchedule(rule.schedule)}</p>
                   </div>
                 </div>
@@ -2344,6 +2350,8 @@ function HabitRuleWizard({
   onSaved: () => void;
 }) {
   const [step, setStep] = useState(1);
+  const [targetType, setTargetType] = useState<"app" | "website">(editingRule?.targetType ?? "app");
+  const [websiteDomain, setWebsiteDomain] = useState(editingRule?.websiteDomain ?? "");
   const [appQuery, setAppQuery] = useState("");
   const [selectedApp, setSelectedApp] = useState(editingRule?.appName ?? "");
   const [appId, setAppId] = useState(editingRule?.appId ?? "");
@@ -2356,7 +2364,7 @@ function HabitRuleWizard({
   const [saving, setSaving] = useState(false);
 
   const steps = [
-    { n: 1, label: "Choose App", sub: "Select target application" },
+    { n: 1, label: targetType === "website" ? "Choose Website" : "Choose App", sub: "Select what's gated" },
     { n: 2, label: "Require Habits", sub: "Must be completed to unlock" },
     { n: 3, label: "Set Schedule", sub: "When rule applies" },
   ];
@@ -2393,15 +2401,27 @@ function HabitRuleWizard({
   };
 
   const save = async () => {
-    if (!selectedApp || !appId.trim()) return;
+    if (targetType === "website" ? !websiteDomain.trim() : !selectedApp || !appId.trim()) return;
     setSaving(true);
-    const payload = {
-      appId: appId.trim(),
-      appName: selectedApp,
-      requiredHabitIds: selectedHabitIds,
-      schedule: { startTime, endTime, daysOfWeek: days },
-      dailyBudgetMinutes: budget.trim() ? Number(budget) : null,
-    };
+    const payload: Partial<Rule> = targetType === "website"
+      ? {
+          targetType: "website",
+          websiteDomain: websiteDomain.trim().toLowerCase(),
+          appId: "",
+          appName: websiteDomain.trim().toLowerCase(),
+          requiredHabitIds: selectedHabitIds,
+          schedule: { startTime, endTime, daysOfWeek: days },
+          dailyBudgetMinutes: budget.trim() ? Number(budget) : null,
+        }
+      : {
+          targetType: "app",
+          appId: appId.trim(),
+          appName: selectedApp,
+          websiteDomain: "",
+          requiredHabitIds: selectedHabitIds,
+          schedule: { startTime, endTime, daysOfWeek: days },
+          dailyBudgetMinutes: budget.trim() ? Number(budget) : null,
+        };
     try {
       if (editingRule) {
         await api.updateRule(deviceId, editingRule.id, payload);
@@ -2449,9 +2469,51 @@ function HabitRuleWizard({
           {step === 1 && (
             <div className="max-w-xl space-y-4">
               <div>
-                <h3 className="text-lg font-bold">Which app should be gated?</h3>
-                <p className="text-sm text-on-surface-variant mt-0.5">The child must complete their habits before accessing this app.</p>
+                <h3 className="text-lg font-bold">
+                  {targetType === "website" ? "Which website should be gated?" : "Which app should be gated?"}
+                </h3>
+                <p className="text-sm text-on-surface-variant mt-0.5">
+                  The child must complete their habits before accessing this {targetType === "website" ? "website" : "app"}.
+                </p>
               </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setTargetType("app")}
+                  className={cn(
+                    "flex-1 h-10 rounded-xl border text-sm font-medium transition-colors",
+                    targetType === "app" ? "border-primary bg-primary/10 text-primary" : "border-outline-variant/40 hover:bg-surface-variant"
+                  )}
+                >
+                  App
+                </button>
+                <button
+                  onClick={() => setTargetType("website")}
+                  className={cn(
+                    "flex-1 h-10 rounded-xl border text-sm font-medium transition-colors",
+                    targetType === "website" ? "border-primary bg-primary/10 text-primary" : "border-outline-variant/40 hover:bg-surface-variant"
+                  )}
+                >
+                  Website
+                </button>
+              </div>
+              {targetType === "website" ? (
+                <div>
+                  <label className="text-sm font-semibold block mb-1.5">Domain</label>
+                  <input
+                    type="text"
+                    value={websiteDomain}
+                    onChange={(e) => setWebsiteDomain(e.target.value)}
+                    placeholder="youtube.com"
+                    className="w-full h-11 px-4 rounded-xl border border-outline bg-surface text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                  />
+                  <p className="text-xs text-on-surface-variant mt-1.5">
+                    Blocks this domain and its subdomains via the phone's DNS filter -- enforced the
+                    same way as a domain in Blocked Websites, just conditional on the habit(s) below
+                    instead of always-on.
+                  </p>
+                </div>
+              ) : (
+                <>
               <input
                 type="text"
                 value={appQuery}
@@ -2537,6 +2599,8 @@ function HabitRuleWizard({
                   )}
                 </p>
               </div>
+                </>
+              )}
             </div>
           )}
 
@@ -2544,7 +2608,9 @@ function HabitRuleWizard({
             <div className="max-w-xl space-y-4">
               <div>
                 <h3 className="text-lg font-bold">Required habits</h3>
-                <p className="text-sm text-on-surface-variant mt-0.5">Select which habits must be done before {selectedApp || "the app"} unlocks.</p>
+                <p className="text-sm text-on-surface-variant mt-0.5">
+                  Select which habits must be done before {(targetType === "website" ? websiteDomain : selectedApp) || (targetType === "website" ? "the website" : "the app")} unlocks.
+                </p>
               </div>
               {habits.length === 0 ? (
                 <p className="text-sm text-on-surface-variant">No habits yet — add one below.</p>
@@ -2650,7 +2716,7 @@ function HabitRuleWizard({
           </div>
           <Button
             size="sm"
-            disabled={(step === 1 && (!selectedApp || !appId.trim())) || saving}
+            disabled={(step === 1 && (targetType === "website" ? !websiteDomain.trim() : !selectedApp || !appId.trim())) || saving}
             onClick={() => (step < 3 ? setStep(step + 1) : save())}
           >
             {saving ? "Saving…" : step < 3 ? "Continue →" : "Save Rule"}
