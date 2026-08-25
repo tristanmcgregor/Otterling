@@ -190,7 +190,7 @@
 			header Authorization *
 		}
 		@dashboardApiDevicePost {
-			path /dashboard-api/habits/*/complete /dashboard-api/pin/verify /dashboard-api/devices/*/installed-apps
+			path /dashboard-api/habits/*/complete /dashboard-api/pin/verify /dashboard-api/devices/*/installed-apps /dashboard-api/devices/*/app-info
 			method POST
 			header Authorization *
 		}
@@ -320,7 +320,7 @@ http://192.168.0.254 {
 			header Authorization *
 		}
 		@dashboardApiDevicePost {
-			path /dashboard-api/habits/*/complete /dashboard-api/pin/verify /dashboard-api/devices/*/installed-apps
+			path /dashboard-api/habits/*/complete /dashboard-api/pin/verify /dashboard-api/devices/*/installed-apps /dashboard-api/devices/*/app-info
 			method POST
 			header Authorization *
 		}

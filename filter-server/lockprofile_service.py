@@ -1151,6 +1151,12 @@ def _default_device_settings(device_id: str = "") -> dict:
         # settings PATCH is for guardian opinions, this is a device fact the guardian only ever
         # reads (to search/pick an app for a rule), never writes directly.
         "installedApps": [],
+        # Reported by the device itself (POST .../app-info), same "device fact, not guardian
+        # opinion" stance as installedApps above -- not in SETTINGS_PATCH_ALLOWED_KEYS. Lets the
+        # dashboard flag devices running an old build without the guardian needing to unlock the
+        # phone and check Settings themselves. None fields = never reported yet (e.g. an
+        # already-provisioned device that hasn't polled since this shipped).
+        "appVersion": {"versionName": None, "versionCode": None, "reportedAt": None},
         # macos-only, deliberately None ("no opinion") rather than a concrete value that would
         # only coincidentally match a fresh Mac install's own defaults -- see
         # SETTINGS_PATCH_ALLOWED_KEYS's comment for why. A guardian must explicitly interact with
@@ -1343,7 +1349,7 @@ def _build_list_item(kind: str, body: dict) -> dict | None:
 
 
 def _list_known_device_ids() -> dict:
-    """{device_id: {device_name, updatedAt, alertCount24h}} for every device_id seen either in
+    """{device_id: {device_name, updatedAt, alertCount24h, appVersion}} for every device_id seen either in
     device_settings.json or in alerts.jsonl -- a device can show up in tamper alerts long before a
     guardian ever opens the dashboard for it, or vice versa (settings configured ahead of the phone
     ever checking in), so the device list is the union of both sources rather than a separate
@@ -1358,10 +1364,16 @@ def _list_known_device_ids() -> dict:
         device_id = _canonicalize_device_id(device_id)
         entry = devices.setdefault(
             device_id,
-            {"device_name": "", "updatedAt": None, "alertCount24h": 0, "platform": _detect_platform(device_id)},
+            {
+                "device_name": "", "updatedAt": None, "alertCount24h": 0,
+                "platform": _detect_platform(device_id),
+                "appVersion": {"versionName": None, "versionCode": None, "reportedAt": None},
+            },
         )
         if record.get("device_name"):
             entry["device_name"] = record["device_name"]
+        if record.get("appVersion"):
+            entry["appVersion"] = record["appVersion"]
         record_updated = record.get("updatedAt")
         if record_updated and (entry["updatedAt"] is None or record_updated > entry["updatedAt"]):
             entry["updatedAt"] = record_updated
@@ -1372,7 +1384,11 @@ def _list_known_device_ids() -> dict:
             continue
         entry = devices.setdefault(
             device_id,
-            {"device_name": "", "updatedAt": None, "alertCount24h": 0, "platform": _detect_platform(device_id)},
+            {
+                "device_name": "", "updatedAt": None, "alertCount24h": 0,
+                "platform": _detect_platform(device_id),
+                "appVersion": {"versionName": None, "versionCode": None, "reportedAt": None},
+            },
         )
         if event.get("received_at", 0) >= cutoff:
             entry["alertCount24h"] += 1
@@ -2380,6 +2396,25 @@ class Handler(BaseHTTPRequestHandler):
             sanitized = _sanitize_installed_apps(apps)
             record = _device_settings(device_id, {"installedApps": sanitized})
             self._send_json(200, {"installedApps": record.get("installedApps", [])})
+            return True
+
+        # Device-reported: same stance as installed-apps above (device fact, guardian only ever
+        # reads it back via GET .../settings). Piggybacks MacTamperPollWorker's ~15-minute cycle
+        # (AppVersionReporter.kt) rather than a dedicated job, same as installed-apps.
+        if parts == ["app-info"] and method == "POST":
+            version_name = str((body or {}).get("versionName", "")).strip()[:32]
+            try:
+                version_code = int((body or {}).get("versionCode", 0))
+            except (TypeError, ValueError):
+                version_code = 0
+            record = _device_settings(device_id, {
+                "appVersion": {
+                    "versionName": version_name or None,
+                    "versionCode": version_code or None,
+                    "reportedAt": time.time(),
+                },
+            })
+            self._send_json(200, {"appVersion": record.get("appVersion")})
             return True
 
         if parts == ["activity"] and method == "GET":

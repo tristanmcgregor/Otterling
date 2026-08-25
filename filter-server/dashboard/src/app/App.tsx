@@ -1196,6 +1196,25 @@ function SettingsScreen({
         <Card className="rounded-2xl">
           <div className="flex items-center justify-between gap-3">
             <div>
+              <p className="text-sm font-medium">App version</p>
+              <p className="text-xs text-on-surface-variant">
+                {settings.appVersion.versionName
+                  ? `v${settings.appVersion.versionName} (build ${settings.appVersion.versionCode})`
+                  : settings.platform === "android"
+                  ? "Not reported yet -- reports on this device's next sync"
+                  : "Not tracked for macOS devices"}
+              </p>
+            </div>
+            {settings.appVersion.reportedAt && (
+              <p className="shrink-0 text-[11px] text-on-surface-variant">
+                as of {new Date(settings.appVersion.reportedAt * 1000).toLocaleString()}
+              </p>
+            )}
+          </div>
+        </Card>
+        <Card className="rounded-2xl">
+          <div className="flex items-center justify-between gap-3">
+            <div>
               <p className="text-sm font-medium">Poll this device now</p>
               <p className="text-xs text-on-surface-variant">
                 Wakes just this phone via push instead of waiting out its normal poll cycle --

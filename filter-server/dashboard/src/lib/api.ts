@@ -139,6 +139,10 @@ export interface DeviceSettings {
   // (Android) or executable name (macOS), matching what blockedApps/rules/etc. expect. Empty
   // until the device's next sync cycle after this feature shipped, or if it's never synced at all.
   installedApps: { id: string; name: string }[];
+  // Self-reported by the device (see lockprofile_service.py's app-info route and Android's
+  // AppVersionReporter.kt) -- all fields null until the device's next sync cycle after this
+  // feature shipped, or if it's never synced at all.
+  appVersion: { versionName: string | null; versionCode: number | null; reportedAt: number | null };
 }
 
 export interface DeviceSummary {
@@ -147,6 +151,7 @@ export interface DeviceSummary {
   updatedAt: number | null;
   alertCount24h: number;
   platform: DevicePlatform;
+  appVersion: { versionName: string | null; versionCode: number | null; reportedAt: number | null };
 }
 
 export interface ActivityEvent {

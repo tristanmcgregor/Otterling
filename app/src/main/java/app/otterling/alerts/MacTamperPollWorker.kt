@@ -11,6 +11,7 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import app.otterling.content.AppVersionReporter
 import app.otterling.content.CloudFilterSettings
 import app.otterling.content.DashboardConfigStore
 import app.otterling.content.InstalledAppsReporter
@@ -61,6 +62,8 @@ class MacTamperPollWorker(context: Context, params: WorkerParameters) : Coroutin
         // Same best-effort piggyback -- lets the dashboard's Habit Rule Wizard search this
         // phone's real installed apps. Changes rarely, so once per ~15-minute cycle is plenty.
         InstalledAppsReporter(applicationContext).report()
+        // Same best-effort piggyback -- lets the dashboard flag a device running an old build.
+        AppVersionReporter(applicationContext).report()
         val sinceId = settings.lastSeenAlertId()
         try {
             val response = httpGet("https://$host/alerts/poll?since_id=$sinceId", settings.token())
