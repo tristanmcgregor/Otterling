@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Build
 import android.util.Log
 import app.otterling.content.CloudFilterSettings
+import app.otterling.content.DashboardConfigStore
 import com.google.firebase.messaging.FirebaseMessaging
 import java.net.HttpURLConnection
 import java.net.URL
@@ -33,12 +34,18 @@ object FcmTokenRegistrar {
             .addOnFailureListener { error -> Log.w(TAG, "Could not obtain FCM token", error) }
     }
 
-    /** POST [token] to the server unless it matches the last one we successfully registered. */
+    /** POST [token] to the server unless it (and this device's own id) already match the last
+     *  successful registration. The device_id check is what lets an already-registered install
+     *  (from before per-device FCM targeting existed) re-POST exactly once to backfill that
+     *  association, even though its token itself hasn't changed. */
     fun register(context: Context, token: String) {
         val appContext = context.applicationContext
         val settings = MacTamperPollSettings(appContext)
         if (!settings.isConfigured() || token.isBlank()) return
-        if (token == settings.lastRegisteredFcmToken()) return // Already registered this exact token.
+        val deviceId = DashboardConfigStore(appContext).deviceId()
+        if (token == settings.lastRegisteredFcmToken() && deviceId == settings.lastRegisteredFcmDeviceId()) {
+            return // Already registered this exact token+device_id pair.
+        }
 
         val host = CloudFilterSettings(appContext).host()
         thread(name = "fcm-register") {
@@ -46,6 +53,7 @@ object FcmTokenRegistrar {
                 val body = JSONObject()
                     .put("token", token)
                     .put("device_model", "${Build.MANUFACTURER} ${Build.MODEL}")
+                    .put("device_id", deviceId)
                     .toString()
                 val connection = (URL("https://$host/alerts/register-token").openConnection() as HttpURLConnection).apply {
                     requestMethod = "POST"
@@ -61,6 +69,7 @@ object FcmTokenRegistrar {
                 connection.inputStream.use { it.readBytes() }
                 if (code == 200) {
                     settings.setLastRegisteredFcmToken(token)
+                    settings.setLastRegisteredFcmDeviceId(deviceId)
                     Log.i(TAG, "Registered FCM token with filter-server")
                 } else {
                     Log.w(TAG, "Token registration returned HTTP $code")

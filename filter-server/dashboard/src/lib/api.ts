@@ -343,6 +343,14 @@ export const api = {
     request<{ status: string; notified: number; fcmConfigured: boolean }>("/poll-now", {
       method: "POST",
     }),
+  // Same idea as pollNow() but scoped to one device -- see lockprofile_service.py's
+  // _fcm_tokens_for_device. notified can legitimately be 0 for a real, working device whose
+  // token predates per-device FCM association (its next app launch backfills it) -- that's not
+  // an error, it just means this device syncs on the normal ~15-minute floor instead of instantly.
+  pollDeviceNow: (deviceId: string) =>
+    request<{ status: string; notified: number }>(`/devices/${enc(deviceId)}/poll-now`, {
+      method: "POST",
+    }),
 
   // One shared HabitShare login for the whole fleet -- the phone polls HabitShare's own servers
   // directly with it. Unlike the PIN, knowing this doesn't unlock anything Otterling enforces, so

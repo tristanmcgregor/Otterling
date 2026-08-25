@@ -1417,13 +1417,18 @@ _fcm_project_id = None
 _fcm_unavailable = False
 
 
-def _register_fcm_token(token: str, device_model: str) -> None:
-    """Upsert a phone's FCM token. Idempotent -- the phone re-registers on every launch."""
+def _register_fcm_token(token: str, device_model: str, device_id: str = "") -> None:
+    """Upsert a phone's FCM token. Idempotent -- the phone re-registers on every launch.
+    device_id is optional (older app builds and the Mac's own equivalent registrar don't send
+    one) -- see _fcm_tokens_for_device's own comment for what that means for per-device
+    targeting. Blank/missing device_id is stored as "" rather than omitted, so a record that
+    predates this field is still shaped consistently for callers that iterate every token."""
     with _state_lock:
         state = _load_state()
         tokens = state.get(_FCM_TOKENS_KEY) or {}
         tokens[token] = {
             "device_model": device_model,
+            "device_id": device_id or tokens.get(token, {}).get("device_id", ""),
             "registered_at": tokens.get(token, {}).get("registered_at", time.time()),
             "last_seen": time.time(),
         }
@@ -1434,6 +1439,18 @@ def _register_fcm_token(token: str, device_model: str) -> None:
 def _all_fcm_tokens() -> list[str]:
     with _state_lock:
         return list((_load_state().get(_FCM_TOKENS_KEY) or {}).keys())
+
+
+def _fcm_tokens_for_device(device_id: str) -> list[str]:
+    """Tokens registered with this exact device_id. Can legitimately be empty even for a real,
+    working device -- device_id association was added after FCM registration already existed
+    (see FcmTokenRegistrar.kt's backfill-on-mismatch comment), so a device that hasn't reopened
+    the app since this shipped won't have one yet; its next app launch fixes that. Callers (the
+    per-device "Poll Now" button) should treat an empty result as "falls back to the 15-minute
+    poll floor", not an error."""
+    with _state_lock:
+        tokens = (_load_state().get(_FCM_TOKENS_KEY) or {}).items()
+        return [token for token, info in tokens if info.get("device_id") == device_id]
 
 
 def _forget_fcm_token(token: str) -> None:
@@ -1477,17 +1494,24 @@ def _fcm_credentials():
             return None, None
 
 
-def _send_fcm_wake(event: dict) -> int:
-    """Best-effort FCM 'poll now' wake to every registered phone. Never raises. The data payload is
-    advisory only -- the phone re-pulls from /alerts/poll (and, since DashboardConfigStore piggybacks
-    on the same MacTamperPollWorker cycle this wakes, the phone's own dashboard/PIN/habits sync too --
-    see MacTamperMessagingService.kt's doc comment: any push at all is treated as "go poll now",
-    regardless of this payload's content). Returns how many tokens were actually sent to, so callers
-    like the dashboard's "Poll Now" button can tell the guardian whether this reached a real device."""
+def _send_fcm_wake(event: dict, tokens: list[str] | None = None) -> int:
+    """Best-effort FCM 'poll now' wake. Never raises. The data payload is advisory only -- the
+    phone re-pulls from /alerts/poll (and, since DashboardConfigStore piggybacks on the same
+    MacTamperPollWorker cycle this wakes, the phone's own dashboard/PIN/habits sync too -- see
+    MacTamperMessagingService.kt's doc comment: any push at all is treated as "go poll now",
+    regardless of this payload's content). Returns how many tokens were actually sent to, so
+    callers like the dashboard's "Poll Now" button can tell the guardian whether this reached a
+    real device.
+
+    tokens=None (the default, used by every existing caller -- tamper-event pushes and the
+    fleet-wide "Poll Now" button) wakes every registered phone. Passing an explicit list (the
+    per-device "Poll Now" button, via _fcm_tokens_for_device) scopes this to just those tokens --
+    same function, same delivery/retry/dead-token-cleanup logic either way, just a smaller set."""
     creds, project_id = _fcm_credentials()
     if creds is None:
         return 0
-    tokens = _all_fcm_tokens()
+    if tokens is None:
+        tokens = _all_fcm_tokens()
     if not tokens:
         return 0
     try:
@@ -1849,7 +1873,13 @@ class Handler(BaseHTTPRequestHandler):
             token = (body or {}).get("token", "").strip()
             if not token:
                 return self._send_json(400, {"error": "token required"})
-            _register_fcm_token(token, (body or {}).get("device_model", "").strip() or "unknown")
+            # device_id is optional (blank for older app builds and the Mac's own registrar, which
+            # doesn't send one at all) -- see _fcm_tokens_for_device's doc for what that means for
+            # per-device "Poll Now" targeting. Same canonicalization as every other device_id-
+            # accepting route, so this lines up with whatever _list_known_device_ids/
+            # DASHBOARD_DEVICE_RE already knows this device as.
+            device_id = _safe_device_id((body or {}).get("device_id", "").strip()) or ""
+            _register_fcm_token(token, (body or {}).get("device_model", "").strip() or "unknown", device_id)
             return self._send_json(200, {"status": "ok"})
 
         if self.path == "/integrity/checkin":
@@ -2303,6 +2333,18 @@ class Handler(BaseHTTPRequestHandler):
                 _mark_device_removed(device_id)
                 _send_fcm_wake({"type": "dashboard_poll_requested"})
             self._send_json(200, {"status": "ok"})
+            return True
+
+        # Per-device version of the fleet-wide "Poll Now" button (POST /dashboard-api/poll-now,
+        # below) -- guardian-only, same as everything else keyed off DASHBOARD_DEVICE_RE. Scoped
+        # via _fcm_tokens_for_device instead of _send_fcm_wake's default "every registered token",
+        # so nudging one device's sync doesn't also wake every other device in the household.
+        # `notified` can legitimately be 0 for a real, working device whose token predates
+        # per-device association -- see that function's own doc; this device still gets synced,
+        # just on the normal ~15-minute floor instead of within seconds.
+        if parts == ["poll-now"] and method == "POST":
+            notified = _send_fcm_wake({"type": "dashboard_poll_requested"}, tokens=_fcm_tokens_for_device(device_id))
+            self._send_json(200, {"status": "ok", "notified": notified})
             return True
 
         if parts == ["settings"] and method in ("GET", "PATCH"):

@@ -74,6 +74,17 @@ class MacTamperPollSettings(context: Context) {
         prefs.edit().putString(KEY_FCM_TOKEN, token).apply()
     }
 
+    /** The device_id [FcmTokenRegistrar] last successfully associated with [lastRegisteredFcmToken]
+     *  server-side -- tracked separately from the token itself so an already-registered install
+     *  (from before per-device FCM targeting existed) still re-POSTs once to backfill the
+     *  association, even though its token hasn't changed and would otherwise look "already
+     *  registered" to [FcmTokenRegistrar]'s skip check. */
+    fun lastRegisteredFcmDeviceId(): String = prefs.getString(KEY_FCM_DEVICE_ID, "").orEmpty()
+
+    fun setLastRegisteredFcmDeviceId(deviceId: String) {
+        prefs.edit().putString(KEY_FCM_DEVICE_ID, deviceId).apply()
+    }
+
     private companion object {
         const val SECURE_PREFS = "mac_tamper_poll_secure"
         const val PREFS = "mac_tamper_poll_settings"
@@ -81,6 +92,7 @@ class MacTamperPollSettings(context: Context) {
         const val KEY_LAST_SEEN_ID = "last_seen_alert_id"
         const val KEY_LAST_POLLED = "last_polled_at_millis"
         const val KEY_FCM_TOKEN = "last_registered_fcm_token"
+        const val KEY_FCM_DEVICE_ID = "last_registered_fcm_device_id"
 
         // Rotate this (and the server's LOCKPROFILE_TOKEN in filter-server/.env) together --
         // see the doc comment on `token()` for why this is baked in at all.

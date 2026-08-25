@@ -793,6 +793,8 @@ function SettingsScreen({
   const [nameDraft, setNameDraft] = useState("");
   const [cooldownDraft, setCooldownDraft] = useState("");
   const [cloudFilterHostDraft, setCloudFilterHostDraft] = useState("");
+  const [pollingDevice, setPollingDevice] = useState(false);
+  const [pollDeviceResult, setPollDeviceResult] = useState<string | null>(null);
 
   useEffect(() => {
     setNameDraft(settings?.device_name ?? "");
@@ -1191,6 +1193,40 @@ function SettingsScreen({
 
       <div className="space-y-3">
         <SectionLabel>Diagnostics</SectionLabel>
+        <Card className="rounded-2xl">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-medium">Poll this device now</p>
+              <p className="text-xs text-on-surface-variant">
+                Wakes just this phone via push instead of waiting out its normal poll cycle --
+                useful when checking whether a settings change landed.
+              </p>
+            </div>
+            <button
+              onClick={() => {
+                setPollingDevice(true);
+                setPollDeviceResult(null);
+                api.pollDeviceNow(deviceId)
+                  .then((res) => {
+                    setPollDeviceResult(res.notified === 0 ? "Not registered for push" : `Sent to ${res.notified} device${res.notified === 1 ? "" : "s"}`);
+                  })
+                  .catch((err) => setPollDeviceResult(err instanceof ApiError ? err.message : "Couldn't reach the server"))
+                  .finally(() => {
+                    setPollingDevice(false);
+                    window.setTimeout(() => setPollDeviceResult(null), 5000);
+                  });
+              }}
+              disabled={pollingDevice}
+              className="shrink-0 flex items-center gap-2 h-9 px-4 rounded-xl border border-outline-variant/50 bg-surface-variant/40 text-sm font-medium text-on-surface hover:bg-surface-variant transition-colors disabled:opacity-60"
+            >
+              <RefreshCw className={cn("w-3.5 h-3.5", pollingDevice && "animate-spin")} />
+              {pollingDevice ? "Polling…" : "Poll now"}
+            </button>
+          </div>
+          {pollDeviceResult && (
+            <p className="text-[11px] text-on-surface-variant mt-2 text-right">{pollDeviceResult}</p>
+          )}
+        </Card>
         <Card className="rounded-2xl">
           <details>
             <summary className="text-sm font-medium cursor-pointer select-none">
