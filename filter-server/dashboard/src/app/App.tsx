@@ -9,7 +9,7 @@ import { cn, Card, Button, Switch, Pill } from "./components/ui";
 import { api, ApiError, logout } from "../lib/api";
 import type {
   DeviceSettings, DeviceSummary, ActivityEvent, Rule, RuleSchedule, AppBudget, ProtectedApp, Habit,
-  ReportType, ReportTypesFile,
+  ReportType, ReportTypesFile, DefaultSettings, Protections,
 } from "../lib/api";
 
 type Screen = "Dashboard" | "Settings" | "GlobalSettings" | "Wizard";
@@ -1410,6 +1410,17 @@ function GlobalSettingsScreen({
         <ReportTypesPanel />
       </div>
 
+      <div className="space-y-3">
+        <SectionLabel>Default Protections for New Devices</SectionLabel>
+        <p className="text-xs text-on-surface-variant -mt-1">
+          What a brand-new device gets on its very first check-in, before you've touched its own
+          Settings screen. Changing this only affects devices that haven't checked in yet — an
+          already-configured device is untouched, same as changing this project's own hardcoded
+          defaults used to require editing code for.
+        </p>
+        <DefaultSettingsPanel />
+      </div>
+
       {pinModalOpen && (
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-md flex items-center justify-center">
           <SetPinModal
@@ -1471,6 +1482,102 @@ function ReportTypesPanel() {
           </Card>
         </div>
       ))}
+    </div>
+  );
+}
+
+function DefaultSettingsPanel() {
+  const [data, setData] = useState<DefaultSettings | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [secondsDraft, setSecondsDraft] = useState("");
+
+  useEffect(() => {
+    api.getDefaultSettings()
+      .then((d) => { setData(d); setSecondsDraft(String(d.frictionDelay.seconds)); })
+      .catch(() => setError("Failed to load default settings"));
+  }, []);
+
+  const patchProtection = (key: keyof Protections, value: boolean) =>
+    api.setDefaultSettings({ protections: { ...data!.protections, [key]: value } })
+      .then(setData)
+      .catch(() => setError(`Failed to update "${key}"`));
+
+  if (error) return <p className="text-xs text-error">{error}</p>;
+  if (!data) return <p className="text-xs text-on-surface-variant">Loading…</p>;
+
+  return (
+    <div className="space-y-3">
+      <Card className="rounded-2xl space-y-0 divide-y divide-outline-variant/30">
+        <SettingsRow
+          title="Block Safe Mode bypass"
+          sub="Prevent circumventing rules via reboot"
+          checked={data.protections.safeMode}
+          onChange={(v) => patchProtection("safeMode", v)}
+        />
+        <SettingsRow
+          title="Block factory reset"
+          sub="Require PIN to wipe device"
+          checked={data.protections.factoryReset}
+          onChange={(v) => patchProtection("factoryReset", v)}
+        />
+        <SettingsRow
+          title="Block app uninstall"
+          sub="Require PIN to remove Otterling"
+          checked={data.protections.uninstallBlock}
+          onChange={(v) => patchProtection("uninstallBlock", v)}
+          danger
+        />
+        <SettingsRow
+          title="Block guest mode"
+          sub="Prevent switching to an unmanaged profile"
+          checked={data.protections.guestMode}
+          onChange={(v) => patchProtection("guestMode", v)}
+        />
+        <SettingsRow
+          title="Block USB debugging"
+          sub="Prevent ADB-based tampering"
+          checked={data.protections.usbDebugging}
+          onChange={(v) => patchProtection("usbDebugging", v)}
+        />
+        <SettingsRow
+          title="Content filter (VPN)"
+          sub="DNS/proxy filtering active from first check-in"
+          checked={data.vpnFilter.enabled}
+          onChange={(v) => api.setDefaultSettings({ vpnFilter: { enabled: v } }).then(setData).catch(() => setError("Failed to update content filter"))}
+        />
+        <SettingsRow
+          title="Friction delay"
+          sub="Short delay before an unapproved app opens"
+          checked={data.frictionDelay.enabled}
+          onChange={(v) =>
+            api.setDefaultSettings({ frictionDelay: { ...data.frictionDelay, enabled: v } })
+              .then(setData)
+              .catch(() => setError("Failed to update friction delay"))
+          }
+        />
+      </Card>
+      {data.frictionDelay.enabled && (
+        <Card className="rounded-2xl">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-sm font-medium">Friction delay length</p>
+            <div className="flex items-center gap-2">
+              <input
+                type="number"
+                min={1}
+                value={secondsDraft}
+                onChange={(e) => setSecondsDraft(e.target.value)}
+                onBlur={() =>
+                  api.setDefaultSettings({ frictionDelay: { ...data.frictionDelay, seconds: Number(secondsDraft) || 30 } })
+                    .then(setData)
+                    .catch(() => setError("Failed to update friction delay"))
+                }
+                className="w-20 h-9 px-3 rounded-xl border border-outline bg-surface text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+              />
+              <span className="text-xs text-on-surface-variant">seconds</span>
+            </div>
+          </div>
+        </Card>
+      )}
     </div>
   );
 }

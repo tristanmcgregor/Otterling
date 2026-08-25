@@ -320,6 +320,16 @@ ALERTS_ROTATE_KEEP_LINES = 2000
 # already separates concerns that way (e.g. alerts get their own ALERTS_PATH/_alerts_lock too).
 SETTINGS_PATH = os.path.join(DATA_DIR, "device_settings.json")
 
+# Fleet-wide baseline for protections/vpnFilter/frictionDelay a brand-new device_id gets on its
+# very first _default_device_settings() call -- guardian-editable via GET/PATCH
+# /dashboard-api/default-settings (DEFAULT_TEMPLATE_ALLOWED_KEYS), instead of the hardcoded values
+# that used to be the only option. Deliberately does NOT touch any device that already has a
+# settings record: editing this template is a one-time "what should new devices start as," not a
+# live push to the whole fleet -- a guardian who wants to change an existing device's protections
+# still does that on the device's own Settings screen, same as always.
+DEFAULT_TEMPLATE_PATH = os.path.join(DATA_DIR, "default_device_settings.json")
+DEFAULT_TEMPLATE_ALLOWED_KEYS = {"protections", "vpnFilter", "frictionDelay"}
+
 # Guardian PIN is deliberately NOT part of per-device settings: it's one shared secret for a
 # guardian's whole fleet (see /dashboard-api/pin below), not something that varies per device.
 # Stored as plaintext on disk (a 4-digit PIN can't meaningfully be protected by hashing it at
@@ -936,6 +946,38 @@ def _save_settings(settings: dict) -> None:
     os.replace(tmp_path, SETTINGS_PATH)
 
 
+def _load_default_template() -> dict:
+    """Guardian-edited overrides for a brand-new device's protections/vpnFilter/frictionDelay --
+    see DEFAULT_TEMPLATE_PATH's comment. Empty (not the hardcoded defaults) when never edited, so
+    _default_device_settings below can tell "guardian set this" apart from "nothing to override"
+    with a plain dict-merge rather than needing a sentinel."""
+    try:
+        with open(DEFAULT_TEMPLATE_PATH, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+            return data if isinstance(data, dict) else {}
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def _save_default_template(updates: dict) -> dict:
+    """Merges `updates` (already filtered to DEFAULT_TEMPLATE_ALLOWED_KEYS by the caller) one
+    level deep, same shape as _device_settings' own merge -- a partial `protections` update only
+    overrides the keys present, not the whole sub-dict."""
+    with _settings_lock:
+        template = _load_default_template()
+        for key, value in updates.items():
+            if isinstance(value, dict) and isinstance(template.get(key), dict):
+                template[key].update(value)
+            else:
+                template[key] = value
+        os.makedirs(DATA_DIR, exist_ok=True)
+        tmp_path = DEFAULT_TEMPLATE_PATH + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as fh:
+            json.dump(template, fh, indent=2, sort_keys=True)
+        os.replace(tmp_path, DEFAULT_TEMPLATE_PATH)
+        return template
+
+
 def _load_guardian_pin() -> dict:
     try:
         with open(GUARDIAN_PIN_PATH, "r", encoding="utf-8") as fh:
@@ -1166,19 +1208,29 @@ def _default_device_settings(device_id: str = "") -> dict:
     # rename via the dashboard's Device Name field at any time, this is just so a never-configured
     # device doesn't show its raw device_id in the sidebar/header.
     default_name = "Macbook" if _detect_platform(device_id) == "macos" else "Phone"
+    # Guardian-editable fleet-wide baseline (see DEFAULT_TEMPLATE_PATH's comment) overrides these
+    # three hardcoded starting points -- one level deep, same shape _device_settings' own merge
+    # uses, so a template that only sets protections.guestMode doesn't blank out the rest.
+    template = _load_default_template()
+    protections = {
+        "safeMode": True,
+        "factoryReset": True,
+        "uninstallBlock": True,
+        "guestMode": True,
+        "usbDebugging": True,
+    }
+    protections.update(template.get("protections") or {})
+    vpn_filter = {"enabled": True}
+    vpn_filter.update(template.get("vpnFilter") or {})
+    friction_delay = {"enabled": True, "seconds": 30}
+    friction_delay.update(template.get("frictionDelay") or {})
     return {
         "device_name": default_name,
-        "protections": {
-            "safeMode": True,
-            "factoryReset": True,
-            "uninstallBlock": True,
-            "guestMode": True,
-            "usbDebugging": True,
-        },
-        "vpnFilter": {"enabled": True},
+        "protections": protections,
+        "vpnFilter": vpn_filter,
         "vpnBypassApps": [],
         "blockedWebsites": [],
-        "frictionDelay": {"enabled": True, "seconds": 30},
+        "frictionDelay": friction_delay,
         # habits deliberately NOT here -- moved to the global library, see LIST_ENDPOINTS' comment.
         "rules": [],
         "appBudgets": [],
@@ -2054,6 +2106,35 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/dashboard-api/devices" and method == "GET":
             devices = [{"device_id": k, **v} for k, v in _list_known_device_ids().items()]
             self._send_json(200, {"devices": devices})
+            return True
+
+        # Fleet-wide baseline a brand-new device_id starts with -- see DEFAULT_TEMPLATE_PATH's
+        # comment. GET always returns the effective values (template override merged onto the
+        # hardcoded starting point, same _default_device_settings a new device itself would get),
+        # not just what's been explicitly overridden, so the dashboard can show real toggle states
+        # on first load rather than a separate "unset" affordance. Guardian-only, same as every
+        # other route not in Caddy's device-bearer allowlist.
+        if path == "/dashboard-api/default-settings" and method == "GET":
+            defaults = _default_device_settings()
+            self._send_json(200, {
+                "protections": defaults["protections"],
+                "vpnFilter": defaults["vpnFilter"],
+                "frictionDelay": defaults["frictionDelay"],
+            })
+            return True
+
+        if path == "/dashboard-api/default-settings" and method == "PATCH":
+            if body is None:
+                self._send_json(400, {"error": "bad json"})
+                return True
+            updates = {k: v for k, v in body.items() if k in DEFAULT_TEMPLATE_ALLOWED_KEYS}
+            _save_default_template(updates)
+            defaults = _default_device_settings()
+            self._send_json(200, {
+                "protections": defaults["protections"],
+                "vpnFilter": defaults["vpnFilter"],
+                "frictionDelay": defaults["frictionDelay"],
+            })
             return True
 
         # Guardian PIN: one shared secret for the whole fleet, not per-device -- see

@@ -14,6 +14,15 @@ export interface Protections {
   usbDebugging: boolean;
 }
 
+// Fleet-wide baseline a brand-new device_id starts with -- see lockprofile_service.py's
+// DEFAULT_TEMPLATE_PATH comment. Editing this only affects devices that haven't checked in yet;
+// an already-configured device's own Settings screen is unaffected.
+export interface DefaultSettings {
+  protections: Protections;
+  vpnFilter: { enabled: boolean };
+  frictionDelay: { enabled: boolean; seconds: number };
+}
+
 export interface BypassApp {
   id: string;
   name: string;
@@ -268,6 +277,16 @@ export const api = {
     request<ReportTypesFile>(`/report-types/${enc(type)}`, {
       method: "PATCH",
       body: JSON.stringify({ enabled }),
+    }),
+
+  // Guardian-only. GET returns the effective values (template merged onto the hardcoded
+  // fallback), so the UI can show real toggle states even before the guardian has ever touched
+  // this template -- see lockprofile_service.py's route comment.
+  getDefaultSettings: () => request<DefaultSettings>("/default-settings"),
+  setDefaultSettings: (updates: Partial<DefaultSettings>) =>
+    request<DefaultSettings>("/default-settings", {
+      method: "PATCH",
+      body: JSON.stringify(updates),
     }),
 
   addRule: (deviceId: string, rule: Partial<Rule>) =>
