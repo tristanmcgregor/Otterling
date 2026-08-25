@@ -248,6 +248,16 @@
       "enabled": true,
       "source": "server",
       "description": "A device reported a global habit done for the day (POST /dashboard-api/habits/<id>/complete) -- shows up in that device's Activity Log so a guardian can spot a suspicious one, especially for a habit not marked requiresProof."
+    },
+    "pin_bruteforce_suspected": {
+      "enabled": true,
+      "source": "server",
+      "description": "10 wrong Guardian PIN guesses in a row (POST /dashboard-api/pin/verify) -- possible brute-force attempt against Settings on a phone, not just a mistyped PIN."
+    },
+    "guardian_login_bruteforce_suspected": {
+      "enabled": true,
+      "source": "server",
+      "description": "10 wrong dashboard/review login attempts in a row -- possible brute-force attempt against the guardian password."
     }
   }
 }

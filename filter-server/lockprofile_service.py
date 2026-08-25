@@ -503,6 +503,13 @@ _GUARDIAN_LOGIN_LOCKOUT_THRESHOLD = 5
 _GUARDIAN_LOGIN_BASE_LOCKOUT_SECONDS = 5.0
 _GUARDIAN_LOGIN_MAX_LOCKOUT_SECONDS = 5 * 60.0
 
+# Shared by both _pin_verify_record_result and _guardian_login_record_result: past this many
+# consecutive wrong guesses (well above anything a guardian fat-fingering their own PIN/password
+# would plausibly hit), report it as a suspected brute-force attempt via the normal alert
+# pipeline (_append_alert/_push_event -- same ntfy push + accountability-partner SMS channel,
+# and same report_types.json enable/disable + customMessage controls, as every other report type).
+_BRUTEFORCE_ALERT_THRESHOLD = 10
+
 
 def _load_state() -> dict:
     try:
@@ -1181,6 +1188,19 @@ def _pin_verify_record_result(correct: bool) -> None:
                 _PIN_VERIFY_MAX_LOCKOUT_SECONDS,
             )
             _pin_verify_lockout_until = time.time() + lockout_seconds
+        # Fired exactly once per failure streak (== not >=), the moment it crosses 10, not on
+        # every subsequent attempt after -- a sustained guessing effort (as opposed to a guardian
+        # fat-fingering their own PIN a few times) is what this is meant to catch.
+        if _pin_verify_failed_attempts == _BRUTEFORCE_ALERT_THRESHOLD:
+            event = _append_alert({
+                "device_id": "",
+                "type": "pin_bruteforce_suspected",
+                "details": f"{_BRUTEFORCE_ALERT_THRESHOLD} wrong Guardian PIN guesses in a row -- possible brute-force attempt.",
+                "reported_at": time.time(),
+                "received_at": time.time(),
+            })
+            if event:
+                _push_event(event)
 
 
 def _guardian_login_lockout_remaining_seconds() -> float:
@@ -1207,6 +1227,17 @@ def _guardian_login_record_result(correct: bool) -> None:
                 _GUARDIAN_LOGIN_MAX_LOCKOUT_SECONDS,
             )
             _guardian_login_lockout_until = time.time() + lockout_seconds
+        # Same "fire once, at the threshold" stance as _pin_verify_record_result's own alert.
+        if _guardian_login_failed_attempts == _BRUTEFORCE_ALERT_THRESHOLD:
+            event = _append_alert({
+                "device_id": "",
+                "type": "guardian_login_bruteforce_suspected",
+                "details": f"{_BRUTEFORCE_ALERT_THRESHOLD} wrong dashboard/review login attempts in a row -- possible brute-force attempt.",
+                "reported_at": time.time(),
+                "received_at": time.time(),
+            })
+            if event:
+                _push_event(event)
 
 
 def _load_habits() -> list:
