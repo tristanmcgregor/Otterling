@@ -71,7 +71,11 @@
           return;
         }
         const data = await response.json().catch(() => ({}));
-        errorEl.textContent = data.error || 'Sign in failed.';
+        if (response.status === 429 && data.retryAfterMs) {
+          errorEl.textContent = `Too many attempts. Try again in ${Math.ceil(data.retryAfterMs / 1000)}s.`;
+        } else {
+          errorEl.textContent = data.error || 'Sign in failed.';
+        }
       } catch (error) {
         errorEl.textContent = 'Could not reach the server.';
       } finally {

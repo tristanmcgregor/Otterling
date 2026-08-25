@@ -409,6 +409,19 @@ _PIN_VERIFY_LOCKOUT_THRESHOLD = 5
 _PIN_VERIFY_BASE_LOCKOUT_SECONDS = 5.0
 _PIN_VERIFY_MAX_LOCKOUT_SECONDS = 5 * 60.0
 
+# Same escalating-lockout shape as the PIN verify above, guarding the dashboard/review login
+# password instead (_handle_dashboard_login, _handle_review_login) -- previously unlimited,
+# instant password guesses since secrets.compare_digest is only timing-safe, not rate-limited.
+# One shared counter for both login routes, not two independent ones: they check the exact same
+# GUARDIAN_LOGIN_PASSWORD (see that constant's comment), so a guesser splitting attempts across
+# both routes must not get to try twice as fast as hitting either one alone.
+_guardian_login_lock = threading.Lock()
+_guardian_login_failed_attempts = 0
+_guardian_login_lockout_until = 0.0
+_GUARDIAN_LOGIN_LOCKOUT_THRESHOLD = 5
+_GUARDIAN_LOGIN_BASE_LOCKOUT_SECONDS = 5.0
+_GUARDIAN_LOGIN_MAX_LOCKOUT_SECONDS = 5 * 60.0
+
 
 def _load_state() -> dict:
     try:
@@ -1049,6 +1062,32 @@ def _pin_verify_record_result(correct: bool) -> None:
                 _PIN_VERIFY_MAX_LOCKOUT_SECONDS,
             )
             _pin_verify_lockout_until = time.time() + lockout_seconds
+
+
+def _guardian_login_lockout_remaining_seconds() -> float:
+    with _guardian_login_lock:
+        return max(0.0, _guardian_login_lockout_until - time.time())
+
+
+def _guardian_login_record_result(correct: bool) -> None:
+    """Escalating lockout for the dashboard/review login password -- see the counter's own
+    comment for why this is shared across both routes. Same shape as _pin_verify_record_result:
+    5 free wrong guesses, then a doubling backoff up to 5 minutes. A correct guess resets the
+    counter."""
+    global _guardian_login_failed_attempts, _guardian_login_lockout_until
+    with _guardian_login_lock:
+        if correct:
+            _guardian_login_failed_attempts = 0
+            _guardian_login_lockout_until = 0.0
+            return
+        _guardian_login_failed_attempts += 1
+        if _guardian_login_failed_attempts >= _GUARDIAN_LOGIN_LOCKOUT_THRESHOLD:
+            doublings = _guardian_login_failed_attempts - _GUARDIAN_LOGIN_LOCKOUT_THRESHOLD
+            lockout_seconds = min(
+                _GUARDIAN_LOGIN_BASE_LOCKOUT_SECONDS * (2 ** doublings),
+                _GUARDIAN_LOGIN_MAX_LOCKOUT_SECONDS,
+            )
+            _guardian_login_lockout_until = time.time() + lockout_seconds
 
 
 def _load_habits() -> list:
@@ -1724,9 +1763,14 @@ class Handler(BaseHTTPRequestHandler):
         current_password = _guardian_login_password()
         if not current_password:
             return self._send_json(503, {"error": "dashboard login not configured -- set DASHBOARD_LOGIN_PASSWORD"})
+        remaining = _guardian_login_lockout_remaining_seconds()
+        if remaining > 0:
+            return self._send_json(429, {"error": "locked out", "retryAfterMs": int(remaining * 1000)})
         body = self._read_json_body()
         password = (body or {}).get("password", "")
-        if not secrets.compare_digest(password, current_password):
+        correct = secrets.compare_digest(password, current_password)
+        _guardian_login_record_result(correct)
+        if not correct:
             return self._send_json(401, {"error": "invalid password"})
         token = _dashboard_session_create()
         payload = json.dumps({"status": "ok"}).encode("utf-8")
@@ -1782,9 +1826,14 @@ class Handler(BaseHTTPRequestHandler):
         current_password = _guardian_login_password()
         if not current_password:
             return self._send_json(503, {"error": "review login not configured -- set DASHBOARD_LOGIN_PASSWORD"})
+        remaining = _guardian_login_lockout_remaining_seconds()
+        if remaining > 0:
+            return self._send_json(429, {"error": "locked out", "retryAfterMs": int(remaining * 1000)})
         body = self._read_json_body()
         password = (body or {}).get("password", "")
-        if not secrets.compare_digest(password, current_password):
+        correct = secrets.compare_digest(password, current_password)
+        _guardian_login_record_result(correct)
+        if not correct:
             return self._send_json(401, {"error": "invalid password"})
         token = _review_session_create()
         payload = json.dumps({"status": "ok"}).encode("utf-8")
