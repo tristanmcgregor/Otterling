@@ -132,6 +132,109 @@ class HabitRuleManager(private val context: Context) {
     private fun dashboardRuleSyntheticId(dashboardId: String): Long =
         -(1L + (dashboardId.hashCode().toLong() and 0x7FFFFFFFL))
 
+    /**
+     * Domain-targeted counterpart to [dashboardRules]'s app-targeted rules (`targetType ==
+     * "website"` entries, see lockprofile_service.py's `_build_list_item` for that field) -- same
+     * "dashboard wizard always sets a schedule" design as [dashboardRules], so this only ever
+     * needs the windowed-rule shape, not the full [HabitRule] entity a website has no meaningful
+     * equivalent for (no package to suspend). Never persisted, parsed fresh on every call, same
+     * as [dashboardRules]'s own synthetic rules -- the list realistically only has a handful of
+     * entries, so re-parsing the JSON on every DNS query (see [isWebsiteCurrentlyBlocked]) is
+     * cheap enough not to need caching.
+     */
+    private data class WebsiteHabitRule(
+        val domain: String,
+        val requiredHabitNames: List<String>,
+        val windowStartMinute: Int,
+        val windowEndMinute: Int,
+        val daysOfWeek: Set<DayOfWeek>,
+    )
+
+    private fun dashboardWebsiteRules(): List<WebsiteHabitRule> {
+        val snapshot = DashboardConfigStore(context).snapshot() ?: return emptyList()
+        val entries = snapshot.optJSONArray("rules") ?: return emptyList()
+        val habitNamesById = DashboardConfigStore(context).globalHabitsSnapshot()
+            ?.optJSONArray("habits")?.let { habits ->
+                (0 until habits.length()).mapNotNull { habits.optJSONObject(it) }
+                    .associate { it.optString("id") to it.optString("name") }
+            } ?: emptyMap()
+
+        val result = mutableListOf<WebsiteHabitRule>()
+        for (i in 0 until entries.length()) {
+            val entry = entries.optJSONObject(i) ?: continue
+            if (entry.optString("targetType", "app") != "website") continue
+            val domain = entry.optString("websiteDomain").takeIf { it.isNotBlank() } ?: continue
+            val schedule = entry.optJSONObject("schedule") ?: continue
+            val start = parseTimeToMinuteOfDay(schedule.optString("startTime")) ?: continue
+            val end = parseTimeToMinuteOfDay(schedule.optString("endTime")) ?: continue
+
+            val habitIds = entry.optJSONArray("requiredHabitIds")
+            val habitNames = habitIds?.let { ids ->
+                (0 until ids.length()).mapNotNull { habitNamesById[ids.optString(it)] }
+            } ?: emptyList()
+
+            val daysOfWeek = schedule.optJSONArray("daysOfWeek")?.let { days ->
+                (0 until days.length()).mapNotNull { jsDayOfWeekToJava(days.optInt(it, -1)) }.toSet()
+            }?.takeIf { it.isNotEmpty() } ?: DayOfWeek.entries.toSet()
+
+            result += WebsiteHabitRule(domain.lowercase(), habitNames, start, end, daysOfWeek)
+        }
+        return result
+    }
+
+    /**
+     * True if [hostname] (or a parent domain) is currently blocked by a dashboard-configured
+     * website habit rule -- inside that rule's time window with its required habit(s) not done
+     * today (empty [WebsiteHabitRule.requiredHabitNames] means "no habit condition, blocked
+     * unconditionally for the whole window", same semantics as [isWindowedRuleSatisfied]).
+     * Consulted by `VpnFilterService.handleDnsPacket` the same way
+     * `DomainBlocklistManager.isCustomBlocked`'s guardian-set `blockedWebsites` is -- always-on,
+     * not gated on proxy availability, since this is an explicit guardian-authored rule, not a
+     * coarse fallback list. Returns `false` immediately (before touching Room) when there are no
+     * website rules configured at all, so a phone with none set up pays no per-DNS-query cost
+     * beyond the cheap JSON re-parse above.
+     */
+    suspend fun isWebsiteCurrentlyBlocked(hostname: String): Boolean {
+        val rules = dashboardWebsiteRules()
+        if (rules.isEmpty()) return false
+        val today = LocalDate.now().toEpochDay()
+        val rawDoneNames = detectedHabitDao.getAll()
+            .filter { it.dateEpochDay == today && it.doneToday }
+            .map { it.name.lowercase() }
+            .toSet()
+        val doneHabitNamesToday = proofManager.filterSatisfied(rawDoneNames)
+        val nowMinuteOfDay = currentMinuteOfDay()
+        val nowDayOfWeek = LocalDate.now().dayOfWeek
+        val host = hostname.lowercase().trimEnd('.')
+        return rules.any { rule ->
+            domainMatches(host, rule.domain) &&
+                nowDayOfWeek in rule.daysOfWeek &&
+                isWithinWindow(nowMinuteOfDay, rule.windowStartMinute, rule.windowEndMinute) &&
+                !isWebsiteRuleSatisfied(rule, doneHabitNamesToday)
+        }
+    }
+
+    private fun isWebsiteRuleSatisfied(rule: WebsiteHabitRule, doneHabitNamesToday: Set<String>): Boolean {
+        if (rule.requiredHabitNames.isEmpty()) return false
+        return rule.requiredHabitNames.all { requiredName ->
+            val needle = requiredName.lowercase()
+            doneHabitNamesToday.any { it.contains(needle) || needle.contains(it) }
+        }
+    }
+
+    /** True if [hostname] is [ruleDomain] or a subdomain of it -- same walk-up-parent-domains
+     *  matching [DomainBlocklistManager.isBlocked]/[CustomBlocklistManager.hostMatches] use. */
+    private fun domainMatches(hostname: String, ruleDomain: String): Boolean {
+        var candidate = hostname
+        while (candidate.isNotEmpty()) {
+            if (candidate == ruleDomain) return true
+            val dotIndex = candidate.indexOf('.')
+            if (dotIndex == -1) break
+            candidate = candidate.substring(dotIndex + 1)
+        }
+        return false
+    }
+
     /** "HH:MM" -> minutes since midnight, or null if malformed. */
     private fun parseTimeToMinuteOfDay(text: String): Int? {
         val parts = text.split(":")

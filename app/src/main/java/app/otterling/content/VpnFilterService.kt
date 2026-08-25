@@ -12,6 +12,7 @@ import android.system.OsConstants
 import android.util.Log
 import app.otterling.alerts.AlertReporter
 import app.otterling.alerts.AlertSeverity
+import app.otterling.focus.HabitRuleManager
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
@@ -153,6 +154,7 @@ class VpnFilterService : VpnService() {
     private fun startVpn() {
         val blocklist = DomainBlocklistManager(applicationContext)
         val classifiedDomains = ServerClassifiedDomainsManager(applicationContext)
+        val habitRuleManager = HabitRuleManager(applicationContext)
         val cloudFilterSettings = CloudFilterSettings(applicationContext)
         val builder = Builder()
             .setSession("Otterling Filter")
@@ -196,7 +198,7 @@ class VpnFilterService : VpnService() {
         )
         connectionScope = generationScope
         workerJob = scope.launch {
-            runCatching { runPacketLoop(tun, blocklist, classifiedDomains, cloudFilterSettings, generationScope) }
+            runCatching { runPacketLoop(tun, blocklist, classifiedDomains, habitRuleManager, cloudFilterSettings, generationScope) }
                 .onFailure { Log.e(TAG, "Packet loop crashed", it) }
             // The packet loop returned. If this coroutine is still active and the service is still
             // meant to be running, the loop exited unexpectedly (transient tun read IOException/EOF
@@ -258,6 +260,7 @@ class VpnFilterService : VpnService() {
         tun: ParcelFileDescriptor,
         blocklist: DomainBlocklistManager,
         classifiedDomains: ServerClassifiedDomainsManager,
+        habitRuleManager: HabitRuleManager,
         cloudFilterSettings: CloudFilterSettings,
         relayScope: CoroutineScope,
     ) {
@@ -418,6 +421,7 @@ class VpnFilterService : VpnService() {
                                 writeToTun,
                                 blocklist,
                                 classifiedDomains,
+                                habitRuleManager,
                                 cloudFilterSettings,
                                 ownerUidResolver,
                                 mitmExemptUids,
@@ -446,6 +450,7 @@ class VpnFilterService : VpnService() {
         writeToTun: suspend (ByteArray) -> Unit,
         blocklist: DomainBlocklistManager,
         classifiedDomains: ServerClassifiedDomainsManager,
+        habitRuleManager: HabitRuleManager,
         cloudFilterSettings: CloudFilterSettings,
         ownerUidResolver: AppUidResolver,
         mitmExemptUids: Set<Int>,
@@ -472,8 +477,13 @@ class VpnFilterService : VpnService() {
         // The guardian's own dashboard-configured blockedWebsites for THIS device is always
         // enforced -- an intentional, per-device rule they set directly (DNS is the only
         // enforcement path for a domain-only entry, see CustomBlocklistManager's doc), not an
-        // incidental extra filtering layer. See blocklist.isCustomBlocked's own doc.
-        val customBlocked = blocklist.isCustomBlocked(query.questionName)
+        // incidental extra filtering layer. See blocklist.isCustomBlocked's own doc. Same stance
+        // for a dashboard habit rule that targets a website instead of an app (targetType
+        // "website") -- an explicit guardian-authored condition, not a coarse fallback list, so
+        // it's checked unconditionally here too, same as the app-targeted rules' package
+        // suspension isn't gated on proxy availability either.
+        val customBlocked = blocklist.isCustomBlocked(query.questionName) ||
+            habitRuleManager.isWebsiteCurrentlyBlocked(query.questionName)
         // Every device on the account gets the SAME blocking decision for everything else: the
         // MITM proxy's page-content-aware review (mitm_nsfw_addon.py), same as macOS. Neither
         // local list here (blocklist's curated public hosts files, classifiedDomains' coarser AI
