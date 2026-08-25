@@ -643,17 +643,23 @@ def _save_report_types_file(data: dict) -> None:
     os.replace(tmp_path, REPORT_TYPES_CONFIG_PATH)
 
 
-def _set_report_type_enabled(report_type: str, enabled: bool) -> dict | None:
-    """Toggles an EXISTING type's `enabled` flag -- never adds/removes/renames a type via this
-    path, keeping the API narrowly "enable or disable something that's already defined" rather
-    than a general file editor. Returns the updated file (for the response), or None if
-    report_type isn't a known key (caller sends 404)."""
+def _update_report_type(report_type: str, updates: dict) -> dict | None:
+    """Updates an EXISTING type's `enabled` flag and/or `customMessage` -- never adds/removes/
+    renames a type via this path, keeping the API narrowly "edit something that's already
+    defined" rather than a general file editor. `updates` may contain either or both of `enabled`
+    (bool) / `customMessage` (str, "" clears back to the built-in default wording -- see
+    `customMessage`'s own comment in report_types.json's schema for where it's consulted).
+    Returns the updated file (for the response), or None if report_type isn't a known key (caller
+    sends 404)."""
     with _report_types_lock:
         data = _load_report_types_file()
         types = data.setdefault("types", {})
         if report_type not in types:
             return None
-        types[report_type]["enabled"] = enabled
+        if "enabled" in updates:
+            types[report_type]["enabled"] = updates["enabled"]
+        if "customMessage" in updates:
+            types[report_type]["customMessage"] = updates["customMessage"]
         _save_report_types_file(data)
         return data
 
@@ -1494,7 +1500,17 @@ def _send_ntfy_notification(event: dict) -> None:
     title, priority, tag = NTFY_EVENT_STYLE.get(
         event["type"], (f"Otterling: {event['type']}", "default", "warning")
     )
-    message = f"{event['details']}\n(device {event['device_id']})" if event.get("details") else f"device {event['device_id']}"
+    # Guardian-editable override (report_types.json's customMessage, set via the dashboard's
+    # Report Types panel) replaces the default body wording -- `{details}` is substituted with
+    # this event's actual details text so a reworded message can still reference what happened,
+    # e.g. "Heads up: {details}". Falls back to the original default body when unset/blank, same
+    # as every other customMessage consumer (see AlertReporter.kt's formatBody for the Android
+    # side of this same mechanism).
+    custom_message = (_load_report_config().get(event["type"], {}) or {}).get("customMessage", "")
+    if custom_message.strip():
+        message = custom_message.replace("{details}", event.get("details") or "")
+    else:
+        message = f"{event['details']}\n(device {event['device_id']})" if event.get("details") else f"device {event['device_id']}"
     request = urllib.request.Request(
         f"{NTFY_SERVER}/{NTFY_TOPIC}",
         data=message.encode("utf-8"),
@@ -2294,10 +2310,22 @@ class Handler(BaseHTTPRequestHandler):
         report_type_match = REPORT_TYPE_ITEM_RE.match(path)
         if report_type_match and method == "PATCH":
             report_type = report_type_match.group(1)
-            if not isinstance((body or {}).get("enabled"), bool):
-                self._send_json(400, {"error": "enabled (boolean) required"})
+            body = body or {}
+            updates: dict = {}
+            if "enabled" in body:
+                if not isinstance(body["enabled"], bool):
+                    self._send_json(400, {"error": "enabled must be a boolean"})
+                    return True
+                updates["enabled"] = body["enabled"]
+            if "customMessage" in body:
+                if not isinstance(body["customMessage"], str):
+                    self._send_json(400, {"error": "customMessage must be a string"})
+                    return True
+                updates["customMessage"] = body["customMessage"][:500]
+            if not updates:
+                self._send_json(400, {"error": "enabled (boolean) and/or customMessage (string) required"})
                 return True
-            updated = _set_report_type_enabled(report_type, body["enabled"])
+            updated = _update_report_type(report_type, updates)
             if updated is None:
                 self._send_json(404, {"error": "no such report type"})
                 return True
@@ -2616,11 +2644,17 @@ class Handler(BaseHTTPRequestHandler):
 
         if parsed.path == "/report-config":
             # Lets the phone's own AlertReporter (Android-origin types never touch this server --
-            # see report_types.json's "_readme") honor the same enabled/disabled list this file
-            # already enforces for mac/server-origin types. `{type: enabled}` only -- source/
-            # description are for humans editing the file, not needed on the wire.
+            # see report_types.json's "_readme") honor the same enabled/disabled list AND the same
+            # guardian-editable customMessage override this server's own _send_ntfy_notification
+            # already applies for mac/server-origin types -- see AlertReporter.kt's formatBody.
+            # source/description are for humans editing the file, not needed on the wire.
             config = _load_report_config()
-            return self._send_json(200, {"types": {k: v.get("enabled", True) is not False for k, v in config.items()}})
+            return self._send_json(200, {
+                "types": {
+                    k: {"enabled": v.get("enabled", True) is not False, "customMessage": v.get("customMessage", "")}
+                    for k, v in config.items()
+                },
+            })
 
         if parsed.path == "/alerts/poll":
             query = urllib.parse.parse_qs(parsed.query)
