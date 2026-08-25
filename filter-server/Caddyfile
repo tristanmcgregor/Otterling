@@ -150,6 +150,17 @@
 		root * /srv/dashboard-login
 		file_server
 	}
+	# One-time account-handoff page (see lockprofile_service.py's HANDOFF_TOKEN_PATH comment) --
+	# deliberately unauthenticated, same as /dashboard-login/ above: whoever holds the link is
+	# meant to not have a password yet. /handoff-auth/set-password validates the token itself.
+	handle /handoff-auth/* {
+		reverse_proxy 127.0.0.1:8091
+	}
+	redir /handoff /handoff/ 308
+	handle_path /handoff/* {
+		root * /srv/handoff
+		file_server
+	}
 	# Bare "/dashboard" (no trailing slash) needs the same explicit redirect as
 	# "/dashboard-login" above -- handle_path's prefix-strip below only matches
 	# "/dashboard/..." paths, so the bare form would otherwise fall through to a 404.
@@ -301,6 +312,15 @@ http://192.168.0.254 {
 	redir /dashboard-login /dashboard-login/ 308
 	handle_path /dashboard-login/* {
 		root * /srv/dashboard-login
+		file_server
+	}
+	# See the matching block in the main vhost above -- one-time account-handoff page.
+	handle /handoff-auth/* {
+		reverse_proxy 127.0.0.1:8091
+	}
+	redir /handoff /handoff/ 308
+	handle_path /handoff/* {
+		root * /srv/handoff
 		file_server
 	}
 	redir /dashboard /dashboard/ 308

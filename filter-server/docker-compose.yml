@@ -250,6 +250,9 @@ services:
       # Same standalone-login-page pattern as dashboard-login above, for /review et al -- see
       # Caddyfile's /review-auth/* + forward_auth.
       - ./review-login:/srv/review-login:ro
+      # One-time account-handoff page -- see lockprofile_service.py's HANDOFF_TOKEN_PATH comment
+      # and Caddyfile's /handoff-auth/* block.
+      - ./handoff:/srv/handoff:ro
       # Read-only mirror of dns-classifier's write-side mount above -- serves the accumulated
       # AI-classified-bad-domains list to the Android app at /filter-lists/* (see Caddyfile).
       - ./classified-domains-data:/srv/filter-lists:ro

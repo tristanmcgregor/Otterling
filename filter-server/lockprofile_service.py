@@ -158,6 +158,23 @@ REVIEW_SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60  # 30 days, same as the dashb
 # password change should log everyone else out.
 GUARDIAN_LOGIN_PASSWORD_PATH = os.path.join(DATA_DIR, "guardian_password_override.txt")
 
+# One-time handoff link: lets whoever currently holds a guardian dashboard session (see
+# POST /dashboard-api/handoff-link below) generate a single-use, expiring, unguessable (256-bit)
+# token that lets someone WITHOUT the current password set a brand-new one at
+# GET /handoff/?token=... -> POST /handoff-auth/set-password -- for the one-time "I'm done
+# setting this up, here's a link to claim the account" handoff moment, not an ongoing password-
+# reset mechanism. Deliberately does NOT require knowing the current password (that's the whole
+# point -- the person using the link is meant to be someone who doesn't have it), unlike the
+# existing POST /dashboard-api/dashboard-password change-password flow. Setting a new password
+# this way has the exact same effect as that flow (_save_password_override), including
+# invalidating every existing session -- so the moment the link is used, whoever generated it is
+# logged out too, same as any other password change. This does NOT protect against someone who
+# retains actual server/filesystem access after generating a link (the password is still stored
+# in plaintext, same as every other secret this file manages) -- it's a clean handoff ceremony,
+# not a technical guarantee against a host operator who keeps root.
+HANDOFF_TOKEN_PATH = os.path.join(DATA_DIR, "password_handoff_token.json")
+HANDOFF_TOKEN_TTL_SECONDS = 48 * 60 * 60  # 48 hours
+
 
 def _load_password_override(path: str, env_default: str) -> str:
     try:
@@ -179,6 +196,59 @@ def _save_password_override(path: str, password: str) -> None:
 
 def _guardian_login_password() -> str:
     return _load_password_override(GUARDIAN_LOGIN_PASSWORD_PATH, GUARDIAN_LOGIN_PASSWORD)
+
+
+def _load_handoff_token() -> dict | None:
+    """None if no pending token, or the stored one has expired (expiry is checked here, not just
+    at consume-time, so GET /dashboard-api/handoff-link -- used to show "link pending" status --
+    doesn't report a stale expired token as still active)."""
+    try:
+        with open(HANDOFF_TOKEN_PATH, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict) or data.get("expiresAt", 0) < time.time():
+        return None
+    return data
+
+
+def _save_handoff_token() -> dict:
+    """Generates a fresh 256-bit token, overwriting any previous pending one (only one valid
+    handoff link at a time -- generating a new one implicitly invalidates whatever was sent out
+    before, so an old leaked/forgotten link can't still be used)."""
+    with _handoff_token_lock:
+        data = {"token": secrets.token_urlsafe(32), "expiresAt": time.time() + HANDOFF_TOKEN_TTL_SECONDS}
+        os.makedirs(DATA_DIR, exist_ok=True)
+        tmp_path = HANDOFF_TOKEN_PATH + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as fh:
+            json.dump(data, fh)
+        os.replace(tmp_path, HANDOFF_TOKEN_PATH)
+        return data
+
+
+def _clear_handoff_token() -> None:
+    with _handoff_token_lock:
+        try:
+            os.remove(HANDOFF_TOKEN_PATH)
+        except FileNotFoundError:
+            pass
+
+
+def _consume_handoff_token(token: str) -> bool:
+    """Single-use: validates `token` against the pending one (constant-time compare) and, if it
+    matches and hasn't expired, clears it so it can never be used again -- even a second attempt
+    with the exact same token fails once this returns True once. Returns False for "no such
+    token" and "expired" alike, same as an incorrect token -- no need to distinguish those for
+    the caller, which just shows one generic error either way."""
+    with _handoff_token_lock:
+        data = _load_handoff_token()
+        if data is None or not secrets.compare_digest(token, data["token"]):
+            return False
+        try:
+            os.remove(HANDOFF_TOKEN_PATH)
+        except FileNotFoundError:
+            pass
+        return True
 
 NTFY_SERVER = os.environ.get("NTFY_SERVER", "https://ntfy.sh").rstrip("/")
 NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "")
@@ -403,6 +473,7 @@ _removed_devices_lock = threading.Lock()
 _habitshare_account_lock = threading.Lock()
 _password_override_lock = threading.Lock()
 _report_types_lock = threading.Lock()
+_handoff_token_lock = threading.Lock()
 
 # Rate limit for POST /dashboard-api/pin/verify. Global (not per-device/IP): every device shares
 # the one LOCKPROFILE_TOKEN, so a guesser can't be told apart from a legitimate device by identity
@@ -1858,6 +1929,24 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(payload)
 
+    def _handle_handoff_set_password(self) -> None:
+        """Consumes a one-time handoff token (see HANDOFF_TOKEN_PATH's comment) and sets a brand
+        new guardian password -- the `/handoff/` static page's form posts here. Same length floor
+        as the regular change-password flow; same _save_password_override call, so this has the
+        identical side effect of invalidating every existing dashboard/review session (including
+        whoever generated the link)."""
+        body = self._read_json_body()
+        token = (body or {}).get("token", "")
+        new_password = (body or {}).get("newPassword", "")
+        # Checked before consuming the token: a too-short password shouldn't burn a one-time link
+        # over a mistake unrelated to the token's own validity.
+        if len(new_password) < 8:
+            return self._send_json(400, {"error": "New password must be at least 8 characters."})
+        if not _consume_handoff_token(token):
+            return self._send_json(400, {"error": "This link is invalid or has expired."})
+        _save_password_override(GUARDIAN_LOGIN_PASSWORD_PATH, new_password)
+        self._send_json(200, {"status": "ok"})
+
     def _handle_dashboard_verify(self) -> None:
         """Backs Caddy's `forward_auth` in front of `/dashboard/*` and `/dashboard-api/*` -- Caddy
         calls this on every request to those paths and only lets the real request through on 2xx.
@@ -1954,6 +2043,12 @@ class Handler(BaseHTTPRequestHandler):
             return self._handle_review_login()
         if parsed.path == "/review-auth/logout":
             return self._handle_review_logout()
+        # Handoff link (see HANDOFF_TOKEN_PATH's comment): authenticates on the one-time token in
+        # the request body, not a session cookie or the Bearer TOKEN -- the whole point is that
+        # whoever's using this doesn't have either of those yet. Must run before the Bearer gate
+        # below for the same reason the login routes above do.
+        if parsed.path == "/handoff-auth/set-password":
+            return self._handle_handoff_set_password()
 
         if not self._authorized():
             return self._send_json(401, {"error": "unauthorized"})
@@ -2236,6 +2331,29 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(400, {"error": "new password must be at least 8 characters"})
                 return True
             _save_password_override(GUARDIAN_LOGIN_PASSWORD_PATH, new_password)
+            self._send_json(200, {"status": "ok"})
+            return True
+
+        # One-time account-handoff link (see HANDOFF_TOKEN_PATH's comment) -- guardian-only to
+        # generate/inspect/cancel, same as the password-change route above, but unlike that route
+        # this doesn't require knowing the CURRENT password to use: the resulting link is what
+        # proves the right person is setting the new one, not knowledge of the old value. GET
+        # reports pending-link status (for the dashboard to show "link pending, expires at X"
+        # without needing to regenerate); the token itself is only ever returned once, from the
+        # POST that creates it -- GET deliberately omits it, so refreshing the Global Settings
+        # page can't leak an already-sent link's value to anyone glancing at devtools/network logs.
+        if path == "/dashboard-api/handoff-link" and method == "GET":
+            pending = _load_handoff_token()
+            self._send_json(200, {"pending": pending is not None, "expiresAt": pending["expiresAt"] if pending else None})
+            return True
+
+        if path == "/dashboard-api/handoff-link" and method == "POST":
+            data = _save_handoff_token()
+            self._send_json(200, {"token": data["token"], "expiresAt": data["expiresAt"]})
+            return True
+
+        if path == "/dashboard-api/handoff-link" and method == "DELETE":
+            _clear_handoff_token()
             self._send_json(200, {"status": "ok"})
             return True
 

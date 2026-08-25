@@ -1397,6 +1397,9 @@ function GlobalSettingsScreen({
             onSubmit={(current, next) => api.setDashboardPassword(current, next)}
           />
         </Card>
+        <Card className="rounded-2xl">
+          <HandoffLinkCard />
+        </Card>
       </div>
 
       <div className="space-y-3">
@@ -1792,6 +1795,105 @@ function PasswordChangeForm({
         </Button>
       </div>
       {status && <p className="text-xs text-on-surface-variant">{status}</p>}
+    </div>
+  );
+}
+
+// One-time account-handoff link (see lockprofile_service.py's HANDOFF_TOKEN_PATH comment) --
+// generates a single-use, expiring link that lets whoever holds it set a BRAND NEW password
+// without needing to know the current one. Meant for the one-time moment you're done setting
+// this up and ready to hand the account to your guardian -- not an ongoing reset mechanism.
+// Generating a new link invalidates whatever was generated before.
+function HandoffLinkCard() {
+  const [pending, setPending] = useState<{ pending: boolean; expiresAt: number | null } | null>(null);
+  const [freshLink, setFreshLink] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState("");
+  const [copied, setCopied] = useState(false);
+
+  const reload = () => api.getHandoffLinkStatus().then(setPending).catch(() => setPending(null));
+  useEffect(() => { reload(); }, []);
+
+  const generate = async () => {
+    setBusy(true);
+    setStatus("");
+    setCopied(false);
+    try {
+      const result = await api.generateHandoffLink();
+      setFreshLink(`${window.location.origin}/handoff/?token=${result.token}`);
+      setPending({ pending: true, expiresAt: result.expiresAt });
+    } catch (err) {
+      setStatus(err instanceof ApiError ? err.message : "Couldn't reach the server");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const cancel = async () => {
+    setBusy(true);
+    try {
+      await api.cancelHandoffLink();
+      setFreshLink(null);
+      setPending({ pending: false, expiresAt: null });
+    } catch (err) {
+      setStatus(err instanceof ApiError ? err.message : "Couldn't reach the server");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const copy = () => {
+    if (!freshLink) return;
+    navigator.clipboard?.writeText(freshLink).then(() => {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 3000);
+    });
+  };
+
+  return (
+    <div className="space-y-2">
+      <div>
+        <p className="text-sm font-medium">Account handoff link</p>
+        <p className="text-xs text-on-surface-variant">
+          A one-time link for when you're done setting this up -- send it to your guardian so
+          they can set their own dashboard password. Works once, expires in 48 hours, and doesn't
+          require knowing the current password. Generating a new link cancels any unused one.
+        </p>
+      </div>
+      {freshLink ? (
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-2">
+            <input
+              readOnly
+              value={freshLink}
+              onFocus={(e) => e.target.select()}
+              className="flex-1 h-9 px-3 rounded-xl border border-outline bg-surface text-xs font-mono focus:outline-none focus:ring-2 focus:ring-primary"
+            />
+            <Button variant="tonal" size="sm" onClick={copy}>{copied ? "Copied" : "Copy"}</Button>
+          </div>
+          <p className="text-[11px] text-on-surface-variant">
+            This is shown only once -- copy it now before leaving this page.
+          </p>
+        </div>
+      ) : (
+        <div className="flex items-center gap-2">
+          <Button variant="tonal" size="sm" disabled={busy} onClick={generate}>
+            {pending?.pending ? "Generate new link" : "Generate handoff link"}
+          </Button>
+          {pending?.pending && (
+            <Button variant="outlined" size="sm" disabled={busy} onClick={cancel}>
+              Cancel pending link
+            </Button>
+          )}
+        </div>
+      )}
+      {pending?.pending && pending.expiresAt && !freshLink && (
+        <p className="text-xs text-on-surface-variant">
+          A link is pending, expires {new Date(pending.expiresAt * 1000).toLocaleString()}. It
+          was only shown once when generated -- this is just a status check.
+        </p>
+      )}
+      {status && <p className="text-xs text-error">{status}</p>}
     </div>
   );
 }

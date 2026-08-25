@@ -410,6 +410,14 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ currentPassword, newPassword }),
     }),
+
+  // One-time account-handoff link -- see lockprofile_service.py's HANDOFF_TOKEN_PATH comment.
+  // GET reports pending-link status only (no token -- see that route's own comment for why); the
+  // token itself is only ever returned once, from the POST that creates it.
+  getHandoffLinkStatus: () => request<{ pending: boolean; expiresAt: number | null }>("/handoff-link"),
+  generateHandoffLink: () =>
+    request<{ token: string; expiresAt: number }>("/handoff-link", { method: "POST" }),
+  cancelHandoffLink: () => request<{ status: string }>("/handoff-link", { method: "DELETE" }),
 };
 
 // Not under BASE ("/dashboard-api") -- this is one of the two /dashboard-auth/* routes Caddy lets
