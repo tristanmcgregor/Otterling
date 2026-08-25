@@ -92,9 +92,10 @@
 	# open internet. Re-gated here the same way /dashboard's own Basic Auth got replaced one day
 	# later (2026-08-19, see below) -- a custom login page + session cookie, since the native
 	# browser credentials dialog was the actual thing causing re-prompt loops, not Basic Auth's
-	# concept in general. Deliberately its own separate REVIEW_LOGIN_PASSWORD/session cookie (see
-	# lockprofile_service.py's _handle_review_login/_handle_review_verify), not the dashboard's,
-	# so dashboard and review access can be handed out independently.
+	# concept in general. Deliberately its own separate session cookie (see lockprofile_service.py's
+	# _handle_review_login/_handle_review_verify), not the dashboard's, so dashboard and review
+	# sessions can be handed out/revoked independently even though both now check the same shared
+	# Guardian PIN (see _guardian_pin_value's comment).
 	handle /review-auth/* {
 		reverse_proxy 127.0.0.1:8091
 	}
@@ -152,7 +153,7 @@
 	}
 	# One-time account-handoff page (see lockprofile_service.py's HANDOFF_TOKEN_PATH comment) --
 	# deliberately unauthenticated, same as /dashboard-login/ above: whoever holds the link is
-	# meant to not have a password yet. /handoff-auth/set-password validates the token itself.
+	# meant to not have a PIN yet. /handoff-auth/set-pin validates the token itself.
 	handle /handoff-auth/* {
 		reverse_proxy 127.0.0.1:8091
 	}

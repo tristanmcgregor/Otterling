@@ -408,16 +408,6 @@ export const api = {
   removeHabitShareAccount: () =>
     request<{ username: null; password: null; updatedAt: number }>("/habitshare-account", { method: "DELETE" }),
 
-  // Changes the one shared guardian login password (used for both this dashboard and /review).
-  // Requires the current password -- see lockprofile_service.py's dashboard-password route.
-  // Also invalidates every existing /review session, since that session's HMAC key IS this
-  // password.
-  setDashboardPassword: (currentPassword: string, newPassword: string) =>
-    request<{ status: string }>("/dashboard-password", {
-      method: "POST",
-      body: JSON.stringify({ currentPassword, newPassword }),
-    }),
-
   // One-time account-handoff link -- see lockprofile_service.py's HANDOFF_TOKEN_PATH comment.
   // GET reports pending-link status only (no token -- see that route's own comment for why); the
   // token itself is only ever returned once, from the POST that creates it.

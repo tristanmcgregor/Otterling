@@ -183,15 +183,14 @@ services:
       # install_lock_profile.py already use for the same physical Mac -- see
       # lockprofile_service.py's DEVICE_ID_ALIASES doc for why this exists.
       - DEVICE_ID_ALIASES=${DEVICE_ID_ALIASES:-}
-      # One shared guardian login, password-only (no username), for BOTH the device-settings
-      # dashboard and /review (see lockprofile_service.py's GUARDIAN_LOGIN_PASSWORD comment and
-      # Caddyfile's /dashboard-auth/* + /review-auth/*) -- blank means both login routes always
-      # reject, matching the project's fail-closed stance for anything gating access rather than
-      # DNS/proxy enforcement. Falls back to REVIEW_LOGIN_PASSWORD if only that's set (pre-unification
-      # deployments); REVIEW_DASHBOARD_PASSWORD_HASH/REVIEW_DASHBOARD_USER in .env are unrelated
+      # Bootstrap-only Guardian PIN for a brand-new deployment with no guardian_pin.json yet (see
+      # lockprofile_service.py's GUARDIAN_PIN_ENV_BOOTSTRAP comment) -- this same PIN gates BOTH
+      # the device-settings dashboard and /review (Caddyfile's /dashboard-auth/* + /review-auth/*)
+      # in addition to Settings on the phone. Blank means both login routes always reject, matching
+      # the project's fail-closed stance for anything gating access rather than DNS/proxy
+      # enforcement. REVIEW_DASHBOARD_PASSWORD_HASH/REVIEW_DASHBOARD_USER in .env are unrelated
       # leftovers from Caddy's own basicauth, removed from /review 2026-08-18, never read anywhere.
-      - DASHBOARD_LOGIN_PASSWORD=${DASHBOARD_LOGIN_PASSWORD:-}
-      - REVIEW_LOGIN_PASSWORD=${REVIEW_LOGIN_PASSWORD:-}
+      - GUARDIAN_PIN=${GUARDIAN_PIN:-}
       # Optional -- blank disables push notification, events still log to lockprofile-data/alerts/.
       - NTFY_TOPIC=${NTFY_TOPIC:-}
       - NTFY_SERVER=${NTFY_SERVER:-https://ntfy.sh}
@@ -218,7 +217,7 @@ services:
       # Both dashboards' former DASHBOARD_USER/DASHBOARD_PASSWORD_HASH and REVIEW_DASHBOARD_USER/
       # REVIEW_DASHBOARD_PASSWORD_HASH Basic Auth vars used to live here, but Caddy's basicauth
       # directives that read them are gone -- credential-checking for both now lives entirely on
-      # the lockprofile service (see lockprofile_service.py's GUARDIAN_LOGIN_PASSWORD comment),
+      # the lockprofile service (see lockprofile_service.py's GUARDIAN_PIN_PATH comment),
       # Caddy just forward_auths to it.
       # Injected onto outbound requests to lockprofile for the /device-logs/view/* and
       # /dashboard-api/* routes below -- same token as the lockprofile service itself

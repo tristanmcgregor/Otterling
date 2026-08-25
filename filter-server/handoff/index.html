@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Otterling — Set up your password</title>
+<title>Otterling — Set up your Guardian PIN</title>
 <meta name="robots" content="noindex, nofollow" />
 <style>
   :root { color-scheme: dark; }
@@ -39,18 +39,18 @@
 </head>
 <body>
   <form id="setupForm" style="display: none;">
-    <h1>Set up your password</h1>
-    <p class="sub">Choose a password for the Otterling dashboard. This link only works once.</p>
+    <h1>Set up your Guardian PIN</h1>
+    <p class="sub">Choose a 4-digit Guardian PIN for the Otterling dashboard, /review, and Settings on the phone. This link only works once.</p>
     <div>
-      <label for="password">New password</label>
-      <input id="password" name="password" type="password" autocomplete="new-password" autofocus />
+      <label for="pin">New PIN</label>
+      <input id="pin" name="pin" type="password" inputmode="numeric" maxlength="4" autocomplete="new-password" autofocus />
     </div>
     <div>
-      <label for="confirm">Confirm password</label>
-      <input id="confirm" name="confirm" type="password" autocomplete="new-password" />
+      <label for="confirm">Confirm PIN</label>
+      <input id="confirm" name="confirm" type="password" inputmode="numeric" maxlength="4" autocomplete="new-password" />
     </div>
     <div id="error"></div>
-    <button type="submit" id="submitBtn">Set password</button>
+    <button type="submit" id="submitBtn">Set PIN</button>
   </form>
 
   <div id="invalid" style="display: none;">
@@ -59,8 +59,8 @@
   </div>
 
   <div id="success" style="display: none;">
-    <h1>Password set</h1>
-    <p>You're all set. Sign in to the dashboard with your new password.</p>
+    <h1>PIN set</h1>
+    <p>You're all set. Sign in to the dashboard with your new Guardian PIN.</p>
     <a class="button" href="/dashboard-login/">Go to sign in</a>
   </div>
 
@@ -82,23 +82,23 @@
     setupForm.addEventListener('submit', async (event) => {
       event.preventDefault();
       errorEl.textContent = '';
-      const password = document.getElementById('password').value;
+      const pin = document.getElementById('pin').value;
       const confirm = document.getElementById('confirm').value;
-      if (password.length < 8) {
-        errorEl.textContent = 'Password must be at least 8 characters.';
+      if (!/^\d{4}$/.test(pin)) {
+        errorEl.textContent = 'PIN must be exactly 4 digits.';
         return;
       }
-      if (password !== confirm) {
-        errorEl.textContent = 'Passwords do not match.';
+      if (pin !== confirm) {
+        errorEl.textContent = 'PINs do not match.';
         return;
       }
       submitBtn.disabled = true;
-      submitBtn.textContent = 'Setting password…';
+      submitBtn.textContent = 'Setting PIN…';
       try {
-        const response = await fetch('/handoff-auth/set-password', {
+        const response = await fetch('/handoff-auth/set-pin', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ token, newPassword: password }),
+          body: JSON.stringify({ token, newPin: pin }),
         });
         if (response.ok) {
           setupForm.style.display = 'none';
@@ -111,12 +111,12 @@
           invalidEl.style.display = 'flex';
           return;
         }
-        errorEl.textContent = data.error || 'Could not set password.';
+        errorEl.textContent = data.error || 'Could not set PIN.';
       } catch (error) {
         errorEl.textContent = 'Could not reach the server.';
       } finally {
         submitBtn.disabled = false;
-        submitBtn.textContent = 'Set password';
+        submitBtn.textContent = 'Set PIN';
       }
     });
   </script>

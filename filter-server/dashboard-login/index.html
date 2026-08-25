@@ -40,8 +40,8 @@
     <h1>Otterling Dashboard</h1>
     <p class="sub">Guardian sign-in for per-device settings.</p>
     <div>
-      <label for="password">Password</label>
-      <input id="password" name="password" type="password" autocomplete="current-password" autofocus />
+      <label for="pin">Guardian PIN</label>
+      <input id="pin" name="pin" type="password" inputmode="numeric" autocomplete="current-password" autofocus />
     </div>
     <div id="error"></div>
     <button type="submit" id="submitBtn">Sign in</button>
@@ -63,7 +63,7 @@
           credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            password: document.getElementById('password').value,
+            pin: document.getElementById('pin').value,
           }),
         });
         if (response.ok) {

@@ -1325,8 +1325,7 @@ function SettingsScreen({
 // Fleet-wide config, not scoped to whichever device happens to be selected in the sidebar's
 // device switcher -- Guardian PIN and the habit library were already global data (one PIN, one
 // habit library shared across every device) but used to live inside per-device SettingsScreen,
-// which read as "a setting of this device" when it wasn't. HabitShare account and the dashboard/
-// review login passwords are new here.
+// which read as "a setting of this device" when it wasn't. HabitShare account is new here.
 function GlobalSettingsScreen({
   habits, onHabitsChanged,
 }: {
@@ -1360,7 +1359,9 @@ function GlobalSettingsScreen({
                 </Pill>
               </div>
               <p className="text-xs text-on-surface-variant">
-                Shared across every Otterling device on this account — gates Settings on the phone.
+                Shared across every Otterling device on this account — gates Settings on the phone,
+                and also signs into this website and into /review (AI review history, device
+                diagnostic logs). Changing it signs out every other /review session.
               </p>
             </div>
             <Button variant="outlined" size="sm" onClick={() => setPinModalOpen(true)}>Change PIN</Button>
@@ -1395,14 +1396,7 @@ function GlobalSettingsScreen({
       </div>
 
       <div className="space-y-3">
-        <SectionLabel>Password</SectionLabel>
-        <Card className="rounded-2xl">
-          <PasswordChangeForm
-            title="Guardian login"
-            sub="Signs into this website and into /review (AI review history, device diagnostic logs) — one shared password for both. Changing it signs out every other /review session."
-            onSubmit={(current, next) => api.setDashboardPassword(current, next)}
-          />
-        </Card>
+        <SectionLabel>Account Handoff</SectionLabel>
         <Card className="rounded-2xl">
           <HandoffLinkCard />
         </Card>
@@ -1745,68 +1739,8 @@ function HabitShareAccountCard() {
   );
 }
 
-function PasswordChangeForm({
-  title, sub, onSubmit,
-}: {
-  title: string;
-  sub: string;
-  onSubmit: (currentPassword: string, newPassword: string) => Promise<unknown>;
-}) {
-  const [current, setCurrent] = useState("");
-  const [next, setNext] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [status, setStatus] = useState("");
-
-  const submit = async () => {
-    if (!current || next.length < 8) return;
-    setBusy(true);
-    setStatus("");
-    try {
-      await onSubmit(current, next);
-      setCurrent("");
-      setNext("");
-      setStatus("Changed.");
-    } catch (err) {
-      setStatus(err instanceof ApiError ? err.message : "Couldn't reach the server");
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div className="space-y-2">
-      <div>
-        <p className="text-sm font-medium">{title}</p>
-        <p className="text-xs text-on-surface-variant">{sub}</p>
-      </div>
-      <div className="flex items-center gap-2">
-        <input
-          value={current}
-          onChange={(e) => setCurrent(e.target.value)}
-          type="password"
-          placeholder="Current password"
-          autoComplete="current-password"
-          className="flex-1 h-9 px-3 rounded-xl border border-outline bg-surface text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-        />
-        <input
-          value={next}
-          onChange={(e) => setNext(e.target.value)}
-          type="password"
-          placeholder="New password (min 8 chars)"
-          autoComplete="new-password"
-          className="flex-1 h-9 px-3 rounded-xl border border-outline bg-surface text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-        />
-        <Button variant="tonal" size="sm" disabled={busy || !current || next.length < 8} onClick={submit}>
-          Change
-        </Button>
-      </div>
-      {status && <p className="text-xs text-on-surface-variant">{status}</p>}
-    </div>
-  );
-}
-
 // One-time account-handoff link (see lockprofile_service.py's HANDOFF_TOKEN_PATH comment) --
-// generates a single-use, expiring link that lets whoever holds it set a BRAND NEW password
+// generates a single-use, expiring link that lets whoever holds it set a BRAND NEW Guardian PIN
 // without needing to know the current one. Meant for the one-time moment you're done setting
 // this up and ready to hand the account to your guardian -- not an ongoing reset mechanism.
 // Generating a new link invalidates whatever was generated before.
@@ -1862,8 +1796,8 @@ function HandoffLinkCard() {
         <p className="text-sm font-medium">Account handoff link</p>
         <p className="text-xs text-on-surface-variant">
           A one-time link for when you're done setting this up -- send it to your guardian so
-          they can set their own dashboard password. Works once, expires in 48 hours, and doesn't
-          require knowing the current password. Generating a new link cancels any unused one.
+          they can set their own Guardian PIN. Works once, expires in 48 hours, and doesn't
+          require knowing the current PIN. Generating a new link cancels any unused one.
         </p>
       </div>
       {freshLink ? (
