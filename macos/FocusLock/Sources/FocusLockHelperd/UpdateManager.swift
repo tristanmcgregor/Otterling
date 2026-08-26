@@ -119,9 +119,15 @@ enum UpdateManager {
 
     private static func fetchManifest(host: String) -> UpdateManifest? {
         guard let url = URL(string: "https://\(host)\(FocusLockConstants.updateManifestPathSuffix)") else { return nil }
+        // Caddy serves this file with no Cache-Control/Expires header, so URLSession.shared's
+        // persistent disk cache applies HTTP heuristic freshness and can silently keep serving a
+        // stale manifest body (observed: a manifest from days earlier, missing fields a newer
+        // schema requires) without ever re-hitting the network. A version/signature check has to
+        // see the real current file every time, so bypass the cache entirely rather than trust it.
+        let request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData)
         let semaphore = DispatchSemaphore(value: 0)
         var body: Data?
-        let task = URLSession.shared.dataTask(with: url) { data, _, _ in
+        let task = URLSession.shared.dataTask(with: request) { data, _, _ in
             body = data
             semaphore.signal()
         }
