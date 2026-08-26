@@ -33,4 +33,11 @@ its two output files onto this host yourself. See
 what actually adding CI automation for this would take. `index.json` lists macOS as
 `not_built_on_linux` for the same reason, until that changes.
 
+Even though the build itself is manual, `UpdateManager` on the client will only install a
+`macos-manifest.json` whose `reviewAttestation` field verifies against a key that lives only on
+*this* host, at `/var/lib/otterling/ci/secrets/macos_review_attestation_ed25519` -- and that host
+only ever signs a manifest naming the git SHA in `last_published_sha` (i.e. one that already passed
+the same cumulative AI review Android's APK goes through). Run `sudo otterling-attest-macos` here to
+get that signature; see `macos/FocusLock/RELEASE.md`'s "Per-release" section for the exact command.
+
 See [`SELF_LOCKOUT.md`](../SELF_LOCKOUT.md).

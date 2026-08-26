@@ -186,6 +186,27 @@ public enum FocusLockConstants {
     /// instead of `codesign`'s own output silently made every build fail its own update check.
     public static let pinnedUpdateTeamID = "D4XJKWV7GY"
 
+    /// Raw 32-byte Ed25519 public key (base64), matching the private key kept ONLY at
+    /// `/var/lib/otterling/ci/secrets/macos_review_attestation_ed25519` on the AI-review host. That
+    /// host's `attest_macos_release.sh` (`sudo otterling-attest-macos`) refuses to sign anything
+    /// unless `last_published_sha` -- written only by `release.sh` after a cumulative AI
+    /// `VERDICT: PASS` -- names the git SHA being attested to. So a valid signature here means
+    /// "this exact (versionCode, versionName, sha256, gitSha) tuple was attested to by the one host
+    /// that only ever attests to AI-reviewed commits", independent of who ran
+    /// `publish_release.sh` or what Apple signing identity they used.
+    ///
+    /// This exists because, unlike Android (where the release host holds the actual APK signing
+    /// keystore, so passing AI review and being able to produce a trusted binary are the same
+    /// gate), the Linux review host has no Xcode/codesign and structurally cannot hold the Apple
+    /// signing identity for this app -- see `macos/FocusLock/RELEASE.md`. This pinned key closes
+    /// that gap with a second, independent signature that CAN live only on the review host, checked
+    /// *in addition to* (not instead of) `pinnedUpdateTeamID` and the SHA-256 check below.
+    ///
+    /// **Empty by default, and `UpdateManager` refuses to install anything while it's empty** --
+    /// same fail-closed stance as `pinnedUpdateTeamID`. Fill in your own host's public key here and
+    /// rebuild before relying on auto-update.
+    public static let pinnedReviewAttestationPublicKey = "VdwILWyejzNhnL+XSrhts5//Yae9qKJGhMHlNUHmKok="
+
     /// Where `UpdateManager` looks for the manifest -- see `filter-server/updates/README.md` and
     /// `macos/FocusLock/RELEASE.md` for how it gets published. Uses the same host as the cloud
     /// content filter/lock-profile services (one family server), read from persisted state

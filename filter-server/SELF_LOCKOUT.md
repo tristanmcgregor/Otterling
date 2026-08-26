@@ -53,6 +53,8 @@ The live gate always uses the pinned host checklist. A release compares any cand
 | `/var/lib/otterling/ci/strengthen_checklist.sh` | Root-only promote of a stronger checklist (AI-gated) |
 | `/var/lib/otterling/ci/secrets.env` | Keys (mode 600, root only) |
 | `/var/lib/otterling/ci/secrets/release.jks` | Release signing keystore |
+| `/var/lib/otterling/ci/secrets/macos_review_attestation_ed25519` | Signs macOS manifests (only for a SHA in `last_published_sha`); see `macos/FocusLock/RELEASE.md` |
+| `/var/lib/otterling/ci/attest_macos_release.sh` (`sudo otterling-attest-macos`) | Root-only: signs a macOS manifest's fields after checking `last_published_sha` |
 | `/var/lib/otterling/ci/android-sdk` | Android SDK for `assembleRelease` |
 | `/var/lib/otterling/ci/release.lock` | Serializes overlapping releases (`flock`) |
 | `/var/lib/otterling/updates/` | Live APK + `manifest.json` + `index.json` |

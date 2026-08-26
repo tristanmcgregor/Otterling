@@ -38,10 +38,44 @@ match your pinned value.
 suffix after your "Apple Development" certificate's name -- Xcode's free "Personal Team" assigns
 one same as a paid account) or in Keychain Access under the certificate's Organizational Unit
 field, then set `FocusLockConstants.pinnedUpdateTeamID` in `Sources/FocusLockShared/Constants.swift`
-to it, and rebuild every install that should trust future updates. **This is the actual root of
+to it, and rebuild every install that should trust future updates. **This is one of two roots of
 trust** -- see that constant's doc comment and `UpdateManager.swift`'s. Left empty, `UpdateManager`
 refuses to install anything at all (fail closed), matching Android's stance for a build with no
 `RELEASE_CERT_SHA256`.
+
+**Generate the review-attestation keypair** (the other root of trust -- see below): on the AI-review
+host (`/var/lib/otterling/ci`, root-owned), one time only:
+
+```bash
+sudo openssl genpkey -algorithm ed25519 -out /var/lib/otterling/ci/secrets/macos_review_attestation_ed25519
+sudo chmod 600 /var/lib/otterling/ci/secrets/macos_review_attestation_ed25519
+```
+
+Then extract the raw public key as base64 (what you'll paste into
+`FocusLockConstants.pinnedReviewAttestationPublicKey`):
+
+```bash
+sudo python3 -c '
+from cryptography.hazmat.primitives import serialization
+import base64
+with open("/var/lib/otterling/ci/secrets/macos_review_attestation_ed25519", "rb") as f:
+    priv = serialization.load_pem_private_key(f.read(), password=None)
+raw = priv.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+print(base64.b64encode(raw).decode())
+'
+```
+
+Set that value in `FocusLockConstants.pinnedReviewAttestationPublicKey` and rebuild every install
+that should trust future updates, same as the Team ID pin above. Left empty, `UpdateManager`
+likewise refuses to install anything (fail closed).
+
+Why this second key exists: unlike Android, where the release host holds the actual APK signing
+keystore (so "passed AI review" and "produced a trusted binary" are literally the same event), this
+host has no Xcode/`codesign` and can't hold the Apple signing identity for macOS builds -- that
+identity necessarily lives on whatever Mac runs `build_app.sh`. This keypair is a second,
+independent signature that CAN live only on the review host, so the client can still verify "this
+update corresponds to a git SHA the review host actually recorded as AI-reviewed" even though the
+review host never touched the binary itself.
 
 ## Per-release
 
@@ -56,7 +90,27 @@ ALLOW_NON_DEVELOPER_ID=1 ./Scripts/publish_release.sh <versionCode> <versionName
   signing with the wrong identity (or forgetting to update the pin) before it goes anywhere near a
   server, since a published build no installed copy will ever trust is a wasted release.
 - Zips the app (`ditto`, preserving resource forks/attributes) and computes its SHA-256.
-- Writes `macos-manifest.json` + the zip to `macos/FocusLock/.release/`.
+- Without `--attestation`, prints the exact command to run on the review host and stops -- it does
+  **not** write a manifest, since one without `reviewAttestation` is dead weight no install will
+  ever trust.
+
+On the review host, get the attestation (needs root; this is the actual AI-review gate -- it
+refuses unless `/var/lib/otterling/updates/last_published_sha` names a reviewed commit):
+
+```bash
+sudo otterling-attest-macos --sha256 <sha256 from publish_release.sh's output> \
+  --version-code <versionCode> --version-name <versionName>
+```
+
+This prints `{"gitSha": "...", "reviewAttestation": "..."}`. Re-run `publish_release.sh` with that
+JSON to actually write the manifest:
+
+```bash
+./Scripts/publish_release.sh <versionCode> <versionName> --attestation '<paste JSON here>'
+```
+
+This writes `macos-manifest.json` + the zip to `macos/FocusLock/.release/`, with `gitSha` and
+`reviewAttestation` filled in from what the host signed.
 
 Then, manually (this script has no access to your server and doesn't attempt it):
 
@@ -74,9 +128,11 @@ check -- see below).
 ## What happens on the Mac when an update installs
 
 `UpdateManager` (daemon-side, `Sources/FocusLockHelperd/UpdateManager.swift`) verifies, in order:
-SHA-256 of the download, then the extracted bundle's code signature
-(`codesign --verify --deep --strict`) **and** that its Team Identifier matches the locally pinned
-`pinnedUpdateTeamID` -- both required. Only then does it atomically swap the new bundle into
+the manifest's `reviewAttestation` signature against the locally pinned
+`pinnedReviewAttestationPublicKey` (before downloading anything), then SHA-256 of the download,
+then the extracted bundle's code signature (`codesign --verify --deep --strict`) **and** that its
+Team Identifier matches the locally pinned `pinnedUpdateTeamID` -- all required. Only then does it
+atomically swap the new bundle into
 `/Applications/Otterling.app`, restart the watchdog LaunchDaemon (a separate job, needs telling
 explicitly) so it picks up its own new binary, and exit -- `KeepAlive=true` relaunches the daemon
 itself immediately from the freshly-installed binary.
@@ -95,8 +151,16 @@ process's first tick).
 
 ## Closing the CI gap
 
-To get real parity with Android (AI-review-gated, fully automated build-and-publish on push), this
-pipeline would need:
+The `reviewAttestation` mechanism above (see "One-time setup") closes the *verification* half of
+this gap without a macOS build agent: the client already refuses any update whose manifest isn't
+signed by a key that only exists on the review host, and that host only signs a git SHA it already
+recorded as AI-reviewed. What it does **not** close is the *build* half -- a human still has to
+locally build, sign, and run `publish_release.sh`/`otterling-attest-macos` by hand for every
+release; nothing stops that human from building from a stale or locally-modified checkout that
+happens to share a git SHA with something that *was* reviewed (the attestation checks the SHA
+matches, not that the bytes it's attesting to were literally produced from that source). Real
+build-time parity with Android (AI-review-gated, fully automated build-and-publish on push) would
+still need:
 
 - **A macOS build agent** added to the release flow -- either a GitHub Actions `macos-latest`
   runner, or a real Mac added as a self-hosted runner. Recall `.github/workflows/*` is currently

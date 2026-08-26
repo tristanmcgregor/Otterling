@@ -76,6 +76,20 @@ weakened, nothing else here matters, because a bypassed build could ship anyway.
 - That same `release.sh` must keep deploying **filter-server** onto the update host after PASS
   (not APK-only). FAIL any attempt to document or reintroduce a path that publishes the Android
   APK while skipping host `filter-server` deploy when that tree changed.
+- [`UpdateManager.swift`](../macos/FocusLock/Sources/FocusLockHelperd/UpdateManager.swift):
+  `downloadVerifyAndInstall` must still (a) reject when
+  `FocusLockConstants.pinnedReviewAttestationPublicKey` is blank, (b) reject when
+  `manifest.reviewAttestation` doesn't verify against that pinned key over the manifest's own
+  `versionCode`/`versionName`/`sha256`/`gitSha`, (c) reject on a SHA-256 mismatch, (d) reject when
+  the extracted bundle's code signature or Team Identifier doesn't match
+  `pinnedUpdateTeamID` -- all four required, in addition to each other, not as alternatives. FAIL
+  any diff that removes a check, weakens a comparison, hardcodes a bypass, or adds any code path
+  that installs a `.app` without all four having passed.
+- `attest_macos_release.sh`/`otterling-attest-macos` (root-owned, on the update host) must keep
+  refusing to sign unless `/var/lib/otterling/updates/last_published_sha` names the git SHA being
+  attested to -- that file is only ever written by `release.sh` after AI `VERDICT: PASS`. FAIL any
+  diff that lets this script sign an arbitrary/caller-supplied git SHA, or that removes the
+  requirement that `last_published_sha` exist before signing.
 
 ## 2. VPN lockdown (Android)
 

@@ -3,8 +3,14 @@ import Foundation
 import FocusLockShared
 
 /// Fetches, verifies, and installs Otterling updates -- macOS counterpart to the Android app's
-/// `ApprovedUpdateManager`, same trust chain, in the same order:
-///   1. The manifest names a version/downloadUrl/sha256.
+/// `ApprovedUpdateManager`, same trust chain, in the same order, plus one macOS-only step:
+///   1. The manifest names a version/downloadUrl/sha256/gitSha, and must carry a
+///      `reviewAttestation` signature (checked against `pinnedReviewAttestationPublicKey`) --
+///      see that constant's doc comment. Unlike Android, where the release host holds the actual
+///      APK signing keystore (so "AI-reviewed" and "able to produce a trusted binary" are the same
+///      gate), this host can't hold the Apple signing identity, so this is a second signature that
+///      closes that gap independently. Checked first, before any network I/O, since a manifest
+///      that fails this is never worth downloading anything for.
 ///   2. The downloaded file's own SHA-256 must match the manifest's.
 ///   3. The extracted `.app` bundle's code signature must verify, and its Team Identifier must
 ///      match `FocusLockConstants.pinnedUpdateTeamID` -- baked in at build time, empty by default.
@@ -39,6 +45,21 @@ enum UpdateManager {
             return .rejected(
                 "This build has no pinned update Team ID (FocusLockConstants.pinnedUpdateTeamID) " +
                 "-- refusing to install any update. See that constant's doc comment."
+            )
+        }
+
+        let pinnedAttestationKey = FocusLockConstants.pinnedReviewAttestationPublicKey
+        guard !pinnedAttestationKey.isEmpty else {
+            return .rejected(
+                "This build has no pinned review-attestation public key " +
+                "(FocusLockConstants.pinnedReviewAttestationPublicKey) -- refusing to install any " +
+                "update. See that constant's doc comment."
+            )
+        }
+        guard verifyReviewAttestation(manifest, pinnedPublicKeyBase64: pinnedAttestationKey) else {
+            return .rejected(
+                "Review attestation signature is missing or invalid -- this update cannot be " +
+                "verified as having passed AI review, refusing to install"
             )
         }
 
@@ -151,6 +172,22 @@ enum UpdateManager {
 
     private static func unzip(zipPath: String, into destinationDir: String) -> Bool {
         ProcessRunner.run("/usr/bin/unzip", ["-q", zipPath, "-d", destinationDir]).status == 0
+    }
+
+    /// Verifies `manifest.reviewAttestation` (base64 Ed25519 signature, from `sudo
+    /// otterling-attest-macos` on the AI-review host) against `pinnedPublicKeyBase64`, over the
+    /// exact same `"versionCode|versionName|sha256|gitSha"` payload the host signed -- must match
+    /// byte-for-byte or the signature won't verify. Any malformed base64/key/signature fails
+    /// closed (returns `false`), same as an actual verification mismatch.
+    private static func verifyReviewAttestation(_ manifest: UpdateManifest, pinnedPublicKeyBase64: String) -> Bool {
+        guard let pinnedKeyData = Data(base64Encoded: pinnedPublicKeyBase64),
+              let publicKey = try? Curve25519.Signing.PublicKey(rawRepresentation: pinnedKeyData),
+              let signature = Data(base64Encoded: manifest.reviewAttestation) else {
+            return false
+        }
+        let payload = "\(manifest.versionCode)|\(manifest.versionName)|\(manifest.sha256)|\(manifest.gitSha)"
+        guard let payloadData = payload.data(using: .utf8) else { return false }
+        return publicKey.isValidSignature(signature, for: payloadData)
     }
 
     /// Two checks, both required: a structural signature-validity check (`codesign --verify`,

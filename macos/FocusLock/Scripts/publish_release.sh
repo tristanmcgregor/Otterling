@@ -11,15 +11,33 @@
 # still copy its output to the server yourself (scp/rsync -- whatever you already use to manage
 # that host).
 #
-# Usage: Scripts/publish_release.sh <versionCode> <versionName>
+# The written manifest also needs a "reviewAttestation" signature from that same host (see
+# RELEASE.md's "Per-release" section) before UpdateManager will accept it -- this script refuses to
+# write a usable manifest without one, since an unattested manifest is just dead weight no install
+# will ever trust anyway.
+#
+# Usage: Scripts/publish_release.sh <versionCode> <versionName> [--attestation '<json>']
 #   e.g. Scripts/publish_release.sh 2 "0.2"
+#        Scripts/publish_release.sh 2 "0.2" --attestation '{"gitSha":"...","reviewAttestation":"..."}'
+#   The --attestation JSON is exactly what `sudo otterling-attest-macos` prints on the review host.
 
 set -euo pipefail
 
 VERSION_CODE="${1:-}"
 VERSION_NAME="${2:-}"
+ATTESTATION_JSON=""
+if [ $# -gt 2 ]; then
+  shift 2
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --attestation) ATTESTATION_JSON="${2:?--attestation needs a JSON argument}"; shift 2 ;;
+      *) echo "Unknown argument: $1" >&2; exit 1 ;;
+    esac
+  done
+fi
+
 if [ -z "$VERSION_CODE" ] || [ -z "$VERSION_NAME" ]; then
-  echo "Usage: $0 <versionCode> <versionName>"
+  echo "Usage: $0 <versionCode> <versionName> [--attestation '<json>']"
   echo "  versionCode must be a plain integer, strictly greater than the last published one,"
   echo "  and must match FocusLockConstants.appVersionCode in the build you're publishing."
   exit 1
@@ -98,13 +116,43 @@ ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$ZIP_PATH"
 SHA256=$(shasum -a 256 "$ZIP_PATH" | awk '{print $1}')
 echo "    SHA-256: $SHA256"
 
+if [ -z "$ATTESTATION_JSON" ]; then
+  echo
+  echo "==> No --attestation given -- not writing a manifest yet."
+  echo "    Run this on the AI-review host (needs root; this is what actually ties the update to a"
+  echo "    commit that passed AI review -- see RELEASE.md):"
+  echo
+  echo "      sudo otterling-attest-macos --sha256 $SHA256 --version-code $VERSION_CODE --version-name \"$VERSION_NAME\""
+  echo
+  echo "    Then re-run this exact command with the JSON it prints:"
+  echo "      $0 $VERSION_CODE \"$VERSION_NAME\" --attestation '<paste the JSON here>'"
+  exit 0
+fi
+
+GIT_SHA=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["gitSha"])' "$ATTESTATION_JSON") \
+  || { echo "Could not parse \"gitSha\" out of --attestation JSON" >&2; exit 1; }
+REVIEW_ATTESTATION=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["reviewAttestation"])' "$ATTESTATION_JSON") \
+  || { echo "Could not parse \"reviewAttestation\" out of --attestation JSON" >&2; exit 1; }
+if [ -z "$GIT_SHA" ] || [ -z "$REVIEW_ATTESTATION" ]; then
+  echo "--attestation JSON is missing gitSha or reviewAttestation" >&2
+  exit 1
+fi
+
+LOCAL_SHA=$(git -C "$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)" rev-parse HEAD 2>/dev/null || echo "")
+if [ -n "$LOCAL_SHA" ] && [ "$LOCAL_SHA" != "$GIT_SHA" ]; then
+  echo "WARNING: attestation is for $GIT_SHA but your local checkout is at $LOCAL_SHA." >&2
+  echo "         Make sure the app you built actually matches the attested commit." >&2
+fi
+
 cat > "$MANIFEST_PATH" <<JSON
 {
   "versionCode": ${VERSION_CODE},
   "versionName": "${VERSION_NAME}",
   "downloadUrl": "https://\${UPDATE_HOST}/updates/${ZIP_NAME}",
   "sha256": "${SHA256}",
-  "codesignTeamId": "${TEAM_ID}"
+  "codesignTeamId": "${TEAM_ID}",
+  "gitSha": "${GIT_SHA}",
+  "reviewAttestation": "${REVIEW_ATTESTATION}"
 }
 JSON
 
