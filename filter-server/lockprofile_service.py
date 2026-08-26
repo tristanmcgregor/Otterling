@@ -711,10 +711,16 @@ def _load_report_types_file() -> dict:
 
 
 def _save_report_types_file(data: dict) -> None:
-    tmp_path = REPORT_TYPES_CONFIG_PATH + ".tmp"
-    with open(tmp_path, "w", encoding="utf-8") as fh:
+    """Writes in place rather than the tmp-file-then-os.replace pattern used elsewhere in this
+    file (e.g. _prune_and_save_alerts): REPORT_TYPES_CONFIG_PATH is bind-mounted into the
+    container as an individual file (docker-compose.yml), which makes that path itself a mount
+    point -- the kernel rejects rename()'ing a new inode onto an active mount point with EBUSY
+    ("Device or resource busy") no matter how permissive the mount is, so os.replace here can
+    never succeed. Losing rename's atomicity is an acceptable trade for a file this small and
+    infrequently written (one guardian PATCH at a time, under _report_types_lock).
+    """
+    with open(REPORT_TYPES_CONFIG_PATH, "w", encoding="utf-8") as fh:
         json.dump(data, fh, indent=2, sort_keys=False)
-    os.replace(tmp_path, REPORT_TYPES_CONFIG_PATH)
 
 
 def _update_report_type(report_type: str, updates: dict) -> dict | None:

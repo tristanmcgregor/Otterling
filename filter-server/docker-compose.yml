@@ -176,7 +176,12 @@ services:
       - "127.0.0.1:${LOCKPROFILE_PORT:-8091}:8091/tcp"
     volumes:
       - ./lockprofile_service.py:/opt/otterling/lockprofile_service.py:ro
-      - ./report_types.json:/opt/otterling/report_types.json:ro
+      # Read-write, unlike lockprofile_service.py above: the dashboard's Report Types panel
+      # PATCHes this file at runtime (see _save_report_types_file/_update_report_type) to
+      # persist a guardian's enable/disable + customMessage edits. A `:ro` mount here makes
+      # every one of those PATCHes fail (os.replace onto a read-only bind mount), surfacing to
+      # the dashboard as `Failed to update "<type>"` no matter which type is toggled.
+      - ./report_types.json:/opt/otterling/report_types.json
       - ./lockprofile-data:/data
     # Lets this container reach the host-level sudo_review_server.py (see that file and
     # lockprofile_service.py's SUDO_REVIEW_URL) -- `host-gateway` is the Docker Engine special value
