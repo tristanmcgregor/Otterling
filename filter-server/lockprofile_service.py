@@ -71,8 +71,8 @@ what actually happened on-device without ADB access to the phone. Written to
 `LOGS_DIR/<device_id>/<timestamp>.log`, pruned to the newest `MAX_LOG_FILES_PER_DEVICE` per device.
 Reuses `LOCKPROFILE_TOKEN` for auth, same as the tamper-poll endpoints above. `GET
 /device-logs/view/list` and `GET /device-logs/view/<device_id>/<filename>` serve them back out --
-Caddy puts these behind the `/review` dashboard's Basic Auth and injects the bearer token itself
-(see Caddyfile), so a browser never needs to know `LOCKPROFILE_TOKEN` directly.
+Caddy serves these under the (unauthenticated, see Caddyfile) `/review` dashboard and injects the
+bearer token itself, so a browser never needs to know `LOCKPROFILE_TOKEN` directly.
 """
 
 from __future__ import annotations
@@ -127,19 +127,14 @@ REPORT_TYPES_CONFIG_PATH = os.environ.get(
 # (returns 403), so an unconfigured deployment can't be poked with unauthenticated Fleet payloads.
 FLEET_WEBHOOK_SECRET = os.environ.get("FLEET_WEBHOOK_SECRET", "")
 
-# One shared guardian secret -- the Guardian PIN (see GUARDIAN_PIN_PATH below) -- for BOTH the
-# device-settings dashboard (filter-server/dashboard-login/) and /review et al
-# (filter-server/review-login/), in addition to gating Settings on the phone. This used to be a
-# separate 8+ character password (DASHBOARD_LOGIN_PASSWORD/REVIEW_LOGIN_PASSWORD, unified into one
-# shared GUARDIAN_LOGIN_PASSWORD on 2026-08-19); the guardian explicitly asked to collapse that
-# into the same PIN already used on-device instead, rather than juggle two secrets. See
-# GUARDIAN_PIN_PATH's comment for the PIN's own storage/exposure rules -- login here reuses
-# _guardian_pin_value() so there is exactly one place either surface reads it from. The dashboard
-# and review sessions are still separate cookies/tokens (see _dashboard_session_* and
-# _review_session_*) -- visiting one doesn't automatically log you into the other -- they just
-# check the same value.
+# Guardian secret -- the Guardian PIN (see GUARDIAN_PIN_PATH below) -- for the device-settings
+# dashboard (filter-server/dashboard-login/), in addition to gating Settings on the phone. This
+# used to be a separate 8+ character password (DASHBOARD_LOGIN_PASSWORD, unified into
+# GUARDIAN_LOGIN_PASSWORD on 2026-08-19); the guardian explicitly asked to collapse that into the
+# same PIN already used on-device instead, rather than juggle two secrets. See GUARDIAN_PIN_PATH's
+# comment for the PIN's own storage/exposure rules. /review used to check this same PIN via its
+# own session cookie too, until it was made unauthenticated on 2026-08-26 (see Caddyfile).
 DASHBOARD_SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60  # 30 days
-REVIEW_SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60  # 30 days, same as the dashboard's
 
 # One-time handoff link: lets whoever currently holds a guardian dashboard session (see
 # POST /dashboard-api/handoff-link below) generate a single-use, expiring, unguessable (256-bit)
@@ -150,9 +145,8 @@ REVIEW_SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60  # 30 days, same as the dashb
 # using the link is meant to be someone who doesn't have it), unlike the regular
 # POST /dashboard-api/pin change flow (which is guardian-session-gated instead). Setting a new PIN
 # this way has the exact same effect as that route (_save_guardian_pin), including invalidating
-# every existing review session -- so the moment the link is used, whoever generated it is logged
-# out of /review too, same as any other PIN change. This does NOT protect against someone who
-# retains actual server/filesystem access after generating a link (the PIN is still stored in
+# every existing dashboard session, same as any other PIN change. This does NOT protect against
+# someone who retains actual server/filesystem access after generating a link (the PIN is still stored in
 # plaintext, same as every other secret this file manages) -- it's a clean handoff ceremony, not a
 # technical guarantee against a host operator who keeps root.
 HANDOFF_TOKEN_PATH = os.path.join(DATA_DIR, "password_handoff_token.json")
@@ -161,7 +155,7 @@ HANDOFF_TOKEN_TTL_SECONDS = 48 * 60 * 60  # 48 hours
 
 def _guardian_pin_value() -> str:
     """The Guardian PIN as a string, or "" if none is set yet -- see GUARDIAN_PIN_PATH's comment.
-    Single read path shared by device Settings-unlock verification AND the dashboard/review login
+    Single read path shared by device Settings-unlock verification AND the dashboard login
     below, so there is exactly one secret to keep in sync."""
     return _load_guardian_pin().get("pin") or ""
 
@@ -380,9 +374,10 @@ DEFAULT_TEMPLATE_ALLOWED_KEYS = {"protections", "vpnFilter", "frictionDelay"}
 # checks a guess against this file server-side and returns only correct/incorrect, under
 # escalating lockout (_PIN_VERIFY_LOCKOUT) -- the PIN itself never crosses that boundary.
 #
-# This same value also gates the dashboard/review website logins now (_guardian_pin_value(),
-# _handle_dashboard_login, _handle_review_login) -- the guardian asked to drop the separate login
-# password and just reuse the PIN everywhere. That folds two different threat models into one
+# This same value also gates the dashboard website login now (_guardian_pin_value(),
+# _handle_dashboard_login) -- the guardian asked to drop the separate login password and just
+# reuse the PIN everywhere. (/review used to check this same PIN too, until it was made
+# unauthenticated on 2026-08-26 -- see Caddyfile.) That folds two different threat models into one
 # secret: the PIN was originally sized (4 digits, escalating lockout) for a guardian to
 # fat-finger-enter on their own kid's phone, not to resist unlimited remote guessing against a
 # website login -- the escalating lockout on the login routes (_guardian_login_record_result) is
@@ -391,7 +386,7 @@ GUARDIAN_PIN_PATH = os.path.join(DATA_DIR, "guardian_pin.json")
 
 # Bootstrap-only PIN for a brand-new deployment with no guardian_pin.json yet: since
 # POST /dashboard-api/pin (the normal way to set/change the PIN) is guardian-session-gated, and
-# dashboard/review login now requires a PIN to exist at all, a fresh install with nothing in
+# dashboard login now requires a PIN to exist at all, a fresh install with nothing in
 # GUARDIAN_PIN's env var and no session yet would otherwise have no way to log in for the very
 # first time. Same role DASHBOARD_LOGIN_PASSWORD used to play for the old password -- an env-var
 # seed that only matters until the guardian sets a real PIN from Global Settings, at which point
@@ -487,16 +482,15 @@ _PIN_VERIFY_LOCKOUT_THRESHOLD = 5
 _PIN_VERIFY_BASE_LOCKOUT_SECONDS = 5.0
 _PIN_VERIFY_MAX_LOCKOUT_SECONDS = 5 * 60.0
 
-# Same escalating-lockout shape as the PIN verify above, guarding the dashboard/review login
-# instead (_handle_dashboard_login, _handle_review_login) -- previously unlimited, instant
-# password guesses since secrets.compare_digest is only timing-safe, not rate-limited, and now
-# doubly important since login checks the same 4-digit Guardian PIN as /pin/verify (see
-# _guardian_pin_value's comment). One shared counter for both login routes, not two independent
-# ones: they check the exact same value, so a guesser splitting attempts across both routes must
-# not get to try twice as fast as hitting either one alone. Deliberately still a separate counter
-# from _pin_verify_lock above rather than merged with it -- device /pin/verify is Bearer-token
-# authenticated (only a device that already has LOCKPROFILE_TOKEN can call it), while these login
-# routes are reachable by anyone unauthenticated, a meaningfully different attack surface even
+# Same escalating-lockout shape as the PIN verify above, guarding the dashboard login instead
+# (_handle_dashboard_login) -- previously unlimited, instant password guesses since
+# secrets.compare_digest is only timing-safe, not rate-limited, and now doubly important since
+# login checks the same 4-digit Guardian PIN as /pin/verify (see _guardian_pin_value's comment).
+# (/review used to share this same counter via its own login route, until it was made
+# unauthenticated on 2026-08-26 -- see Caddyfile.) Deliberately still a separate counter from
+# _pin_verify_lock above rather than merged with it -- device /pin/verify is Bearer-token
+# authenticated (only a device that already has LOCKPROFILE_TOKEN can call it), while this login
+# route is reachable by anyone unauthenticated, a meaningfully different attack surface even
 # though the secret being guessed is now identical.
 _guardian_login_lock = threading.Lock()
 _guardian_login_failed_attempts = 0
@@ -771,45 +765,6 @@ def _dashboard_cookie_from_headers(headers) -> str | None:
     for part in raw.split(";"):
         name, _, value = part.strip().partition("=")
         if name == "otterling_dashboard_session":
-            return value
-    return None
-
-
-# ─── Review session cookie (custom login, re-gating /review after basic_auth's removal) ────────
-# Same self-verifying <expiry>.<hmac> shape as the dashboard's session above, keyed on the Guardian
-# PIN (_guardian_pin_value()) -- but still its own cookie/token, so a dashboard session isn't
-# automatically also a review session (or vice versa); they just check the same value now. Keying
-# an HMAC on a 4-digit PIN is weaker than a real password would be, but forging a token still
-# requires knowing the exact PIN value, not just its 10,000-combination search space in the
-# abstract -- the same escalating lockouts that protect PIN guesses elsewhere (_pin_verify_record_
-# result, _guardian_login_record_result) are what make that value hard to learn in the first place.
-def _review_session_create() -> str:
-    expiry = str(int(time.time()) + REVIEW_SESSION_MAX_AGE_SECONDS)
-    signature = hmac.new(_guardian_pin_value().encode("utf-8"), expiry.encode("utf-8"), hashlib.sha256).hexdigest()
-    return f"{expiry}.{signature}"
-
-
-def _review_session_valid(token: str) -> bool:
-    # No configured PIN must never validate -- otherwise HMAC-with-empty-key would make every
-    # token mint/verify against the same fixed (empty) secret, which is not "unconfigured and
-    # therefore locked out", it's "unconfigured and therefore a fixed, guessable key".
-    pin = _guardian_pin_value()
-    if not pin:
-        return False
-    if not token or "." not in token:
-        return False
-    expiry, _, signature = token.partition(".")
-    if not expiry.isdigit() or int(expiry) < time.time():
-        return False
-    expected = hmac.new(pin.encode("utf-8"), expiry.encode("utf-8"), hashlib.sha256).hexdigest()
-    return secrets.compare_digest(signature, expected)
-
-
-def _review_cookie_from_headers(headers) -> str | None:
-    raw = headers.get("Cookie", "")
-    for part in raw.split(";"):
-        name, _, value = part.strip().partition("=")
-        if name == "otterling_review_session":
             return value
     return None
 
@@ -1221,10 +1176,9 @@ def _guardian_login_lockout_remaining_seconds() -> float:
 
 
 def _guardian_login_record_result(correct: bool) -> None:
-    """Escalating lockout for the dashboard/review login password -- see the counter's own
-    comment for why this is shared across both routes. Same shape as _pin_verify_record_result:
-    5 free wrong guesses, then a doubling backoff up to 5 minutes. A correct guess resets the
-    counter."""
+    """Escalating lockout for the dashboard login password -- see the counter's own comment.
+    Same shape as _pin_verify_record_result: 5 free wrong guesses, then a doubling backoff up to
+    5 minutes. A correct guess resets the counter."""
     global _guardian_login_failed_attempts, _guardian_login_lockout_until
     with _guardian_login_lock:
         if correct:
@@ -1244,7 +1198,7 @@ def _guardian_login_record_result(correct: bool) -> None:
             event = _append_alert({
                 "device_id": "",
                 "type": "guardian_login_bruteforce_suspected",
-                "details": f"{_BRUTEFORCE_ALERT_THRESHOLD} wrong dashboard/review login attempts in a row -- possible brute-force attempt.",
+                "details": f"{_BRUTEFORCE_ALERT_THRESHOLD} wrong dashboard login attempts in a row -- possible brute-force attempt.",
                 "reported_at": time.time(),
                 "received_at": time.time(),
             })
@@ -2186,7 +2140,7 @@ class Handler(BaseHTTPRequestHandler):
         """Consumes a one-time handoff token (see HANDOFF_TOKEN_PATH's comment) and sets a brand
         new Guardian PIN -- the `/handoff/` static page's form posts here. Same 4-digit format as
         the regular POST /dashboard-api/pin change flow; same _save_guardian_pin call, so this has
-        the identical side effect of invalidating every existing /review session (including
+        the identical side effect of invalidating every existing dashboard session (including
         whoever generated the link) and changing what unlocks Settings fleet-wide."""
         body = self._read_json_body()
         token = (body or {}).get("token", "")
@@ -2222,61 +2176,6 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_json(401, {"error": "not logged in"})
         return self._send_redirect("/dashboard-login/")
 
-    def _set_review_session_cookie(self, token: str | None) -> None:
-        """Same shape/flags as [_set_dashboard_session_cookie] -- see that method's doc for why
-        HttpOnly/Secure/SameSite=Strict/no-Max-Age. Separate cookie name so it's never confused
-        with (or accidentally cleared/set by) the dashboard's own session cookie."""
-        value = "deleted; Max-Age=0" if token is None else token
-        self.send_header(
-            "Set-Cookie",
-            f"otterling_review_session={value}; Path=/; HttpOnly; Secure; SameSite=Strict",
-        )
-
-    def _handle_review_login(self) -> None:
-        current_pin = _guardian_pin_value()
-        if not current_pin:
-            return self._send_json(503, {"error": "review login not configured -- set a Guardian PIN from Global Settings"})
-        remaining = _guardian_login_lockout_remaining_seconds()
-        if remaining > 0:
-            return self._send_json(429, {"error": "locked out", "retryAfterMs": int(remaining * 1000)})
-        body = self._read_json_body()
-        pin = (body or {}).get("pin", "")
-        correct = secrets.compare_digest(pin, current_pin)
-        _guardian_login_record_result(correct)
-        if not correct:
-            return self._send_json(401, {"error": "invalid PIN"})
-        token = _review_session_create()
-        payload = json.dumps({"status": "ok"}).encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(payload)))
-        self._set_review_session_cookie(token)
-        self.end_headers()
-        self.wfile.write(payload)
-
-    def _handle_review_logout(self) -> None:
-        payload = json.dumps({"status": "ok"}).encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(payload)))
-        self._set_review_session_cookie(None)
-        self.end_headers()
-        self.wfile.write(payload)
-
-    def _handle_review_verify(self) -> None:
-        """Backs Caddy's `forward_auth` in front of `/review`, `/review/*`, `/review-data/*`, and
-        `/device-logs/view/*` -- same split as [_handle_dashboard_verify]: an actual page load
-        (`/review`, `/review/*`) gets redirected to the login page, while `/review-data/*` and
-        `/device-logs/view/*` (fetched via JS or curl, expecting JSON/plain text, never HTML) get
-        a plain 401 instead."""
-        cookie = _review_cookie_from_headers(self.headers)
-        if cookie and _review_session_valid(cookie):
-            return self._send_json(200, {"status": "ok"})
-        forwarded_uri = self.headers.get("X-Forwarded-Uri", "")
-        if forwarded_uri.startswith("/review-data/") or forwarded_uri.startswith("/device-logs/view/"):
-            return self._send_json(401, {"error": "not logged in"})
-        return self._send_redirect("/review-login/")
-
     def do_POST(self):  # noqa: N802 (http.server API)
         parsed = urllib.parse.urlparse(self.path)
         # This one route authenticates on a query secret (Fleet can't send a Bearer header), so it
@@ -2290,12 +2189,6 @@ class Handler(BaseHTTPRequestHandler):
             return self._handle_dashboard_login()
         if parsed.path == "/dashboard-auth/logout":
             return self._handle_dashboard_logout()
-        # Same reasoning as dashboard-auth above, for the review login (see
-        # _guardian_pin_value's comment -- same shared Guardian PIN, separate session cookie).
-        if parsed.path == "/review-auth/login":
-            return self._handle_review_login()
-        if parsed.path == "/review-auth/logout":
-            return self._handle_review_logout()
         # Handoff link (see HANDOFF_TOKEN_PATH's comment): authenticates on the one-time token in
         # the request body, not a session cookie or the Bearer TOKEN -- the whole point is that
         # whoever's using this doesn't have either of those yet. Must run before the Bearer gate
@@ -3055,8 +2948,6 @@ class Handler(BaseHTTPRequestHandler):
         # login/logout routes in do_POST).
         if parsed.path == "/dashboard-auth/verify":
             return self._handle_dashboard_verify()
-        if parsed.path == "/review-auth/verify":
-            return self._handle_review_verify()
 
         if not self._authorized():
             return self._send_json(401, {"error": "unauthorized"})
