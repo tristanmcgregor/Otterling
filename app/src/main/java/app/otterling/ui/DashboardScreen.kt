@@ -81,6 +81,7 @@ import app.otterling.focus.isTimeWindowed
 import app.otterling.focus.requiredHabitNames
 import app.otterling.focus.targetPackageNames
 import app.otterling.monitoring.DebugLogReader
+import app.otterling.monitoring.ProtectionController
 import app.otterling.restrictions.DeviceRestrictionsManager
 import app.otterling.restrictions.Restriction
 import app.otterling.tamper.TamperEvent
@@ -316,10 +317,18 @@ private fun ProtectionStatus(context: Context, data: DashboardData, onRestored: 
                     )
                 }
             }
-            // No-PIN escape hatch: only ever restores what's already configured (via
-            // DeviceRestrictionsManager.detectDriftAndReapply, which reapplies the parent's saved
-            // desired state) -- it can turn a drifted-off protection back on but has no path to turn
-            // anything off, so it's safe to expose without the Settings PIN.
+            // No-PIN escape hatch: only ever restores what's already configured -- it can turn a
+            // drifted-off protection back on but has no path to turn anything off, so it's safe to
+            // expose without the Settings PIN. Two steps, in order:
+            //  1. DeviceRestrictionsManager.detectDriftAndReapply, so a tamper-caused drift still
+            //     fires its RESTRICTION_DRIFT alert to the accountability partner, exactly as it
+            //     would from the periodic checker.
+            //  2. ProtectionController.startup(), because "protection off" is often the *master*
+            //     switch (Settings' "Turn protection on/off" -- itself PIN-gated), not just a
+            //     drifted restriction. Without this second step the button would silently only
+            //     restore the tamper restrictions counted in someOff below, leaving the VPN filter,
+            //     habit rule enforcement, time budgets, and app suspensions off with no way to fix
+            //     that short of the PIN this button exists to route around.
             if (someOff) {
                 Button(
                     onClick = {
@@ -330,6 +339,7 @@ private fun ProtectionStatus(context: Context, data: DashboardData, onRestored: 
                                     DeviceRestrictionsManager(context)
                                         .detectDriftAndReapply(TamperEventLogger(context))
                                 }
+                                runCatching { ProtectionController(context).startup() }
                             }
                             restoring = false
                             onRestored()
