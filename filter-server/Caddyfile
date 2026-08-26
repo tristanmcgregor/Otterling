@@ -102,6 +102,14 @@
 			header_up Authorization "Bearer {$LOCKPROFILE_TOKEN}"
 		}
 	}
+	# Guardian evidence viewer for NSFW-flagged screenshots (POST /screenshot-classify on the
+	# phone side) -- bearer-gated like /device-logs/view/* above, deliberately NOT following
+	# /review-data/*'s unauthenticated stance below since these are more sensitive images.
+	handle /screenshot-review/* {
+		reverse_proxy 127.0.0.1:8091 {
+			header_up Authorization "Bearer {$LOCKPROFILE_TOKEN}"
+		}
+	}
 	handle_path /review* {
 		root * /srv/review-dashboard
 		file_server
@@ -256,6 +264,14 @@ http://192.168.0.254 {
 		file_server
 	}
 	handle /device-logs/view/* {
+		reverse_proxy 127.0.0.1:8091 {
+			header_up Authorization "Bearer {$LOCKPROFILE_TOKEN}"
+		}
+	}
+	# Guardian evidence viewer for NSFW-flagged screenshots (POST /screenshot-classify on the
+	# phone side) -- bearer-gated like /device-logs/view/* above, deliberately NOT following
+	# /review-data/*'s unauthenticated stance below since these are more sensitive images.
+	handle /screenshot-review/* {
 		reverse_proxy 127.0.0.1:8091 {
 			header_up Authorization "Bearer {$LOCKPROFILE_TOKEN}"
 		}

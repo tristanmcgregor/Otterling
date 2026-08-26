@@ -223,6 +223,10 @@ class AlertReporter(context: Context) {
             // collapsed to the generic tamper line, and CRITICAL/INFO severity (set in
             // MacTamperPollWorker.severityAndLabel) already carries the urgency either way.
             "MAC_KILL_SWITCH_ACTIVATED", "MAC_KILL_SWITCH_RESTORED",
+            // Content-detection event with its own already-human-readable details text (see
+            // FocusGuardAccessibilityService's reportNsfwDetection) -- not a tamper event, so it
+            // must not collapse to the generic "App has been tampered with" line.
+            "NSFW_SCREENSHOT_DETECTED",
         )
 
         // Shared by every AlertReporter instance in the process (companion-object members are

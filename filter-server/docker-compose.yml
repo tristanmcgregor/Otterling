@@ -157,7 +157,15 @@ services:
     command: python3 dns_classify_mux.py
 
   lockprofile:
-    image: python:3.12-slim
+    # Built from lockprofile.Dockerfile (stock python:3.12-slim + the Claude Code CLI + an
+    # unprivileged claude-runner account) -- see that Dockerfile's header comment. Needed for
+    # nsfw_image_classifier.py's `claude -p` calls (POST /screenshot-classify). Image is tagged
+    # and built via `docker compose build`; deploy_filter_server.sh runs `up -d --no-build` so a
+    # normal deploy reuses the already-built tag rather than rebuilding on every push.
+    image: otterling-lockprofile-claude:latest
+    build:
+      context: .
+      dockerfile: lockprofile.Dockerfile
     container_name: otterling-lockprofile
     restart: unless-stopped
     ports:
@@ -173,6 +181,11 @@ services:
       # the dashboard as `Failed to update "<type>"` no matter which type is toggled.
       - ./report_types.json:/opt/otterling/report_types.json
       - ./lockprofile-data:/data
+      # Shared subprocess-invocation helper for the `claude -p` CLI call (env-stripping,
+      # CLAUDE_RUNNER_USER privilege drop) -- same file dns_classify_mux.py/mitm_nsfw_addon.py
+      # already mount, imported by nsfw_image_classifier.py below rather than duplicated.
+      - ./ai_classifier.py:/opt/otterling/ai_classifier.py:ro
+      - ./nsfw_image_classifier.py:/opt/otterling/nsfw_image_classifier.py:ro
     # Lets this container reach the host-level sudo_review_server.py (see that file and
     # lockprofile_service.py's SUDO_REVIEW_URL) -- `host-gateway` is the Docker Engine special value
     # that resolves to the host's own bridge-gateway IP on Linux (Docker Desktop provides this
@@ -203,6 +216,10 @@ services:
       # into the mounted data dir; absent = FCM inert, ntfy + polling unaffected. See the
       # FCM_CREDENTIALS_PATH note in lockprofile_service.py.
       - FCM_CREDENTIALS_PATH=${FCM_CREDENTIALS_PATH:-/data/fcm-service-account.json}
+      # Same subscription OAuth token as ai_classifier.py's other callers (mitm_nsfw_addon.py,
+      # dns_classify_mux.py) -- see mitmproxy.Dockerfile's comment for why not ANTHROPIC_API_KEY.
+      # Screenshot classification fails open (no block) if unset.
+      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
     working_dir: /opt/otterling
     # google-auth is only needed for the optional FCM push; installed at start rather than via a
     # Dockerfile to keep this a mounted-script service. If the install fails (offline boot), FCM

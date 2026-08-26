@@ -234,6 +234,11 @@
       "source": "android",
       "description": "A blocked app was found unblocked and got re-blocked."
     },
+    "NSFW_SCREENSHOT_DETECTED": {
+      "enabled": true,
+      "source": "android",
+      "description": "A screenshot uploaded for server-side classification came back NSFW; that app was blocked for 15 minutes."
+    },
     "habit_completed": {
       "enabled": true,
       "source": "server",

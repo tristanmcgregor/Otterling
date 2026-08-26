@@ -1202,6 +1202,48 @@ function SettingsScreen({
 
         {!isMac && (
         <div className="space-y-3">
+          <SectionLabel>Visual Filtering</SectionLabel>
+          <Card className="rounded-2xl space-y-0 divide-y divide-outline-variant/30">
+            <SettingsRow
+              title="Screenshot NSFW filtering"
+              sub="Periodically uploads a screenshot of the foreground app to the server for classification; a positive match blocks that app for 15 minutes and alerts you"
+              checked={settings.visualFilterEnabled}
+              onChange={(v) => api.patchSettings(deviceId, { visualFilterEnabled: v }).then(onChanged)}
+            />
+            {settings.visualFilterEnabled && (
+              <div className="py-3 px-1 flex items-center gap-3">
+                <label className="text-sm text-on-surface-variant">Min. interval</label>
+                <input
+                  type="number"
+                  min={15}
+                  max={3600}
+                  defaultValue={settings.visualFilterIntervalSeconds}
+                  onBlur={(e) =>
+                    api
+                      .patchSettings(deviceId, { visualFilterIntervalSeconds: Number(e.target.value) || 60 })
+                      .then(onChanged)
+                  }
+                  className="w-20 h-9 px-3 rounded-xl border border-outline bg-surface text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                />
+                <span className="text-xs text-on-surface-variant">seconds</span>
+              </div>
+            )}
+            <div className="py-3 px-1">
+              <a
+                href="/screenshot-review/list"
+                target="_blank"
+                rel="noreferrer"
+                className="text-xs text-primary underline"
+              >
+                View flagged screenshots
+              </a>
+            </div>
+          </Card>
+        </div>
+        )}
+
+        {!isMac && (
+        <div className="space-y-3">
           <SectionLabel>Friction Delay</SectionLabel>
           <Card className="rounded-2xl space-y-0 divide-y divide-outline-variant/30">
             <SettingsRow

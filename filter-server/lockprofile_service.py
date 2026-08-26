@@ -100,6 +100,8 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import nsfw_image_classifier
+
 # Host-level AI reviewer for SudoBroker.swift's tier-3 fallback (see sudo_review_server.py's module
 # doc comment for why this has to be a separate host-level process rather than something this
 # container does itself). `host.docker.internal` needs docker-compose.yml's `extra_hosts:
@@ -113,6 +115,10 @@ DATA_DIR = os.environ.get("LOCKPROFILE_DATA_DIR", "/data")
 STATE_PATH = os.path.join(DATA_DIR, "state.json")
 ALERTS_PATH = os.path.join(DATA_DIR, "alerts", "events.jsonl")
 LOGS_DIR = os.path.join(DATA_DIR, "logs")
+# Flagged-only screenshot evidence for POST /screenshot-classify -- see that route's comment and
+# _store_screenshot below. Under DATA_DIR (not a new top-level path) so it inherits
+# deploy_filter_server.sh's existing `--exclude 'lockprofile-data/'` rsync protection for free.
+SCREENSHOTS_DIR = os.path.join(DATA_DIR, "screenshots")
 
 LISTEN_HOST = os.environ.get("LOCKPROFILE_LISTEN_HOST", "0.0.0.0")
 LISTEN_PORT = int(os.environ.get("LOCKPROFILE_LISTEN_PORT", "8091"))
@@ -297,6 +303,13 @@ MAX_BODY_BYTES = 16 * 1024
 # device stuck retrying uploads can't fill the disk.
 MAX_LOG_BODY_BYTES = 2 * 1024 * 1024
 MAX_LOG_FILES_PER_DEVICE = 20
+# A downscaled (720px max dimension), JPEG-compressed phone screenshot (see
+# FocusGuardAccessibilityService.kt's capture path) should be well under 1-2MB base64-encoded;
+# this caps the whole JSON request body, same pattern as MAX_LOG_BODY_BYTES above.
+MAX_SCREENSHOT_BODY_BYTES = 6 * 1024 * 1024
+# Only NSFW-classified screenshots are ever stored (see _store_screenshot) -- this is a "recent
+# incidents" cap, not a full history, so a much lower number than MAX_LOG_FILES_PER_DEVICE is fine.
+MAX_SCREENSHOT_FILES_PER_DEVICE = 50
 # Phone device ids come from Settings.Secure.ANDROID_ID -- always a 16-char lowercase hex string
 # in practice -- but _list_known_device_ids() also surfaces ids from non-phone reporters sharing
 # this same alerts/settings storage (e.g. IntegrityReporter.swift's Mac hostnames/IPs), which
@@ -940,6 +953,54 @@ def _list_device_logs() -> dict:
     return result
 
 
+def _store_screenshot(device_id: str, package_name: str, image_bytes: bytes) -> str:
+    """Writes an NSFW-flagged screenshot to SCREENSHOTS_DIR/<device_id>/, then prunes to the
+    newest MAX_SCREENSHOT_FILES_PER_DEVICE for that device -- see POST /screenshot-classify.
+    Only ever called for a positive (NSFW) classification result; a safe/error result is never
+    written to disk at all. `package_name` is sanitized the same way _sanitize_installed_apps
+    caps a field, since it becomes part of a filename below."""
+    safe_package = "".join(c for c in package_name if c.isalnum() or c in "._-")[:200] or "unknown"
+    device_dir = os.path.join(SCREENSHOTS_DIR, device_id)
+    os.makedirs(device_dir, exist_ok=True)
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    filename = f"{stamp}-{safe_package}.jpg"
+    path = os.path.join(device_dir, filename)
+    counter = 1
+    while os.path.exists(path):
+        filename = f"{stamp}-{safe_package}-{counter}.jpg"
+        path = os.path.join(device_dir, filename)
+        counter += 1
+    with open(path, "wb") as fh:
+        fh.write(image_bytes)
+    existing = sorted(os.listdir(device_dir))
+    for stale in existing[: max(0, len(existing) - MAX_SCREENSHOT_FILES_PER_DEVICE)]:
+        try:
+            os.remove(os.path.join(device_dir, stale))
+        except OSError:
+            pass
+    return filename
+
+
+def _list_screenshots() -> dict:
+    if not os.path.isdir(SCREENSHOTS_DIR):
+        return {}
+    result = {}
+    for device_id in sorted(os.listdir(SCREENSHOTS_DIR)):
+        device_dir = os.path.join(SCREENSHOTS_DIR, device_id)
+        if not os.path.isdir(device_dir):
+            continue
+        files = []
+        for filename in sorted(os.listdir(device_dir)):
+            path = os.path.join(device_dir, filename)
+            try:
+                stat = os.stat(path)
+            except OSError:
+                continue
+            files.append({"filename": filename, "size": stat.st_size, "mtime": stat.st_mtime})
+        result[device_id] = files
+    return result
+
+
 # ─── Dashboard device settings (/dashboard-api/*) ──────────────────────────────────────────────
 # Backs the web dashboard at filter-server/dashboard/ (served by Caddy at /dashboard/, see
 # Caddyfile) -- a guardian-facing settings console, distinct from the mac/phone-facing routes
@@ -1028,6 +1089,7 @@ REPORT_TYPE_ITEM_RE = re.compile(r"^/dashboard-api/report-types/([A-Za-z0-9_]+)$
 SETTINGS_PATCH_ALLOWED_KEYS = {
     "device_name", "protections", "vpnFilter", "frictionDelay",
     "proxyFilter", "cloudFilterHost", "cloudFilterEnabled",
+    "visualFilterEnabled", "visualFilterIntervalSeconds",
 }
 
 
@@ -1682,6 +1744,12 @@ def _default_device_settings(device_id: str = "") -> dict:
         "triggerWords": [],
         "blockedApps": [],
         "protectedApps": [],
+        # Android-only (screenshot capture + server-side classification, see POST
+        # /screenshot-classify) -- default ON, matching every other protection field's
+        # default-safe stance. Interval is dashboard-tunable so the capture cadence can change
+        # without an app update.
+        "visualFilterEnabled": True,
+        "visualFilterIntervalSeconds": 60,
         # Reported by the device itself (POST .../installed-apps), NOT guardian-authored -- see
         # that route's comment. Deliberately not in SETTINGS_PATCH_ALLOWED_KEYS: the generic
         # settings PATCH is for guardian opinions, this is a device fact the guardian only ever
@@ -2487,6 +2555,48 @@ class Handler(BaseHTTPRequestHandler):
             filename = _store_device_log(device_id, logs)
             return self._send_json(200, {"status": "ok", "filename": filename})
 
+        if self.path == "/screenshot-classify":
+            # See FocusGuardAccessibilityService.kt's screenshot-capture path and
+            # ScreenshotUploader.kt. A SAFE or classifier-error result is discarded immediately
+            # (decoded into memory, never written to disk) -- only a positive NSFW result is
+            # persisted, as evidence for the guardian (see /screenshot-review/* below).
+            body = self._read_json_body(MAX_SCREENSHOT_BODY_BYTES)
+            device_id = _safe_device_id((body or {}).get("device_id", "").strip())
+            package_name = (body or {}).get("package_name", "").strip() if body else ""
+            image_b64 = (body or {}).get("image_base64", "") if body else ""
+            if not device_id or not package_name or not image_b64:
+                return self._send_json(400, {"error": "device_id, package_name and image_base64 required"})
+            try:
+                image_bytes = base64.b64decode(image_b64, validate=True)
+            except (binascii.Error, ValueError):
+                return self._send_json(400, {"error": "invalid image_base64"})
+
+            # Server-side kill switch: a guardian can disable this fleet- or per-device-wide
+            # without an app update even if a stale APK keeps uploading.
+            settings = _device_settings(device_id)
+            if not settings.get("visualFilterEnabled", True):
+                return self._send_json(200, {"status": "ok", "classification": "skipped"})
+
+            verdict = nsfw_image_classifier.classify_screenshot(image_bytes)
+            if verdict is None:
+                print(f"[lockprofile] screenshot classification failed/unavailable for {device_id}", flush=True)
+                return self._send_json(200, {"status": "ok", "classification": "error"})
+            if not verdict:
+                return self._send_json(200, {"status": "ok", "classification": "safe"})
+
+            _store_screenshot(device_id, package_name, image_bytes)
+            # Alerting the guardian happens on-device (AlertReporter.report(), same local-SMS
+            # pipeline as every other Android-detected type like WATCHED_APP/TRIGGER_WORD), not
+            # here -- unlike Mac/server-origin events, Android alerts never round-trip through
+            # this server's own ntfy/FCM push. See FocusGuardAccessibilityService.kt's
+            # reportNsfwDetection call site.
+            block_until_millis = int(time.time() * 1000) + 15 * 60 * 1000
+            return self._send_json(200, {
+                "status": "ok",
+                "classification": "nsfw",
+                "blockUntilMillis": block_until_millis,
+            })
+
         if self.path.startswith("/dashboard-api/"):
             # Habit completions can carry a base64 photo (see HABIT_PROOFS_DIR) -- needs more
             # room than every other dashboard-api POST body.
@@ -3174,6 +3284,33 @@ class Handler(BaseHTTPRequestHandler):
                 content = fh.read()
             self.send_response(200)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(content)))
+            self.end_headers()
+            self.wfile.write(content)
+            return
+
+        # Guardian evidence viewer for NSFW-flagged screenshots (see POST /screenshot-classify
+        # and _store_screenshot). Bearer-gated like /device-logs/view/* above -- deliberately NOT
+        # following /review-data/*'s newer unauthenticated stance, since these are more sensitive
+        # images than diagnostic log text.
+        if parsed.path == "/screenshot-review/list":
+            return self._send_json(200, {"devices": _list_screenshots()})
+
+        if parsed.path.startswith("/screenshot-review/"):
+            remainder = parsed.path[len("/screenshot-review/"):]
+            parts = remainder.split("/", 1)
+            if len(parts) != 2:
+                return self._send_json(404, {"error": "not found"})
+            device_id, filename = parts
+            if not DEVICE_ID_RE.match(device_id) or "/" in filename or ".." in filename:
+                return self._send_json(400, {"error": "invalid path"})
+            path = os.path.join(SCREENSHOTS_DIR, device_id, filename)
+            if not os.path.isfile(path):
+                return self._send_json(404, {"error": "not found"})
+            with open(path, "rb") as fh:
+                content = fh.read()
+            self.send_response(200)
+            self.send_header("Content-Type", "image/jpeg")
             self.send_header("Content-Length", str(len(content)))
             self.end_headers()
             self.wfile.write(content)

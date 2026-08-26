@@ -69,6 +69,21 @@ class AppSuspensionManager(private val context: Context) {
         return true
     }
 
+    /**
+     * Blocks [packageName] until [durationMillis] from now, then auto-clears -- used by the
+     * visual filter (see FocusGuardAccessibilityService.kt) for a 15-minute block after an NSFW
+     * screenshot detection. Purely local/Room, same as [setBlocked]; never interacts with the
+     * dashboard additive-union merge in [blockedApps]. The expiry itself is enforced lazily in
+     * [reapplyAll] (called by both the 5-minute foreground-service loop and the 15-minute
+     * WorkManager backup), not by a separate timer -- worst-case latency past the deadline is
+     * whichever of those two next runs.
+     */
+    suspend fun blockTemporarily(packageName: String, durationMillis: Long) {
+        val until = System.currentTimeMillis() + durationMillis
+        dao.upsert(BlockedApp(packageName, blocked = true, blockedUntilMillis = until))
+        PackageBlockEnforcer.setBlocked(context, packageName, blocked = true)
+    }
+
     suspend fun remove(packageName: String) {
         dao.delete(packageName)
         PackageBlockEnforcer.setBlocked(context, packageName, blocked = false)
@@ -82,7 +97,17 @@ class AppSuspensionManager(private val context: Context) {
      */
     suspend fun reapplyAll() {
         val dashboardPackages = dashboardBlockedPackages()
+        val now = System.currentTimeMillis()
         blockedApps().forEach { entry ->
+            // A temporary (visual-filter) block that's past its deadline is cleared entirely --
+            // it has no reason to leave a permanent Room row behind once it expires -- and skips
+            // straight to the next entry rather than falling through to the drift-check/reapply
+            // logic below, which would otherwise immediately re-suspend it.
+            if (entry.blockedUntilMillis != null && entry.blockedUntilMillis <= now) {
+                dao.delete(entry.packageName)
+                PackageBlockEnforcer.setBlocked(context, entry.packageName, blocked = false)
+                return@forEach
+            }
             if (entry.blocked && !isCurrentlyBlocked(entry.packageName)) {
                 runCatching {
                     TamperEventLogger(context).log(
