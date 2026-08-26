@@ -3,16 +3,25 @@ import {
   Shield, Lock, Clock, Globe, CheckCircle, Bug, RefreshCw,
   Plus, Settings as SettingsIcon, X, Trash2, LogOut, Laptop,
   Home, ListChecks, AlertTriangle, Moon, Sun,
-  BarChart3, Check, Wifi, ChevronDown,
+  BarChart3, Check, Wifi, ChevronDown, ShieldCheck,
 } from "lucide-react";
 import { cn, Card, Button, Switch, Pill } from "./components/ui";
 import { api, ApiError, logout } from "../lib/api";
 import type {
   DeviceSettings, DeviceSummary, ActivityEvent, Rule, RuleSchedule, RuleTargetApp, RuleTargetWebsite,
-  AppBudget, ProtectedApp, Habit, ReportType, ReportTypesFile, DefaultSettings, Protections,
+  AppBudget, ProtectedApp, Habit, ReportType, ReportTypesFile, DefaultSettings, Protections, DevicePlatform,
 } from "../lib/api";
 
-type Screen = "Dashboard" | "Settings" | "GlobalSettings" | "Wizard";
+type Screen =
+  | "Dashboard"
+  | "BlockedApps"
+  | "BlockedSites"
+  | "ProtectedApps"
+  | "ContentFilter"
+  | "AppUpdates"
+  | "Settings"
+  | "GlobalSettings"
+  | "Wizard";
 
 interface NavDef {
   id: Screen;
@@ -20,16 +29,32 @@ interface NavDef {
   icon: React.FC<{ className?: string }>;
 }
 
-const NAV: NavDef[] = [
-  { id: "Dashboard", label: "Overview", icon: Home },
-  { id: "Settings", label: "Settings", icon: SettingsIcon },
-];
+// Mirrors the macOS app's own sidebar taxonomy (ContentView.swift's "Protect" group: Overview,
+// Blocked Apps, Blocked Sites, Protected Apps, Content Filter, App Updates) instead of cramming
+// everything into one long Settings page -- each of these is now its own focused nav item/screen.
+// Blocked Sites (Android-only, DNS/VPN-filter blocklist) and Protected Apps (macOS-only,
+// filesystem-locked apps) are hidden for a platform that has no such concept, same as those
+// sections used to be conditionally hidden inside the old single Settings page. `platform`
+// undefined (still loading, or no device selected yet) shows the fuller Android-shaped set so the
+// sidebar doesn't flicker empty before the first settings fetch resolves.
+function deviceNav(platform: DevicePlatform | undefined): NavDef[] {
+  const items: NavDef[] = [
+    { id: "Dashboard", label: "Overview", icon: Home },
+    { id: "BlockedApps", label: "Blocked Apps", icon: Lock },
+  ];
+  if (platform !== "macos") items.push({ id: "BlockedSites", label: "Blocked Sites", icon: Globe });
+  if (platform === "macos") items.push({ id: "ProtectedApps", label: "Protected Apps", icon: ShieldCheck });
+  items.push({ id: "ContentFilter", label: "Content Filter", icon: Wifi });
+  items.push({ id: "AppUpdates", label: "App Updates", icon: RefreshCw });
+  items.push({ id: "Settings", label: "Settings", icon: SettingsIcon });
+  return items;
+}
 
 // Fleet-wide, not scoped to whichever device is selected in the switcher above -- Guardian PIN,
-// the habit library, HabitShare account, and the dashboard/review login passwords all live here
-// instead of inside per-device Settings, where they used to be mixed in despite already being
-// global data (see GlobalSettingsScreen's doc comment). Its own nav section so it doesn't read as
-// "a setting of whichever device happens to be selected right now".
+// the habit library, habit rules, HabitShare account, and the dashboard/review login passwords all
+// live here instead of inside per-device Settings, where they used to be mixed in despite already
+// being global data (see GlobalSettingsScreen's doc comment). Its own nav section so it doesn't
+// read as "a setting of whichever device happens to be selected right now".
 const FLEET_NAV: NavDef[] = [
   { id: "GlobalSettings", label: "Global Settings", icon: Globe },
 ];
@@ -182,6 +207,16 @@ export default function App() {
             onNavigate={navigate}
           />
         );
+      case "BlockedApps":
+        return <BlockedAppsScreen deviceId={deviceId} settings={settings} onChanged={reload} />;
+      case "BlockedSites":
+        return <BlockedSitesScreen deviceId={deviceId} settings={settings} onChanged={reload} onNavigate={navigate} />;
+      case "ProtectedApps":
+        return <ProtectedAppsScreen deviceId={deviceId} settings={settings} onChanged={reload} onNavigate={navigate} />;
+      case "ContentFilter":
+        return <ContentFilterScreen deviceId={deviceId} settings={settings} onChanged={reload} />;
+      case "AppUpdates":
+        return <AppUpdatesScreen deviceId={deviceId} settings={settings} />;
       case "Settings":
         return (
           <SettingsScreen
@@ -199,7 +234,7 @@ export default function App() {
     <div className="min-h-screen flex bg-background text-on-background">
       <Sidebar
         screen={screen}
-        nav={NAV}
+        nav={deviceNav(settings?.platform)}
         fleetNav={FLEET_NAV}
         onNavigate={navigate}
         devices={devices}
@@ -305,7 +340,7 @@ function Sidebar({
 
       {/* Nav */}
       <nav className="px-2 flex-1 space-y-px overflow-y-auto no-scrollbar">
-        <p className="text-[9px] font-bold uppercase tracking-[0.12em] text-on-surface-variant/50 px-3 py-1.5">Manage</p>
+        <p className="text-[9px] font-bold uppercase tracking-[0.12em] text-on-surface-variant/50 px-3 py-1.5">Protect</p>
         {nav.map((item) => (
           <SidebarItem key={item.id} item={item} active={screen === item.id} onClick={() => onNavigate(item.id)} />
         ))}
@@ -750,107 +785,207 @@ function ActiveRulesSummary({
 
 // ─── Settings ────────────────────────────────────────────────────────────────
 
-function SettingsScreen({
-  deviceId, settings, onNavigate, onChanged, onDeviceRemoved,
+// Shown by a platform-specific screen (Blocked Sites is Android-only, Protected Apps is
+// macOS-only) when the currently-selected device is the other platform -- reachable if the
+// guardian switches devices while parked on one of these screens, since `screen` state persists
+// across the device switcher. Points back to Overview rather than leaving a dead-looking page up.
+function PlatformNotAvailable({ message, onNavigate }: { message: string; onNavigate: (s: Screen) => void }) {
+  return (
+    <div className="p-7 max-w-[700px] space-y-3">
+      <Card className="rounded-2xl text-center py-8">
+        <p className="text-sm text-on-surface-variant">{message}</p>
+        <Button size="sm" variant="text" className="mt-3" onClick={() => onNavigate("Dashboard")}>
+          ← Back to Overview
+        </Button>
+      </Card>
+    </div>
+  );
+}
+
+function BlockedAppsScreen({
+  deviceId, settings, onChanged,
 }: {
   deviceId: string;
   settings: DeviceSettings | null;
-  onNavigate: (s: Screen) => void;
   onChanged: () => void;
-  onDeviceRemoved: () => void;
 }) {
-  const [confirmRemove, setConfirmRemove] = useState(false);
-  const [removing, setRemoving] = useState(false);
-  const [nameDraft, setNameDraft] = useState("");
+  if (!settings) return <div className="p-7 text-sm text-on-surface-variant">Loading…</div>;
+  const isMac = settings.platform === "macos";
+  return (
+    <div className="p-7 max-w-[700px] space-y-3">
+      <div>
+        <h1 className="text-2xl font-bold tracking-tight">Blocked Apps</h1>
+        <p className="text-sm text-on-surface-variant mt-0.5">
+          Fully blocks an app, all the time -- unlike a habit rule or time budget, there's no
+          condition that unlocks it.
+        </p>
+      </div>
+      <Card className="rounded-2xl">
+        <p className="text-xs text-on-surface-variant mb-2">
+          {isMac ? (
+            <>
+              Use the exact process/executable name as it appears in Activity Monitor (e.g.{" "}
+              <code>Safari</code>) — not the app's display name or bundle identifier. Removing a
+              block here applies immediately once the Guardian passcode authorizes it.
+            </>
+          ) : (
+            <>Use the exact Android package name (e.g. <code>com.zhiliaoapp.musically</code>).</>
+          )}
+        </p>
+        <TagList
+          items={settings.blockedApps.map((a) => ({ id: a.appId, label: a.appId }))}
+          placeholder={isMac ? "Safari" : "com.example.app"}
+          onAdd={(appId) => api.addBlockedApp(deviceId, appId).then(onChanged)}
+          onRemove={(appId) => api.removeBlockedApp(deviceId, appId).then(onChanged)}
+        />
+      </Card>
+    </div>
+  );
+}
+
+// Android-only (VPN/DNS-filter blocklist -- see BlockedWebsite's doc comment in lib/api.ts). The
+// Mac's equivalent is DNS enforcement, under Content Filter instead.
+function BlockedSitesScreen({
+  deviceId, settings, onChanged, onNavigate,
+}: {
+  deviceId: string;
+  settings: DeviceSettings | null;
+  onChanged: () => void;
+  onNavigate: (s: Screen) => void;
+}) {
+  if (!settings) return <div className="p-7 text-sm text-on-surface-variant">Loading…</div>;
+  if (settings.platform === "macos") {
+    return <PlatformNotAvailable message="Blocked Sites is an Android-only feature." onNavigate={onNavigate} />;
+  }
+  return (
+    <div className="p-7 max-w-[700px] space-y-3">
+      <div>
+        <h1 className="text-2xl font-bold tracking-tight">Blocked Sites</h1>
+        <p className="text-sm text-on-surface-variant mt-0.5">
+          Add-only — the device owner can never remove these.
+        </p>
+      </div>
+      <Card className="rounded-2xl">
+        <p className="text-xs text-on-surface-variant mb-2">
+          A bare domain (e.g. <code>example.com</code>) blocks the whole site; a domain+path (e.g.{" "}
+          <code>youtube.com/shorts</code>) blocks only that path.
+        </p>
+        <TagList
+          items={settings.blockedWebsites.map((w) => ({ id: w.domain, label: w.domain }))}
+          placeholder="example.com or youtube.com/shorts"
+          onAdd={(domain) => api.addWebsite(deviceId, domain).then(onChanged)}
+          onRemove={(domain) => api.removeWebsite(deviceId, domain).then(onChanged)}
+        />
+      </Card>
+    </div>
+  );
+}
+
+// macOS-only (filesystem-locked, undeletable apps -- see ProtectedApp's doc comment in
+// lib/api.ts). No Android equivalent.
+function ProtectedAppsScreen({
+  deviceId, settings, onChanged, onNavigate,
+}: {
+  deviceId: string;
+  settings: DeviceSettings | null;
+  onChanged: () => void;
+  onNavigate: (s: Screen) => void;
+}) {
+  if (!settings) return <div className="p-7 text-sm text-on-surface-variant">Loading…</div>;
+  if (settings.platform !== "macos") {
+    return <PlatformNotAvailable message="Protected Apps is a macOS-only feature." onNavigate={onNavigate} />;
+  }
+  return (
+    <div className="p-7 max-w-[700px] space-y-3">
+      <div>
+        <h1 className="text-2xl font-bold tracking-tight">Protected Apps</h1>
+        <p className="text-sm text-on-surface-variant mt-0.5">
+          Kept running and undeletable (filesystem-locked) instead of blocked — e.g. an
+          accountability app whose reporting shouldn't be removable.
+        </p>
+      </div>
+      <Card className="rounded-2xl">
+        <p className="text-xs text-on-surface-variant mb-2">
+          Use the exact executable name and the full path to the .app bundle.
+        </p>
+        <ProtectedAppList
+          items={settings.protectedApps}
+          onAdd={(app) => api.addProtectedApp(deviceId, app).then(onChanged)}
+          onRemove={(executableName) => api.removeProtectedApp(deviceId, executableName).then(onChanged)}
+        />
+      </Card>
+    </div>
+  );
+}
+
+// Shared, platform-conditional (Android: VPN tunnel + per-app bypass list; Mac: DNS enforcement +
+// proxy enforcement + cloud filter resolver -- MitmExemptManager's bypass-app concept has no Mac
+// equivalent, so that part only renders for Android).
+function ContentFilterScreen({
+  deviceId, settings, onChanged,
+}: {
+  deviceId: string;
+  settings: DeviceSettings | null;
+  onChanged: () => void;
+}) {
   const [cloudFilterHostDraft, setCloudFilterHostDraft] = useState("");
-  const [pollingDevice, setPollingDevice] = useState(false);
-  const [pollDeviceResult, setPollDeviceResult] = useState<string | null>(null);
 
   useEffect(() => {
-    setNameDraft(settings?.device_name ?? "");
     setCloudFilterHostDraft(settings?.cloudFilterHost ?? "");
-  }, [settings?.device_name, settings?.cloudFilterHost]);
+  }, [settings?.cloudFilterHost]);
 
-  if (!settings) {
-    return <div className="p-7 text-sm text-on-surface-variant">Loading…</div>;
-  }
-
-  const patchProtection = (key: keyof DeviceSettings["protections"], value: boolean) =>
-    api.patchSettings(deviceId, { protections: { ...settings.protections, [key]: value } }).then(onChanged);
-
+  if (!settings) return <div className="p-7 text-sm text-on-surface-variant">Loading…</div>;
+  const isMac = settings.platform === "macos";
   const patchVpnEnabled = (value: boolean) =>
     api.patchSettings(deviceId, { vpnFilter: { enabled: value } }).then(onChanged);
 
-  const patchFriction = (updates: Partial<DeviceSettings["frictionDelay"]>) =>
-    api.patchSettings(deviceId, { frictionDelay: { ...settings.frictionDelay, ...updates } }).then(onChanged);
-
-  // Protections/VPN filter/bypass apps/blocked websites/app budgets/blocked apps/trigger words/
-  // habits & rules are all consumed exclusively by the Android app's DashboardConfigStore (see
-  // RestrictionPreferences.kt, MitmExemptManager.kt, CustomBlocklistManager.kt,
-  // AppTimeBudgetManager.kt, AppSuspensionManager.kt, GuardianAlertSettings.kt,
-  // HabitRuleManager.kt) -- nothing on the Mac reads dashboard-api, so showing those controls for
-  // a macos device would save values that are never actually enforced anywhere.
-  const isMac = settings.platform === "macos";
-
   return (
-    <div className="p-7 max-w-[900px] space-y-6">
+    <div className="p-7 max-w-[700px] space-y-6">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">Settings</h1>
+        <h1 className="text-2xl font-bold tracking-tight">Content Filter</h1>
         <p className="text-sm text-on-surface-variant mt-0.5">
-          Configure protection and habit rules for {settings.device_name || deviceId}
+          {isMac
+            ? "Dashboard-driven -- applies immediately, gated by the Guardian passcode for anything protection-reducing."
+            : "Blocks adult content globally across all apps."}
         </p>
       </div>
 
-      {/* CSS multi-column, not CSS Grid: a grid row's height is set by its tallest cell, which
-          left large dead space below shorter cards (e.g. Blocked Websites next to Tamper
-          Protection) with no way for a card further down to flow up and fill it. Multi-column
-          lets each card just stack in the shorter of its two columns, like a masonry layout,
-          with no JS measurement needed. break-inside-avoid keeps a single card from being split
-          across the column break; mb-4 replaces the grid's row-gap (multi-column has no row-gap
-          equivalent for stacked in-flow items, only a column-gap via `gap-4` itself). */}
-      <div className="columns-2 gap-4 [&>*]:mb-4 [&>*]:break-inside-avoid">
-        {/* Device name */}
-        <div className="space-y-3 [column-span:all]">
-          <SectionLabel>Device</SectionLabel>
-          <Card className="rounded-2xl">
-            <div className="flex items-center gap-3">
-              <input
-                value={nameDraft}
-                onChange={(e) => setNameDraft(e.target.value)}
-                placeholder={deviceId}
-                className="flex-1 h-10 px-3 rounded-xl border border-outline bg-surface text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-              />
-              <Button
-                size="sm"
-                onClick={() => api.patchSettings(deviceId, { device_name: nameDraft }).then(onChanged)}
-              >
-                Save
-              </Button>
-            </div>
-          </Card>
-        </div>
-
-        {isMac && (
-          <>
-          <div className="space-y-3 [column-span:all]">
-            <SectionLabel>Mac Protection</SectionLabel>
-            <Card className="rounded-2xl">
-              <h3 className="font-semibold text-sm mb-1.5 flex items-center gap-2">
-                <Laptop className="w-4 h-4 text-primary" /> Everything below is dashboard-driven
-              </h3>
-              <p className="text-xs text-on-surface-variant leading-relaxed">
-                Sudo-elevation gating and trigger-word reporting run locally and aren't
-                configurable here. Every change here — blocking or unblocking an app, protecting
-                or unprotecting an app, enabling or disabling filtering, repointing the filter
-                host — applies immediately, gated by this Mac's own Guardian passcode for anything
-                protection-reducing; check the Activity Log for status. Website blocking, app time
-                budgets, and habits & rules are phone-only features and stay hidden for this
-                device.
+      <div className="space-y-3">
+        <SectionLabel>{isMac ? "DNS Enforcement" : "Content Filter VPN"}</SectionLabel>
+        <Card className="rounded-2xl space-y-0 divide-y divide-outline-variant/30">
+          <SettingsRow
+            title={isMac ? "Enable content filtering" : "Enable VPN Filter"}
+            sub={isMac ? "Blocks adult content system-wide via DNS" : "Blocks adult content globally across all apps"}
+            checked={settings.vpnFilter.enabled}
+            onChange={patchVpnEnabled}
+          />
+          {!isMac && (
+            <div className="py-3 px-1">
+              <div className="flex items-center gap-2 mb-2">
+                <Wifi className="w-4 h-4 text-secondary" />
+                <span className="text-sm font-medium">Bypass apps</span>
+                <Pill variant={settings.vpnFilter.enabled ? "success" : "default"}>
+                  {settings.vpnFilter.enabled ? "Filter active" : "Filter off"}
+                </Pill>
+              </div>
+              <p className="text-xs text-on-surface-variant mb-2">
+                Apps allowed to skip the content filter. Use the exact Android package name (e.g.{" "}
+                <code>com.google.android.youtube</code>), not the app's display name — the phone
+                matches on this literally.
               </p>
-            </Card>
-          </div>
+              <TagList
+                items={settings.vpnBypassApps.map((a) => ({ id: a.id, label: a.name }))}
+                placeholder="com.example.app"
+                onAdd={(name) => api.addBypassApp(deviceId, name).then(onChanged)}
+                onRemove={(id) => api.removeBypassApp(deviceId, id).then(onChanged)}
+              />
+            </div>
+          )}
+        </Card>
+      </div>
 
-          {/* Proxy enforcement */}
+      {isMac && (
+        <>
           <div className="space-y-3">
             <SectionLabel>Proxy Enforcement</SectionLabel>
             <Card className="rounded-2xl space-y-0 divide-y divide-outline-variant/30">
@@ -869,7 +1004,6 @@ function SettingsScreen({
             </Card>
           </div>
 
-          {/* Cloud filter */}
           <div className="space-y-3">
             <SectionLabel>Cloud Filter</SectionLabel>
             <Card className="rounded-2xl space-y-0 divide-y divide-outline-variant/30">
@@ -902,25 +1036,145 @@ function SettingsScreen({
               </div>
             </Card>
           </div>
+        </>
+      )}
+    </div>
+  );
+}
 
-          {/* Protected apps */}
-          <div className="space-y-3 [column-span:all]">
-            <SectionLabel>Protected Apps</SectionLabel>
-            <Card className="rounded-2xl">
-              <p className="text-xs text-on-surface-variant mb-2">
-                Kept running and undeletable (filesystem-locked) instead of blocked — e.g. an
-                accountability app whose reporting shouldn't be removable. Use the exact
-                executable name and the full path to the .app bundle.
-              </p>
-              <ProtectedAppList
-                items={settings.protectedApps}
-                onAdd={(app) => api.addProtectedApp(deviceId, app).then(onChanged)}
-                onRemove={(executableName) => api.removeProtectedApp(deviceId, executableName).then(onChanged)}
-              />
-            </Card>
+function AppUpdatesScreen({ deviceId, settings }: { deviceId: string; settings: DeviceSettings | null }) {
+  const [pollingDevice, setPollingDevice] = useState(false);
+  const [pollDeviceResult, setPollDeviceResult] = useState<string | null>(null);
+
+  if (!settings) return <div className="p-7 text-sm text-on-surface-variant">Loading…</div>;
+
+  return (
+    <div className="p-7 max-w-[700px] space-y-3">
+      <div>
+        <h1 className="text-2xl font-bold tracking-tight">App Updates</h1>
+        <p className="text-sm text-on-surface-variant mt-0.5">Current version and manual sync.</p>
+      </div>
+      <Card className="rounded-2xl">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p className="text-sm font-medium">App version</p>
+            <p className="text-xs text-on-surface-variant">
+              {settings.appVersion.versionName
+                ? `v${settings.appVersion.versionName} (build ${settings.appVersion.versionCode})`
+                : settings.platform === "android"
+                ? "Not reported yet -- reports on this device's next sync"
+                : "Not tracked for macOS devices"}
+            </p>
           </div>
-          </>
+          {settings.appVersion.reportedAt && (
+            <p className="shrink-0 text-[11px] text-on-surface-variant">
+              as of {new Date(settings.appVersion.reportedAt * 1000).toLocaleString()}
+            </p>
+          )}
+        </div>
+      </Card>
+      <Card className="rounded-2xl">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p className="text-sm font-medium">Poll this device now</p>
+            <p className="text-xs text-on-surface-variant">
+              Wakes just this phone via push instead of waiting out its normal poll cycle --
+              useful when checking whether a settings change landed.
+            </p>
+          </div>
+          <button
+            onClick={() => {
+              setPollingDevice(true);
+              setPollDeviceResult(null);
+              api.pollDeviceNow(deviceId)
+                .then((res) => {
+                  setPollDeviceResult(res.notified === 0 ? "Not registered for push" : `Sent to ${res.notified} device${res.notified === 1 ? "" : "s"}`);
+                })
+                .catch((err) => setPollDeviceResult(err instanceof ApiError ? err.message : "Couldn't reach the server"))
+                .finally(() => {
+                  setPollingDevice(false);
+                  window.setTimeout(() => setPollDeviceResult(null), 5000);
+                });
+            }}
+            disabled={pollingDevice}
+            className="shrink-0 flex items-center gap-2 h-9 px-4 rounded-xl border border-outline-variant/50 bg-surface-variant/40 text-sm font-medium text-on-surface hover:bg-surface-variant transition-colors disabled:opacity-60"
+          >
+            <RefreshCw className={cn("w-3.5 h-3.5", pollingDevice && "animate-spin")} />
+            {pollingDevice ? "Polling…" : "Poll now"}
+          </button>
+        </div>
+        {pollDeviceResult && (
+          <p className="text-[11px] text-on-surface-variant mt-2 text-right">{pollDeviceResult}</p>
         )}
+      </Card>
+    </div>
+  );
+}
+
+function SettingsScreen({
+  deviceId, settings, onNavigate, onChanged, onDeviceRemoved,
+}: {
+  deviceId: string;
+  settings: DeviceSettings | null;
+  onNavigate: (s: Screen) => void;
+  onChanged: () => void;
+  onDeviceRemoved: () => void;
+}) {
+  const [confirmRemove, setConfirmRemove] = useState(false);
+  const [removing, setRemoving] = useState(false);
+  const [nameDraft, setNameDraft] = useState("");
+
+  useEffect(() => {
+    setNameDraft(settings?.device_name ?? "");
+  }, [settings?.device_name]);
+
+  if (!settings) {
+    return <div className="p-7 text-sm text-on-surface-variant">Loading…</div>;
+  }
+
+  const patchProtection = (key: keyof DeviceSettings["protections"], value: boolean) =>
+    api.patchSettings(deviceId, { protections: { ...settings.protections, [key]: value } }).then(onChanged);
+
+  const patchFriction = (updates: Partial<DeviceSettings["frictionDelay"]>) =>
+    api.patchSettings(deviceId, { frictionDelay: { ...settings.frictionDelay, ...updates } }).then(onChanged);
+
+  // Protections/app budgets/trigger words/friction delay are all Android-only (consumed
+  // exclusively by DashboardConfigStore -- RestrictionPreferences.kt, AppTimeBudgetManager.kt,
+  // GuardianAlertSettings.kt) -- nothing on the Mac reads dashboard-api, so showing those controls
+  // for a macos device would save values that are never actually enforced anywhere.
+  const isMac = settings.platform === "macos";
+
+  return (
+    <div className="p-7 max-w-[900px] space-y-6">
+      <div>
+        <h1 className="text-2xl font-bold tracking-tight">Settings</h1>
+        <p className="text-sm text-on-surface-variant mt-0.5">
+          Everything else for {settings.device_name || deviceId} -- see Blocked Apps, Blocked
+          Sites, Protected Apps, Content Filter, and App Updates in the sidebar for the rest.
+        </p>
+      </div>
+
+      <div className="columns-2 gap-4 [&>*]:mb-4 [&>*]:break-inside-avoid">
+        <div className="space-y-3 [column-span:all]">
+          <SectionLabel>Device</SectionLabel>
+          <Card className="rounded-2xl">
+            <div className="flex items-center gap-3">
+              <input
+                value={nameDraft}
+                onChange={(e) => setNameDraft(e.target.value)}
+                placeholder={deviceId}
+                className="flex-1 h-10 px-3 rounded-xl border border-outline bg-surface text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+              />
+              <Button
+                size="sm"
+                onClick={() => api.patchSettings(deviceId, { device_name: nameDraft }).then(onChanged)}
+              >
+                Save
+              </Button>
+            </div>
+          </Card>
+        </div>
+
         {!isMac && (
         <div className="space-y-3">
           <SectionLabel>Tamper Protection</SectionLabel>
@@ -961,25 +1215,6 @@ function SettingsScreen({
         )}
 
         {!isMac && (
-        <>
-        {/* Blocked websites */}
-        <div className="space-y-3">
-          <SectionLabel>Blocked Websites</SectionLabel>
-          <Card className="rounded-2xl">
-            <p className="text-xs text-on-surface-variant mb-2">
-              Add-only — the device owner can never remove these. A bare domain (e.g. <code>example.com</code>) blocks
-              the whole site; a domain+path (e.g. <code>youtube.com/shorts</code>) blocks only that path.
-            </p>
-            <TagList
-              items={settings.blockedWebsites.map((w) => ({ id: w.domain, label: w.domain }))}
-              placeholder="example.com or youtube.com/shorts"
-              onAdd={(domain) => api.addWebsite(deviceId, domain).then(onChanged)}
-              onRemove={(domain) => api.removeWebsite(deviceId, domain).then(onChanged)}
-            />
-          </Card>
-        </div>
-
-        {/* App time budgets */}
         <div className="space-y-3">
           <SectionLabel>App Time Budgets</SectionLabel>
           <Card className="rounded-2xl">
@@ -995,75 +1230,8 @@ function SettingsScreen({
             />
           </Card>
         </div>
-        </>
         )}
 
-        {/* Content Filter -- shared toggle (Android: VPN tunnel, Mac: DNS enforcement); the
-            per-app bypass list is Android-only (MitmExemptManager has no Mac equivalent). */}
-        <div className="space-y-3">
-          <SectionLabel>{isMac ? "Content Filter" : "Content Filter VPN"}</SectionLabel>
-          <Card className="rounded-2xl space-y-0 divide-y divide-outline-variant/30">
-            <SettingsRow
-              title={isMac ? "Enable content filtering" : "Enable VPN Filter"}
-              sub={isMac ? "Blocks adult content system-wide via DNS" : "Blocks adult content globally across all apps"}
-              checked={settings.vpnFilter.enabled}
-              onChange={patchVpnEnabled}
-            />
-            {!isMac && (
-              <div className="py-3 px-1">
-                <div className="flex items-center gap-2 mb-2">
-                  <Wifi className="w-4 h-4 text-secondary" />
-                  <span className="text-sm font-medium">Bypass apps</span>
-                  <Pill variant={settings.vpnFilter.enabled ? "success" : "default"}>
-                    {settings.vpnFilter.enabled ? "Filter active" : "Filter off"}
-                  </Pill>
-                </div>
-                <p className="text-xs text-on-surface-variant mb-2">
-                  Apps allowed to skip the content filter. Use the exact Android package name (e.g.{" "}
-                  <code>com.google.android.youtube</code>), not the app's display name — the phone matches on this
-                  literally.
-                </p>
-                <TagList
-                  items={settings.vpnBypassApps.map((a) => ({ id: a.id, label: a.name }))}
-                  placeholder="com.example.app"
-                  onAdd={(name) => api.addBypassApp(deviceId, name).then(onChanged)}
-                  onRemove={(id) => api.removeBypassApp(deviceId, id).then(onChanged)}
-                />
-              </div>
-            )}
-          </Card>
-        </div>
-
-        {/* Blocked apps -- shared, platform-conditional copy (Android: package name, Mac:
-            executable/process name, see BlockedApp's doc comment in lib/api.ts). */}
-        <div className="space-y-3">
-          <SectionLabel>Blocked Apps</SectionLabel>
-          <Card className="rounded-2xl">
-            <p className="text-xs text-on-surface-variant mb-2">
-              {isMac ? (
-                <>
-                  Fully blocks an app, all the time. Use the exact process/executable name as it
-                  appears in Activity Monitor (e.g. <code>Safari</code>) — not the app's display
-                  name or bundle identifier. Removing a block here applies immediately once this
-                  Mac's Guardian passcode authorizes it — check the Activity Log for status.
-                </>
-              ) : (
-                <>
-                  Fully blocks an app, all the time -- unlike a habit rule or time budget, there's no condition that
-                  unlocks it. Use the exact Android package name (e.g. <code>com.zhiliaoapp.musically</code>).
-                </>
-              )}
-            </p>
-            <TagList
-              items={settings.blockedApps.map((a) => ({ id: a.appId, label: a.appId }))}
-              placeholder={isMac ? "Safari" : "com.example.app"}
-              onAdd={(appId) => api.addBlockedApp(deviceId, appId).then(onChanged)}
-              onRemove={(appId) => api.removeBlockedApp(deviceId, appId).then(onChanged)}
-            />
-          </Card>
-        </div>
-
-        {/* Trigger words */}
         {!isMac && (
         <div className="space-y-3">
           <SectionLabel>Trigger Words</SectionLabel>
@@ -1082,9 +1250,9 @@ function SettingsScreen({
         </div>
         )}
 
-        {/* Rules now live entirely in Global Settings -- a rule names its own targets AND its
-            own deviceIds (see api.ts's Rule doc comment), so it's no longer "this device's"
-            setting the way it used to be. */}
+        {/* Rules live entirely in Global Settings -- a rule names its own targets AND its own
+            deviceIds (see api.ts's Rule doc comment), so it's no longer "this device's" setting
+            the way it used to be. */}
         <div className="space-y-3">
           <SectionLabel>Rules</SectionLabel>
           <Card className="rounded-2xl">
@@ -1098,7 +1266,6 @@ function SettingsScreen({
           </Card>
         </div>
 
-        {/* Friction delay -- Android-only, no Mac equivalent. */}
         {!isMac && (
         <div className="space-y-3">
           <SectionLabel>Friction Delay</SectionLabel>
@@ -1127,78 +1294,24 @@ function SettingsScreen({
         </div>
         )}
 
-      </div>
-
-      <div className="space-y-3">
-        <SectionLabel>Diagnostics</SectionLabel>
-        <Card className="rounded-2xl">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <p className="text-sm font-medium">App version</p>
-              <p className="text-xs text-on-surface-variant">
-                {settings.appVersion.versionName
-                  ? `v${settings.appVersion.versionName} (build ${settings.appVersion.versionCode})`
-                  : settings.platform === "android"
-                  ? "Not reported yet -- reports on this device's next sync"
-                  : "Not tracked for macOS devices"}
+        <div className="space-y-3 [column-span:all]">
+          <SectionLabel>Diagnostics</SectionLabel>
+          <Card className="rounded-2xl">
+            <details>
+              <summary className="text-sm font-medium cursor-pointer select-none">
+                View raw settings JSON
+              </summary>
+              <p className="text-xs text-on-surface-variant mt-1 mb-2">
+                Exactly what <code>GET /dashboard-api/devices/{deviceId}/settings</code> returns for
+                this device -- useful for confirming what the phone is actually seeing when
+                something looks out of sync.
               </p>
-            </div>
-            {settings.appVersion.reportedAt && (
-              <p className="shrink-0 text-[11px] text-on-surface-variant">
-                as of {new Date(settings.appVersion.reportedAt * 1000).toLocaleString()}
-              </p>
-            )}
-          </div>
-        </Card>
-        <Card className="rounded-2xl">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <p className="text-sm font-medium">Poll this device now</p>
-              <p className="text-xs text-on-surface-variant">
-                Wakes just this phone via push instead of waiting out its normal poll cycle --
-                useful when checking whether a settings change landed.
-              </p>
-            </div>
-            <button
-              onClick={() => {
-                setPollingDevice(true);
-                setPollDeviceResult(null);
-                api.pollDeviceNow(deviceId)
-                  .then((res) => {
-                    setPollDeviceResult(res.notified === 0 ? "Not registered for push" : `Sent to ${res.notified} device${res.notified === 1 ? "" : "s"}`);
-                  })
-                  .catch((err) => setPollDeviceResult(err instanceof ApiError ? err.message : "Couldn't reach the server"))
-                  .finally(() => {
-                    setPollingDevice(false);
-                    window.setTimeout(() => setPollDeviceResult(null), 5000);
-                  });
-              }}
-              disabled={pollingDevice}
-              className="shrink-0 flex items-center gap-2 h-9 px-4 rounded-xl border border-outline-variant/50 bg-surface-variant/40 text-sm font-medium text-on-surface hover:bg-surface-variant transition-colors disabled:opacity-60"
-            >
-              <RefreshCw className={cn("w-3.5 h-3.5", pollingDevice && "animate-spin")} />
-              {pollingDevice ? "Polling…" : "Poll now"}
-            </button>
-          </div>
-          {pollDeviceResult && (
-            <p className="text-[11px] text-on-surface-variant mt-2 text-right">{pollDeviceResult}</p>
-          )}
-        </Card>
-        <Card className="rounded-2xl">
-          <details>
-            <summary className="text-sm font-medium cursor-pointer select-none">
-              View raw settings JSON
-            </summary>
-            <p className="text-xs text-on-surface-variant mt-1 mb-2">
-              Exactly what <code>GET /dashboard-api/devices/{deviceId}/settings</code> returns for
-              this device -- useful for confirming what the phone is actually seeing when
-              something looks out of sync.
-            </p>
-            <pre className="text-[11px] leading-snug bg-surface-variant/50 rounded-xl p-3 overflow-x-auto max-h-96 overflow-y-auto">
-              {JSON.stringify(settings, null, 2)}
-            </pre>
-          </details>
-        </Card>
+              <pre className="text-[11px] leading-snug bg-surface-variant/50 rounded-xl p-3 overflow-x-auto max-h-96 overflow-y-auto">
+                {JSON.stringify(settings, null, 2)}
+              </pre>
+            </details>
+          </Card>
+        </div>
       </div>
 
       <div className="space-y-3">
