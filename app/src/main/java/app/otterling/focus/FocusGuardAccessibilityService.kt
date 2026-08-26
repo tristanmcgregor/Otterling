@@ -385,16 +385,73 @@ class FocusGuardAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * Heuristic only: looks for resource-ids containing "shorts"/"reel", which is how YouTube's
-     * Shorts player has historically been named internally. If this over- or under-fires on your
-     * installed YouTube version, use the debug capture in Settings to see actual ids and adjust
-     * [SUB_FEATURE_HINTS].
+     * Heuristic only: requires BOTH a near-fullscreen *portrait* video surface starting at the
+     * very top of the screen ([hasFullscreenPortraitVideoSurface]) AND a "shorts"/"reel" id or
+     * content-description signal somewhere in the same tree. Neither signal alone is safe: the
+     * surface shape alone would also match a regular video expanded to fullscreen (mostly
+     * landscape, but not always); an id/text signal alone would also match YouTube's persistent
+     * "Shorts" bottom-nav tab label, which -- unlike Facebook's Reels tab title -- has no special
+     * position to gate on since it sits in the same bottom bar on every screen, and would also
+     * match an ordinary video whose title happens to contain the word "shorts". That's why this
+     * checks content descriptions/ids, not arbitrary on-screen text: Shorts' action rail
+     * (like/dislike/comment/share/remix) is icon-only, so those labels only ever exist as content
+     * descriptions, never as visible text. A rebranded YouTube client (e.g. Morphe) commonly
+     * ships its own resource-id namespace for the chrome around the player but still renders
+     * YouTube's real strings/labels, so checking descriptions as well as ids -- the previous
+     * behavior only checked ids -- catches forks whose ids don't say "shorts", which matches
+     * Shorts continuing to play uninterrupted in Morphe despite the seeded youtube.com/shorts
+     * block entry.
      */
     private fun isInSubFeature(): Boolean {
         val root = rootInActiveWindow ?: return false
+        if (!hasFullscreenPortraitVideoSurface(root)) return false
         val ids = mutableListOf<String>()
-        collectNodeInfo(root, texts = mutableListOf(), resourceIds = ids, maxNodes = 200)
-        return ids.any { id -> SUB_FEATURE_HINTS.any { hint -> id.contains(hint, ignoreCase = true) } }
+        val descriptions = mutableListOf<String>()
+        collectNodeInfo(root, texts = mutableListOf(), resourceIds = ids, descriptions = descriptions, maxNodes = 200)
+        val haystack = ids.asSequence() + descriptions.asSequence()
+        return haystack.any { value -> SUB_FEATURE_HINTS.any { hint -> value.contains(hint, ignoreCase = true) } }
+    }
+
+    /**
+     * True if some node is a near-fullscreen, taller-than-wide video/texture surface anchored at
+     * the very top of the screen -- the shape of a Shorts (or Reels) player, and NOT the shape of
+     * YouTube's regular watch page, whose player is confined to roughly the top 40% of the screen
+     * with a scrollable info/comments area below. Bounded BFS, same OOM reasoning as
+     * [collectNodeInfo]/[hasFullscreenReelsViewer].
+     */
+    private fun hasFullscreenPortraitVideoSurface(root: AccessibilityNodeInfo): Boolean {
+        val screenHeight = resources.displayMetrics.heightPixels
+        val screenWidth = resources.displayMetrics.widthPixels
+        val minHeight = (screenHeight * SHORTS_FULLSCREEN_HEIGHT_FRACTION).toInt()
+        val minWidth = (screenWidth * SHORTS_FULLSCREEN_WIDTH_FRACTION).toInt()
+        val queue = ArrayDeque<AccessibilityNodeInfo>()
+        queue.add(root)
+        var visited = 0
+        while (queue.isNotEmpty() && visited < SHORTS_SCAN_MAX_NODES) {
+            val node = queue.removeFirst()
+            visited++
+            val bounds = Rect()
+            node.getBoundsInScreen(bounds)
+            if (!bounds.isEmpty &&
+                bounds.height() >= minHeight &&
+                bounds.width() >= minWidth &&
+                bounds.height() > bounds.width() &&
+                bounds.top < screenHeight * 0.1f
+            ) {
+                val className = node.className?.toString().orEmpty()
+                if (className.contains("View", ignoreCase = true) ||
+                    className.contains("Video", ignoreCase = true) ||
+                    className.contains("Texture", ignoreCase = true) ||
+                    className.contains("Surface", ignoreCase = true)
+                ) {
+                    return true
+                }
+            }
+            for (i in 0 until node.childCount) {
+                queue.add(node.getChild(i) ?: continue)
+            }
+        }
+        return false
     }
 
     /**
@@ -410,6 +467,7 @@ class FocusGuardAccessibilityService : AccessibilityService() {
         texts: MutableList<String>,
         resourceIds: MutableList<String>,
         maxNodes: Int,
+        descriptions: MutableList<String> = mutableListOf(),
     ) {
         val queue = ArrayDeque<AccessibilityNodeInfo>()
         queue.add(node)
@@ -419,6 +477,7 @@ class FocusGuardAccessibilityService : AccessibilityService() {
             visited++
             current.text?.toString()?.takeIf { it.isNotBlank() }?.let { texts.add(it) }
             current.viewIdResourceName?.let { resourceIds.add(it) }
+            current.contentDescription?.toString()?.takeIf { it.isNotBlank() }?.let { descriptions.add(it) }
             for (i in 0 until current.childCount) {
                 queue.add(current.getChild(i) ?: continue)
             }
@@ -481,6 +540,12 @@ class FocusGuardAccessibilityService : AccessibilityService() {
         const val PATH_BLOCK_DEBOUNCE_MS = 800L
         const val TRIGGER_SCAN_DEBOUNCE_MS = 2_000L
         val SUB_FEATURE_HINTS = listOf("shorts", "reel")
+        // Shorts player: near-fullscreen *portrait* surface anchored at the very top of the
+        // screen -- see hasFullscreenPortraitVideoSurface's doc comment for why that shape (not
+        // just an id/description hint) is required.
+        const val SHORTS_FULLSCREEN_HEIGHT_FRACTION = 0.7f
+        const val SHORTS_FULLSCREEN_WIDTH_FRACTION = 0.85f
+        const val SHORTS_SCAN_MAX_NODES = 250
 
         // Facebook (main app + Lite) -- Reels blocking is scoped to these so the rest of the app
         // keeps working normally.
