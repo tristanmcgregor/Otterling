@@ -1,11 +1,12 @@
 import Foundation
 import FocusLockShared
+import UserNotifications
 
 /// Bridges the GUI to the daemon over XPC. Polls status on a timer rather than pushing from the
 /// daemon so the daemon's XPC surface stays one-directional and simple; a 1s poll is cheap and
 /// keeps the countdown feeling live.
 @MainActor
-final class FocusLockViewModel: ObservableObject {
+final class FocusLockViewModel: NSObject, ObservableObject, UNUserNotificationCenterDelegate {
     @Published var state = FocusLockState()
     @Published var errorMessage: String?
     @Published var newDomainText: String = ""
@@ -63,8 +64,16 @@ final class FocusLockViewModel: ObservableObject {
     // -- otherwise the 1s poll would clobber an in-progress edit before the user taps Save.
     private var didSeedHostText = false
 
+    // Local (not accountability-reporting) notification for a completed background update -- see
+    // FocusLockState.lastAutoUpdateVersion's doc comment for why the daemon persists this instead
+    // of pushing it to the GUI directly. Key is scoped to this app (UserDefaults.standard is
+    // per-bundle-identifier) so it survives the GUI being quit/relaunched, not just this process.
+    private static let notifiedUpdateVersionKey = "otterling.lastNotifiedAutoUpdateVersion"
+
     func startPolling() {
         guard pollTask == nil else { return }
+        UNUserNotificationCenter.current().delegate = self
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
         pollTask = Task {
             while !Task.isCancelled {
                 await refreshOnce()
@@ -80,7 +89,37 @@ final class FocusLockViewModel: ObservableObject {
                 cloudFilterHostText = status.cloudFilterHost
                 didSeedHostText = true
             }
+            notifyIfNewAutoUpdate(status)
         }
+    }
+
+    /// Fires a local banner the first time this GUI process notices a NEW `lastAutoUpdateVersion`
+    /// -- not on every 1s poll, and not re-fired for a version already notified about (including
+    /// across a GUI relaunch, via UserDefaults). This is a local-only heads-up, deliberately not
+    /// the accountability-reporting path (`TamperReporter`/ntfy) -- a background update installing
+    /// isn't a tamper/protection-reducing event, just something worth a quiet "hey, this happened."
+    private func notifyIfNewAutoUpdate(_ status: FocusLockState) {
+        guard let version = status.lastAutoUpdateVersion, !version.isEmpty else { return }
+        let defaults = UserDefaults.standard
+        guard defaults.string(forKey: Self.notifiedUpdateVersionKey) != version else { return }
+        defaults.set(version, forKey: Self.notifiedUpdateVersionKey)
+
+        let content = UNMutableNotificationContent()
+        content.title = "Otterling updated"
+        content.body = "Now running v\(version)."
+        content.sound = .default
+        let request = UNNotificationRequest(identifier: "app-updated-\(version)", content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(request)
+    }
+
+    /// Shows the banner even if this GUI window happens to be frontmost when the notification
+    /// fires -- without this, UNUserNotificationCenter suppresses it while the app is active.
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        completionHandler([.banner, .sound])
     }
 
     func addDomain() {

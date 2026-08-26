@@ -42,6 +42,12 @@ final class UpdateCheckLoop {
                     FileHandle.standardError.write(
                         "[update] installed \(manifest.versionName), restarting\n".data(using: .utf8)!
                     )
+                    // Persisted (survives the restart below) so the GUI can show a local "Otterling
+                    // updated" notification -- see FocusLockState.lastAutoUpdateVersion's doc comment.
+                    stateStore.mutate {
+                        $0.lastAutoUpdateVersion = manifest.versionName
+                        $0.lastAutoUpdateAt = Date()
+                    }
                     UpdateManager.restartAfterInstall()
                 case .rejected(let reason):
                     FileHandle.standardError.write("[update] install rejected: \(reason)\n".data(using: .utf8)!)

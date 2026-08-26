@@ -241,6 +241,15 @@ public struct FocusLockState: Codable, Sendable {
     /// written anywhere else.
     public var globalHabitsCache: [GlobalHabit]
 
+    /// Set by `UpdateCheckLoop` right before it restarts the daemon to finish installing an
+    /// automatic background update -- persisted (unlike e.g. `lockProfileInstalled`'s "live
+    /// status") specifically so it survives that restart, and so the GUI can still notice-and-
+    /// notify even if it wasn't running at the moment the install actually happened. The GUI
+    /// (`FocusLockViewModel.refreshOnce`) diffs `lastAutoUpdateVersion` against the last version
+    /// it already showed a local notification for, so this isn't re-notified on every 1s poll.
+    public var lastAutoUpdateVersion: String?
+    public var lastAutoUpdateAt: Date?
+
     public init(
         blockedApps: [BlockedApp] = [],
         blockedDomains: [String] = [],
@@ -270,7 +279,9 @@ public struct FocusLockState: Codable, Sendable {
         dashboardConfigLastFetchedAt: Date? = nil,
         dashboardManagedBlockedApps: Set<String> = [],
         dashboardManagedProtectedApps: Set<String> = [],
-        globalHabitsCache: [GlobalHabit] = []
+        globalHabitsCache: [GlobalHabit] = [],
+        lastAutoUpdateVersion: String? = nil,
+        lastAutoUpdateAt: Date? = nil
     ) {
         self.blockedApps = blockedApps
         self.blockedDomains = blockedDomains
@@ -292,6 +303,8 @@ public struct FocusLockState: Codable, Sendable {
         self.dashboardManagedBlockedApps = dashboardManagedBlockedApps
         self.dashboardManagedProtectedApps = dashboardManagedProtectedApps
         self.globalHabitsCache = globalHabitsCache
+        self.lastAutoUpdateVersion = lastAutoUpdateVersion
+        self.lastAutoUpdateAt = lastAutoUpdateAt
     }
 
     // Custom decode so a state.json written before `dnsEnforcementEnabled` (or these newer cloud
@@ -342,6 +355,8 @@ public struct FocusLockState: Codable, Sendable {
         dashboardManagedBlockedApps = try container.decodeIfPresent(Set<String>.self, forKey: .dashboardManagedBlockedApps) ?? []
         dashboardManagedProtectedApps = try container.decodeIfPresent(Set<String>.self, forKey: .dashboardManagedProtectedApps) ?? []
         globalHabitsCache = try container.decodeIfPresent([GlobalHabit].self, forKey: .globalHabitsCache) ?? []
+        lastAutoUpdateVersion = try container.decodeIfPresent(String.self, forKey: .lastAutoUpdateVersion)
+        lastAutoUpdateAt = try container.decodeIfPresent(Date.self, forKey: .lastAutoUpdateAt)
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -351,6 +366,7 @@ public struct FocusLockState: Codable, Sendable {
         case guardianPasscode, passcodeConfigured
         case protectionEnabled, dashboardConfigCache, dashboardConfigLastFetchedAt
         case dashboardManagedBlockedApps, dashboardManagedProtectedApps, globalHabitsCache
+        case lastAutoUpdateVersion, lastAutoUpdateAt
     }
 
     /// The copy handed to callers of `getStatus`: same state minus the passcode digest, with
