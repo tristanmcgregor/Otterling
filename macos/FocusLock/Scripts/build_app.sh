@@ -184,10 +184,11 @@ codesign -dv --verbose=4 "$INSTALL_PATH" 2>&1 | grep -E "Identifier|TeamIdentifi
 codesign -dv --verbose=4 "$INSTALL_PATH/Contents/MacOS/FocusLockHelperd" 2>&1 | grep -E "Identifier|TeamIdentifier|Authority"
 codesign -dv --verbose=4 "$INSTALL_PATH/Contents/MacOS/FocusLockWatchdog" 2>&1 | grep -E "Identifier|TeamIdentifier|Authority"
 
-echo "==> Installing focuslockctl to /usr/local/bin"
+echo "==> Installing otterlingctl to /usr/local/bin"
 mkdir -p /usr/local/bin
-cp "$BUILD_DIR/focuslockctl" /usr/local/bin/focuslockctl
-codesign --force --options runtime --sign "$SIGN_IDENTITY" /usr/local/bin/focuslockctl
+rm -f /usr/local/bin/focuslockctl
+cp "$BUILD_DIR/otterlingctl" /usr/local/bin/otterlingctl
+codesign --force --options runtime --sign "$SIGN_IDENTITY" /usr/local/bin/otterlingctl
 
 echo "==> Done. Launch with: open ${INSTALL_PATH}"
-echo "    Guardian CLI: focuslockctl status"
+echo "    Guardian CLI: otterlingctl status"

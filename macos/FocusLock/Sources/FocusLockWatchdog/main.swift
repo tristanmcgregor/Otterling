@@ -30,7 +30,7 @@ final class Watchdog {
 
     private func recover() {
         // First attempt: kickstart under whichever label is CURRENTLY registered -- covers the
-        // common case where a previous recovery (this watchdog's own, or `focuslockctl restore`)
+        // common case where a previous recovery (this watchdog's own, or `otterlingctl restore`)
         // already registered `.direct` and the daemon is just hung/wedged, not unloaded. Tries the
         // real label first, then `.direct`; either succeeding is a normal force-restart, not a
         // fresh bootstrap, so it's reported the same way either way.

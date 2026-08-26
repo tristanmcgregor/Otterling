@@ -14,7 +14,7 @@ enum AppBlockEnforcer {
     static let protectedExecutables: Set<String> = [
         "FocusLockHelperd",
         "FocusLock",
-        "focuslockctl",
+        "otterlingctl",
         // The other two executable targets this package builds (see Package.swift) -- omitted
         // here previously, which meant a blockedApps entry naming either would NOT have been
         // protected. Now more than a local-only risk: a leaked LOCKPROFILE_TOKEN (already

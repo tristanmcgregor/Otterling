@@ -126,7 +126,7 @@ import Foundation
     /// fired (from the snapshot `killSwitch` wrote -- see `FocusLockConstants.killSwitchSnapshotPath`),
     /// sets `protectionEnabled` back to true, and deletes the snapshot. Only meaningful to call
     /// AFTER the daemon has been manually re-bootstrapped (killSwitch unloads it -- there is no XPC
-    /// connection to call this over until that happens; see `focuslockctl restore`, the intended
+    /// connection to call this over until that happens; see `otterlingctl restore`, the intended
     /// caller). No passcode, matching `killSwitch` itself -- the recovery path back from an
     /// emergency stop can't be gated behind a passcode that might not be known/reachable at that
     /// moment either. If no snapshot exists (killSwitch was never actually triggered, or restore

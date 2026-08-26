@@ -8,37 +8,37 @@ import FocusLockShared
 /// as the GUI would.
 func printUsage() {
     print("""
-    focuslockctl -- Otterling command-line control
+    otterlingctl -- Otterling command-line control
 
     Blocking is unconditional and permanent: anything added below is enforced 24/7 until removed.
     Adding is always allowed and immediate. Removing needs the Guardian passcode -- see
     `set-passcode` below -- and takes effect immediately once authorized.
 
     Usage:
-      focuslockctl status
-      focuslockctl add-domain <domain>
-      focuslockctl remove-domain <domain>                 (passcode)
-      focuslockctl add-app <displayName> <executableName>
-      focuslockctl remove-app <executableName>            (passcode)
+      otterlingctl status
+      otterlingctl add-domain <domain>
+      otterlingctl remove-domain <domain>                 (passcode)
+      otterlingctl add-app <displayName> <executableName>
+      otterlingctl remove-app <executableName>            (passcode)
 
-      focuslockctl add-protected-app <displayName> <executableName> <bundlePath>
-      focuslockctl remove-protected-app <executableName>  (passcode)
+      otterlingctl add-protected-app <displayName> <executableName> <bundlePath>
+      otterlingctl remove-protected-app <executableName>  (passcode)
 
-      focuslockctl enable-dns
-      focuslockctl disable-dns                            (passcode)
-      focuslockctl set-filter-host <host>                 (passcode)
+      otterlingctl enable-dns
+      otterlingctl disable-dns                            (passcode)
+      otterlingctl set-filter-host <host>                 (passcode)
 
-      focuslockctl enable-proxy [--force]                 (route web through mitmproxy; --force also
+      otterlingctl enable-proxy [--force]                 (route web through mitmproxy; --force also
                                                            firewall-blocks direct :80/:443)
-      focuslockctl disable-proxy                          (passcode)
+      otterlingctl disable-proxy                          (passcode)
 
-      focuslockctl set-passcode                           (prompts; no passcode set = no prompt)
-      focuslockctl clear-passcode                         (passcode)
+      otterlingctl set-passcode                           (prompts; no passcode set = no prompt)
+      otterlingctl clear-passcode                         (passcode)
 
-      focuslockctl check-update
-      focuslockctl install-update                         (passcode)
+      otterlingctl check-update
+      otterlingctl install-update                         (passcode)
 
-      focuslockctl killswitch                              (emergency stop for the WHOLE app: clears
+      otterlingctl killswitch                              (emergency stop for the WHOLE app: clears
                                                             DNS/proxy/pf, stops the trigger-word
                                                             scanner and the GUI app, then unloads
                                                             both daemons. No passcode, not routed
@@ -50,7 +50,7 @@ func printUsage() {
                                                             accountability partner the moment it
                                                             fires.)
 
-      focuslockctl restore                                 (undoes killswitch: re-bootstraps both
+      otterlingctl restore                                 (undoes killswitch: re-bootstraps both
                                                             daemons (needs sudo -- killswitch
                                                             unloaded them, so there's no running
                                                             daemon to ask), restores DNS/proxy to
@@ -60,7 +60,7 @@ func printUsage() {
                                                             itself, same as any normal launch. No
                                                             passcode, matching killswitch itself.)
 
-      focuslockctl protect-user <username>                 (push the trigger-word scanner into a
+      otterlingctl protect-user <username>                 (push the trigger-word scanner into a
                                                             DIFFERENT local user's session -- for
                                                             an admin protecting a separate Standard
                                                             account, not the single-account model.
@@ -70,7 +70,7 @@ func printUsage() {
                                                             cover the DNS-floor profile -- that
                                                             still needs a per-user install.)
 
-      focuslockctl sudo "<command>" [reason]               (privilege-elevation broker -- see
+      otterlingctl sudo "<command>" [reason]               (privilege-elevation broker -- see
                                                             SudoBroker.swift. NOT the passcode gate:
                                                             no passcode unlocks this, since it's
                                                             meant to hold even against the Guardian
@@ -128,7 +128,7 @@ func passcodeIfConfigured(_ state: FocusLockState?) -> String {
 func formatState(_ state: FocusLockState) -> String {
     var lines: [String] = []
     if !state.protectionEnabled {
-        lines.append("🛑 PROTECTION OFF -- killswitch was triggered. Run `sudo focuslockctl restore` to undo.")
+        lines.append("🛑 PROTECTION OFF -- killswitch was triggered. Run `sudo otterlingctl restore` to undo.")
     }
     lines.append("Blocked apps (\(state.blockedApps.count)):")
     for app in state.blockedApps {
@@ -156,7 +156,7 @@ func formatState(_ state: FocusLockState) -> String {
     } else {
         lines.append("⚠️  Guardian passcode: NOT set -- removals fall back to the admin-group check, " +
                       "which grants everything to any admin account (including this one). " +
-                      "Run `focuslockctl set-passcode`.")
+                      "Run `otterlingctl set-passcode`.")
     }
     if state.lockProfileInstalled {
         lines.append("Lock profile: installed")
@@ -198,7 +198,7 @@ func bootstrapDaemon(label: String, plistPath: String) {
 /// has throughout this project's session notes.
 func runRestore(client: FocusLockXPCClient) async {
     guard geteuid() == 0 else {
-        print("Must run as root (sudo focuslockctl restore) -- killswitch unloaded both daemons, so this needs to re-bootstrap them directly via launchd.")
+        print("Must run as root (sudo otterlingctl restore) -- killswitch unloaded both daemons, so this needs to re-bootstrap them directly via launchd.")
         exit(1)
     }
 
@@ -248,7 +248,7 @@ let command = arguments[1]
 // NSXPCConnection delivers its reply blocks on the main dispatch queue by default. A plain
 // `DispatchSemaphore.wait()` on the main thread blocks that thread outright -- it does NOT drain
 // the main queue while waiting -- so any XPC reply scheduled there would never run and this
-// process would hang forever (this was previously observed: dozens of `focuslockctl` processes
+// process would hang forever (this was previously observed: dozens of `otterlingctl` processes
 // stuck in uninterruptible sleep). Polling `RunLoop.main.run(...)` in short slices instead keeps
 // the main queue/run loop pumping between checks, so queued XPC callbacks actually get to fire.
 var finished = false
@@ -338,7 +338,7 @@ Task {
         case .upToDate:
             print("Up to date (build \(FocusLockConstants.appVersionCode)).")
         case .updateAvailable(let manifest):
-            print("Update available: \(manifest.versionName). Run `focuslockctl install-update` to install.")
+            print("Update available: \(manifest.versionName). Run `otterlingctl install-update` to install.")
         case .error(let message):
             print("Check failed: \(message)")
         case nil:
@@ -361,14 +361,14 @@ Task {
 
     case "protect-user":
         guard arguments.count > 2 else {
-            print("Usage: focuslockctl protect-user <username>")
+            print("Usage: otterlingctl protect-user <username>")
             break
         }
         printResult(await client.protectUser(username: arguments[2]))
 
     case "sudo":
         guard arguments.count > 2 else {
-            print("Usage: focuslockctl sudo \"<command>\" [reason]")
+            print("Usage: otterlingctl sudo \"<command>\" [reason]")
             break
         }
         let command = arguments[2]

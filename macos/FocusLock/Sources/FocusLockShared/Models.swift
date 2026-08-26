@@ -214,7 +214,7 @@ public struct FocusLockState: Codable, Sendable {
     public var protectionEnabled: Bool
 
     /// Best-effort cache of the last successfully-fetched dashboard config for this device (see
-    /// `DashboardConfigSync`), surfaced by `focuslockctl status`/the GUI so a guardian can
+    /// `DashboardConfigSync`), surfaced by `otterlingctl status`/the GUI so a guardian can
     /// confirm connectivity ("last synced: Xm ago"). Not sensitive, so unlike `guardianPasscode`
     /// it's left untouched by `redactedForStatus()`.
     public var dashboardConfigCache: DashboardDeviceSettingsCache?

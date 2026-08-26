@@ -938,7 +938,7 @@ OTTERLING_PACKAGE_NAME = "app.otterling"
 # of what's in blockedApps, so this is defense-in-depth, not the only guard. Keep in sync by hand
 # (no shared source between the Python server and the Swift daemon for this list).
 MAC_OWN_EXECUTABLE_NAMES = {
-    "FocusLockHelperd", "FocusLock", "focuslockctl", "FocusLockWatchdog", "FocusLockScanner",
+    "FocusLockHelperd", "FocusLock", "otterlingctl", "FocusLockWatchdog", "FocusLockScanner",
 }
 
 DASHBOARD_DEVICE_RE = re.compile(r"^/dashboard-api/devices/([A-Za-z0-9_.-]{1,128})((?:/.+)?)$")

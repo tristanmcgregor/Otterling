@@ -227,7 +227,7 @@ enum DashboardConfigSync {
     /// Guarded instead by `dashboardManagedBlockedApps`/`dashboardManagedProtectedApps` on
     /// `FocusLockState`: reconcile only ever schedules REMOVAL for a name it previously added
     /// itself (tracked in those sets), never for an entry a guardian added locally via
-    /// `focuslockctl`/the GUI, which reconcile simply doesn't recognize as its own and leaves
+    /// `otterlingctl`/the GUI, which reconcile simply doesn't recognize as its own and leaves
     /// alone. Without this, a local-only addition would look identical, on the very next sync, to
     /// "the dashboard no longer wants this" and get silently reverted by a system the guardian
     /// never even opened -- confirmed as a real, live bug in an earlier version of this function
@@ -257,7 +257,7 @@ enum DashboardConfigSync {
                 continue
             }
             // The dashboard has no separate display-name field for a Mac executable -- reuse the
-            // executable name for both, matching what focuslockctl's own add-app CLI accepts.
+            // executable name for both, matching what otterlingctl's own add-app CLI accepts.
             ImmediateActionApplier.addBlockedApp(BlockedApp(displayName: name, executableName: name), stateStore: stateStore)
             stateStore.mutate { $0.dashboardManagedBlockedApps.insert(name) }
             changed = true

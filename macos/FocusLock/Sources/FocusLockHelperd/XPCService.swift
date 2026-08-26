@@ -513,7 +513,7 @@ final class XPCService: NSObject, FocusLockXPCProtocol {
 
         reply(FocusLockCodec.encode(FocusLockResult(
             success: true,
-            message: "Whole app disabled: DNS/proxy/pf cleared, scanner and GUI app stopped. Unloading daemons now. Run `focuslockctl restore` to undo."
+            message: "Whole app disabled: DNS/proxy/pf cleared, scanner and GUI app stopped. Unloading daemons now. Run `otterlingctl restore` to undo."
         )))
 
         // Delay so the reply above actually reaches the caller over the Mach port before this
@@ -538,7 +538,7 @@ final class XPCService: NSObject, FocusLockXPCProtocol {
     }
 
     /// See `FocusLockXPCProtocol.restoreFromKillSwitch`'s doc comment for the full picture. This
-    /// only ever runs on a daemon that's already back up (`focuslockctl restore` re-bootstraps it
+    /// only ever runs on a daemon that's already back up (`otterlingctl restore` re-bootstraps it
     /// first, since `killSwitch` unloads it and there's no XPC connection to call this over until
     /// then) -- so unlike `killSwitch`, this doesn't need to touch launchd itself at all.
     func restoreFromKillSwitch(reply: @escaping (Data) -> Void) {

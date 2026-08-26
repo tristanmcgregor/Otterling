@@ -68,7 +68,7 @@ docker compose logs --tail=5 lockprofile  # should show it listening; "FCM push 
 
 On the user's Mac, the partner (not the user) sets and remembers:
 ```bash
-focuslockctl set-passcode
+otterlingctl set-passcode
 ```
 This makes every protection-reducing action require **admin group AND this passcode**, applied
 immediately once authorized. On the user's single-admin Mac, the admin check passes automatically,

@@ -127,7 +127,7 @@
     "kill_switch_restored": {
       "enabled": true,
       "source": "mac",
-      "description": "The kill switch was undone (`focuslockctl restore`) -- protection and DNS/proxy settings are back to how they were right before it fired."
+      "description": "The kill switch was undone (`otterlingctl restore`) -- protection and DNS/proxy settings are back to how they were right before it fired."
     },
     "VPN_BLOCK": {
       "enabled": true,

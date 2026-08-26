@@ -32,7 +32,7 @@ let package = Package(
 
         // Command-line override tool, meant to be run from the Guardian admin account.
         .executableTarget(
-            name: "focuslockctl",
+            name: "otterlingctl",
             dependencies: ["FocusLockShared"]
         ),
 

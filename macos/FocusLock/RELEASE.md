@@ -121,7 +121,7 @@ Then, manually (this script has no access to your server and doesn't attempt it)
 
 Caddy already serves that whole directory at `https://<host>/updates/` (same block that serves
 Android's `manifest.json`) -- nothing else to configure. Existing installs pick up the new version
-on their next hourly automatic check, or immediately via `focuslockctl check-update` /
+on their next hourly automatic check, or immediately via `otterlingctl check-update` /
 the GUI's "Check for update" button, followed by "Install update" (or automatically, on the hourly
 check -- see below).
 

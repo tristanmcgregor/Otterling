@@ -5,7 +5,7 @@ import Foundation
 /// SMAppService-managed label can fail with "Bootstrap failed: 5: Input/output error" even when
 /// nothing is currently loaded under that label, because Background Task Management's own
 /// database is what's actually stuck, not launchd's live state. Bootstrapping the SAME plist under
-/// a DIFFERENT label sidesteps that database entirely. Used by both `focuslockctl restore` and
+/// a DIFFERENT label sidesteps that database entirely. Used by both `otterlingctl restore` and
 /// `FocusLockWatchdog`'s own recovery loop -- previously duplicated logic in the former only, which
 /// left the watchdog unable to recover from exactly this failure mode.
 public enum DirectLabelBootstrap {

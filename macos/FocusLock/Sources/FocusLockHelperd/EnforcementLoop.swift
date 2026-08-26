@@ -104,7 +104,7 @@ final class EnforcementLoop {
     private let proxyCheckInterval: TimeInterval = 15
 
     // One-shot: if `state.protectionEnabled` is false when this daemon starts up (e.g. it got
-    // manually re-bootstrapped without going through `focuslockctl restore` after a kill switch),
+    // manually re-bootstrapped without going through `otterlingctl restore` after a kill switch),
     // make sure DNS/proxy/pf are actually torn down rather than just skipped -- `killSwitch` itself
     // already does this teardown directly, but a daemon starting fresh has no guarantee it's
     // running on a machine `killSwitch` just cleaned up (e.g. a stale live proxy setting from
@@ -135,7 +135,7 @@ final class EnforcementLoop {
             // even the lock-profile/VPN/integrity monitoring calls -- matching "the whole app is
             // off", not just content filtering. One-shot teardown covers the case where this
             // daemon process started fresh with protection already off (e.g. manually
-            // re-bootstrapped outside `focuslockctl restore`) and live DNS/proxy settings from
+            // re-bootstrapped outside `otterlingctl restore`) and live DNS/proxy settings from
             // before this process existed are still sitting there unaddressed.
             guard state.protectionEnabled else {
                 if !self.didTearDownForDisabledProtection {
@@ -227,7 +227,7 @@ final class EnforcementLoop {
             // proxy on in every round tested. The severe latency spikes seen during testing showed
             // up in proxy-off phases too, pointing at general home-network variability rather than
             // the proxy. Reverted back to the real Guardian-controlled `state.proxyEnforcementEnabled`
-            // (GUI/`focuslockctl enable-proxy`/`disable-proxy`) rather than a maintainer override.
+            // (GUI/`otterlingctl enable-proxy`/`disable-proxy`) rather than a maintainer override.
             let proxyEnforcementEnabled = state.proxyEnforcementEnabled
             if proxyEnforcementEnabled {
                 let proxyNow = Date()

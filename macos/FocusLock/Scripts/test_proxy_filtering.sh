@@ -8,7 +8,7 @@
 # equal-or-better with the proxy on). Proxy enforcement is back under the normal Guardian-controlled
 # `state.proxyEnforcementEnabled` path (see EnforcementLoop.swift) as of that investigation.
 #
-# This script toggles the proxy the same way the GUI/Guardian does -- `focuslockctl enable-proxy` /
+# This script toggles the proxy the same way the GUI/Guardian does -- `otterlingctl enable-proxy` /
 # `disable-proxy` -- so it stays useful for future regression checks without any special daemon-side
 # hook. (An earlier version of this script used a root-only debug marker file to bypass the then-
 # hardcoded kill switch; that marker and the kill switch are both gone now.)
@@ -41,7 +41,7 @@ DOWNLOAD_SECONDS="${2:-20}"
 CONCURRENCY="${3:-1}"
 SAMPLE_INTERVAL=5
 DAEMON_LABEL="app.otterling.helperd.direct"
-FOCUSLOCKCTL="/usr/local/bin/focuslockctl"
+OTTERLINGCTL="/usr/local/bin/otterlingctl"
 HELPERD_LOG="/var/log/focuslock-helperd.log"
 # Cloudflare's own speed-test endpoint (__down?bytes=N) 403s plain curl requests (needs
 # browser-specific query params/headers curl doesn't send) -- confirmed by hand on 2026-08-18,
@@ -123,7 +123,7 @@ wait_for_proxy_state() {
 
 revert_and_verify() {
   log "=== REVERT: disabling proxy enforcement and confirming safe state ==="
-  "$FOCUSLOCKCTL" disable-proxy >>"$REPORT" 2>&1 || true
+  "$OTTERLINGCTL" disable-proxy >>"$REPORT" 2>&1 || true
   kick_daemon
   wait_for_proxy_state "no"
   # Belt-and-suspenders: explicitly clear the system proxy too, independent of the daemon's own
@@ -246,14 +246,14 @@ helperd_marker_line() {
 
 for round in $(seq 1 "$ROUNDS"); do
   log "--- round $round/$ROUNDS: PROXY OFF (baseline) ---"
-  "$FOCUSLOCKCTL" disable-proxy >>"$REPORT" 2>&1 || true
+  "$OTTERLINGCTL" disable-proxy >>"$REPORT" 2>&1 || true
   kick_daemon
   wait_for_proxy_state "no"
   before_lines=$(helperd_marker_line)
   measure_phase "round${round}_off"
 
   log "--- round $round/$ROUNDS: PROXY ON ---"
-  "$FOCUSLOCKCTL" enable-proxy >>"$REPORT" 2>&1 || true
+  "$OTTERLINGCTL" enable-proxy >>"$REPORT" 2>&1 || true
   kick_daemon
   if wait_for_proxy_state "yes"; then
     measure_phase "round${round}_on"
@@ -266,7 +266,7 @@ for round in $(seq 1 "$ROUNDS"); do
 
   # Always return to OFF between rounds so a failed ON phase doesn't run any longer than one
   # measurement window.
-  "$FOCUSLOCKCTL" disable-proxy >>"$REPORT" 2>&1 || true
+  "$OTTERLINGCTL" disable-proxy >>"$REPORT" 2>&1 || true
   kick_daemon
   wait_for_proxy_state "no"
 done

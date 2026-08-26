@@ -9,8 +9,8 @@
 #      stays inert (fail-open) even if you turn it on -- an authenticated proxy with no password would
 #      407 every request.
 #
-# After this, turn enforcement on with:  focuslockctl enable-proxy         (browsers only)
-#                                    or:  focuslockctl enable-proxy --force (firewall-lock all :80/:443)
+# After this, turn enforcement on with:  otterlingctl enable-proxy         (browsers only)
+#                                    or:  otterlingctl enable-proxy --force (firewall-lock all :80/:443)
 #
 # Get the CA cert from the server first, e.g.:
 #   scp admin@vpn.bartholomew.help:/path/to/filter-server/mitm-ca/mitmproxy-ca-cert.pem ~/Downloads/
@@ -66,5 +66,5 @@ fi
 rm -f "$PWFILE"
 echo "$OUTPUT"
 echo "Done. The mitmproxy CA is trusted and the proxy password is provisioned."
-echo "Now run:  focuslockctl enable-proxy        (browsers only)"
-echo "     or:  focuslockctl enable-proxy --force (lock all web to the proxy)"
+echo "Now run:  otterlingctl enable-proxy        (browsers only)"
+echo "     or:  otterlingctl enable-proxy --force (lock all web to the proxy)"

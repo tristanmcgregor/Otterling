@@ -15,7 +15,7 @@ Mac. Otterling supports two ways of dealing with that, and you can use either:
    whoever calls it before honoring anything that removes a block. See
    [`GUARDIAN_SETUP.md`](GUARDIAN_SETUP.md) for that setup and its honest limits.
 2. **Passcode** (no second account needed): you stay the only admin, and the daemon gates removals
-   on a **Guardian passcode** you don't hold. Set it up with `focuslockctl set-passcode`.
+   on a **Guardian passcode** you don't hold. Set it up with `otterlingctl set-passcode`.
 
 Option 2 exists because on a single-admin machine the uid check in option 1 grants everything to
 the very person it's meant to slow down. Be clear-eyed about what it buys: a local admin can always
@@ -29,7 +29,7 @@ respect, not a lock.
 bundle / Mach-service / LaunchDaemon / profile identifiers are all under `app.otterling*` (e.g.
 `app.otterling`, `app.otterling.helperd`, `app.otterling.watchdog`, `app.otterling.lockprofile`).
 The internal Swift target and executable names (`FocusLock`, `FocusLockHelperd`, `FocusLockWatchdog`,
-`focuslockctl`) are just code symbols and keep their historical spelling -- renaming them would be
+`otterlingctl`) are just code symbols and keep their historical spelling -- renaming them would be
 churn with no user-facing effect, and the tamper policy matches on the *process* name `FocusLockHelperd`,
 which is one of them. See [`Scripts/build_app.sh`](Scripts/build_app.sh).
 
@@ -37,7 +37,7 @@ which is one of them. See [`Scripts/build_app.sh`](Scripts/build_app.sh).
 
 ```
 Otterling.app (GUI, runs as you) --XPC-->  FocusLockHelperd (daemon, runs as root)
-focuslockctl (CLI, runs as you)  --XPC-->        |
+otterlingctl (CLI, runs as you)  --XPC-->        |
                                                   +--> /etc/hosts (manual sites + downloaded adult-domain list)
                                                   +--> system DNS (cloud filter server, or Cloudflare Family fallback)
                                                   +--> pf anchor (blocks DoH/DoT bypass; allowlists the cloud filter host)
@@ -94,7 +94,7 @@ assuming otherwise.
   removal is authorised, and DNS enforcement defaults to **on** for a fresh install (an existing
   install upgrading from an older build keeps whatever it already had).
 - **App updates**: `UpdateManager` checks an update manifest hourly (and on demand via the GUI or
-  `focuslockctl check-update`/`install-update`) and, on a newer version, verifies SHA-256 + a
+  `otterlingctl check-update`/`install-update`) and, on a newer version, verifies SHA-256 + a
   pinned code-signing Team Identifier before installing -- same trust chain as the Android app's
   `ApprovedUpdateManager`. See [`RELEASE.md`](RELEASE.md) for publishing a release (a manual/local
   step for now -- no macOS build agent in the existing CI pipeline).
@@ -127,7 +127,7 @@ security find-identity -v -p codesigning   # find your "Apple Development: ..." 
 
 This builds all four targets, assembles `/Applications/Otterling.app` (with the daemon's
 `LaunchDaemon` plist embedded under `Contents/Library/LaunchDaemons`), code-signs everything, and
-installs `focuslockctl` to `/usr/local/bin`.
+installs `otterlingctl` to `/usr/local/bin`.
 
 First launch:
 
@@ -148,16 +148,16 @@ ps aux | grep FocusLockHelperd
 
 - Open `Otterling.app` to see status, configure the cloud filter server, and add/remove blocked
   apps and sites.
-- `focuslockctl status` gives the same view from the terminal.
+- `otterlingctl status` gives the same view from the terminal.
 - Adding to the blocklist is always allowed from any account and takes effect immediately and
   permanently; removing an entry requires the Guardian passcode (or, if none is set, the Guardian
   admin account — see `GUARDIAN_SETUP.md`) and applies immediately once authorised.
-- Set up the passcode gate with `focuslockctl set-passcode` (prompts; never takes the passcode as
+- Set up the passcode gate with `otterlingctl set-passcode` (prompts; never takes the passcode as
   an argument, since `ps` can expose another process's argv).
 - After completing `GUARDIAN_SETUP.md` steps 1-4, run `Scripts/install_lock_profile.command` once
   (while logged in as the Guardian) to set up the lock-profile tripwire -- see `GUARDIAN_SETUP.md`
   §6 for exactly what it does and doesn't protect against before relying on it.
-- `focuslockctl check-update` / `focuslockctl install-update` (or the GUI's "App updates" section)
+- `otterlingctl check-update` / `otterlingctl install-update` (or the GUI's "App updates" section)
   check/install against whatever `RELEASE.md`'s publish process last published -- automatic hourly
   checks use the exact same path.
 - The downloaded adult-domain hosts list is applied automatically and unconditionally -- there's
@@ -166,18 +166,18 @@ ps aux | grep FocusLockHelperd
   category filtering:
 
 ```bash
-focuslockctl set-filter-host vpn.bartholomew.help
-focuslockctl enable-dns
-focuslockctl add-domain reddit.com
-focuslockctl add-app "Steam" steam_osx
-focuslockctl add-protected-app "Safari" Safari "/Applications/Safari.app"
-focuslockctl status
+otterlingctl set-filter-host vpn.bartholomew.help
+otterlingctl enable-dns
+otterlingctl add-domain reddit.com
+otterlingctl add-app "Steam" steam_osx
+otterlingctl add-protected-app "Safari" Safari "/Applications/Safari.app"
+otterlingctl status
 
 # Close the single-admin hole: gate removals on a secret rather than on being admin.
-focuslockctl set-passcode          # prompts for the new passcode twice
+otterlingctl set-passcode          # prompts for the new passcode twice
 
 # Removals now require the passcode and apply immediately once authorised.
-focuslockctl remove-domain reddit.com   # prompts for the passcode
+otterlingctl remove-domain reddit.com   # prompts for the passcode
 ```
 
 For a protected app, `executableName` is the actual binary inside `Contents/MacOS/` (usually,
@@ -201,7 +201,7 @@ Tests/
                        disk but out of every getStatus reply
   FocusLockWatchdog/  Independent LaunchDaemon: re-bootstraps FocusLockHelperd if unloaded
   FocusLock/          SwiftUI GUI app
-  focuslockctl/       CLI, same XPC surface as the GUI
+  otterlingctl/       CLI, same XPC surface as the GUI
 Scripts/build_app.sh              Build + assemble + codesign (both LaunchDaemons)
 Scripts/install_lock_profile.py   Provisions + hands off the lock profile to System Settings
 Scripts/publish_release.sh        Packages a signed build into a release manifest + zip

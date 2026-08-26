@@ -34,7 +34,7 @@
 // one of these is "ours". Kept in one place so the whitelist is auditable at a glance.
 static const char *kProtectedPathPrefixes[] = {
     "/Applications/Otterling.app",
-    "/usr/local/bin/focuslockctl",
+    "/usr/local/bin/otterlingctl",
     "/Library/Application Support/FocusLock",
 };
 

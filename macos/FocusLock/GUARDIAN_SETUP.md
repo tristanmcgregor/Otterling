@@ -43,8 +43,8 @@ account is your own, undermining the split.
 From your (now Standard) account, add and then try to remove a test domain:
 
 ```
-focuslockctl add-domain example.com
-focuslockctl remove-domain example.com
+otterlingctl add-domain example.com
+otterlingctl remove-domain example.com
 ```
 
 The remove should print `DENIED: Only the Guardian admin account can remove a blocked domain.`.
@@ -62,7 +62,7 @@ anything -- it is a tamper *tripwire*, not a stronger version of the account spl
 ## 6. What this does and doesn't protect against
 
 **Does protect against:** removing a blocked app or domain from your normal login, including via
-the GUI, `focuslockctl`, or a raw XPC call from any code you write -- the check is on the daemon
+the GUI, `otterlingctl`, or a raw XPC call from any code you write -- the check is on the daemon
 side against your real uid, not anything the client claims. Blocking itself is unconditional and
 permanent once added: there's no timer to wait out, only removal by the Guardian lifts it.
 

@@ -98,7 +98,7 @@ struct ContentView: View {
                 passcodePromptText = ""
             }
         } message: {
-            Text("Enter the Guardian passcode to authorize this change. Set or change it with `focuslockctl set-passcode` in Terminal.")
+            Text("Enter the Guardian passcode to authorize this change. Set or change it with `otterlingctl set-passcode` in Terminal.")
         }
     }
 

@@ -1,7 +1,7 @@
 import Foundation
 
 /// Thin async wrapper around the XPC connection to FocusLockHelperd. Shared by the GUI app and
-/// the Guardian `focuslockctl` tool.
+/// the Guardian `otterlingctl` tool.
 public final class FocusLockXPCClient {
     private var connection: NSXPCConnection?
 

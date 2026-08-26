@@ -170,4 +170,4 @@ echo "     (as whatever user/method you already use to manage that host -- this 
 echo "     access to it and doesn't attempt the upload itself.)"
 echo "  3. Caddy already serves /var/lib/otterling/updates/ at https://<host>/updates/ -- nothing"
 echo "     else to configure. Existing installs pick this up on their next hourly check, or"
-echo "     immediately via 'focuslockctl check-update' / the GUI's 'Check for update' button."
+echo "     immediately via 'otterlingctl check-update' / the GUI's 'Check for update' button."
