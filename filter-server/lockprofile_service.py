@@ -432,6 +432,18 @@ HABIT_COMPLETIONS_PATH = os.path.join(DATA_DIR, "habit_completions.json")
 # rules are migrated in-place on first startup after this change -- see _migrate_legacy_device_rules.
 RULES_PATH = os.path.join(DATA_DIR, "rules.json")
 
+# Tracked browsing time for website rules that set dailyBudgetMinutes (see _build_rule) --
+# {"date": "YYYY-MM-DD", "usage": {device_id: {domain: seconds}}}. Populated by
+# mitm_nsfw_addon.py's POST /internal/website-usage-tick (that file's _UsageTracker estimates
+# active browsing time from HTTP request gaps, since a domain-level budget has no on-device
+# equivalent to AppTimeBudgetManager's per-app foreground ticks -- only the proxy that actually
+# sees ongoing requests can measure it). Resets itself the same way habit_completions.json's
+# doneToday does: the stored `date` simply stops matching _today_str(), so stale data is never
+# read back, no separate midnight-reset job needed. Consulted by
+# _currently_blocked_website_domains to fold "over budget for today" into the same blocked-domain
+# set schedule/habit-gated rules already produce.
+WEBSITE_USAGE_PATH = os.path.join(DATA_DIR, "website_usage.json")
+
 # A completion report otherwise carries NO proof at all -- POST .../complete is device-bearer
 # authenticated the same as every other low-stakes phone->server call (see Caddyfile), but that
 # bearer is embedded in the shipped APK and extractable by the same person a habit-gated app
@@ -469,6 +481,7 @@ _habits_lock = threading.Lock()
 _habit_completions_lock = threading.Lock()
 _rules_lock = threading.Lock()
 _removed_devices_lock = threading.Lock()
+_website_usage_lock = threading.Lock()
 _habitshare_account_lock = threading.Lock()
 _report_types_lock = threading.Lock()
 _handoff_token_lock = threading.Lock()
@@ -1279,6 +1292,42 @@ def _save_rules(rules: list) -> None:
     os.replace(tmp_path, RULES_PATH)
 
 
+def _load_website_usage() -> dict:
+    """{"date": "YYYY-MM-DD", "usage": {device_id: {domain: seconds}}} -- see WEBSITE_USAGE_PATH's
+    comment for the reset-by-ignoring-a-stale-date approach. Callers that only read (e.g.
+    _currently_blocked_website_domains) don't need _website_usage_lock; _add_website_usage_seconds
+    below takes it for its own read-modify-write."""
+    try:
+        with open(WEBSITE_USAGE_PATH, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (FileNotFoundError, json.JSONDecodeError):
+        data = {}
+    if not isinstance(data, dict) or data.get("date") != _today_str():
+        return {"date": _today_str(), "usage": {}}
+    usage = data.get("usage")
+    return {"date": data["date"], "usage": usage if isinstance(usage, dict) else {}}
+
+
+def _save_website_usage(data: dict) -> None:
+    os.makedirs(DATA_DIR, exist_ok=True)
+    tmp_path = WEBSITE_USAGE_PATH + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, indent=2, sort_keys=True)
+    os.replace(tmp_path, WEBSITE_USAGE_PATH)
+
+
+def _add_website_usage_seconds(device_id: str, domain: str, seconds: float) -> None:
+    """Accumulates today's tracked browsing time for one device+domain -- called from
+    POST /internal/website-usage-tick (see that route's comment for who calls it and why)."""
+    if seconds <= 0:
+        return
+    with _website_usage_lock:
+        data = _load_website_usage()
+        bucket = data["usage"].setdefault(device_id, {})
+        bucket[domain] = bucket.get(domain, 0) + seconds
+        _save_website_usage(data)
+
+
 def _rule_applies_to_device(rule: dict, device_id: str) -> bool:
     """`deviceIds: ["all"]` (the dashboard's "All devices" shortcut) applies everywhere;
     otherwise the device must be explicitly listed. device_id is already canonicalized by every
@@ -1464,6 +1513,33 @@ def _is_within_window(minute_of_day: int, start: int, end: int) -> bool:
     return (start <= minute_of_day < end) if start <= end else (minute_of_day >= start or minute_of_day < end)
 
 
+def _website_budget_minutes_by_device() -> dict:
+    """device_id -> {domain: dailyBudgetMinutes}, one entry per website rule that sets a budget
+    (see _build_rule) -- independent of whether that budget is currently exceeded (that's
+    _currently_blocked_website_domains' job, just below, which calls this). The smallest
+    configured budget wins if more than one rule targets the same device+domain, so a stricter
+    guardian-authored limit can never be silently loosened by a second, looser rule.
+
+    Canonical-device_id-keyed, same as _currently_blocked_website_domains itself; re-keyed onto
+    every DNS/mitm-visible source identifier by _website_budget_targets_by_source_key below."""
+    all_device_ids = list(_list_known_device_ids().keys())
+    result: dict = {}
+    for rule in _load_rules():
+        minutes = rule.get("dailyBudgetMinutes")
+        if not isinstance(minutes, (int, float)) or minutes <= 0:
+            continue
+        domains = [w.get("domain", "") for w in (rule.get("targetWebsites") or []) if w.get("domain")]
+        if not domains:
+            continue
+        device_ids = rule.get("deviceIds") or []
+        targeted_devices = all_device_ids if "all" in device_ids else device_ids
+        for device_id in targeted_devices:
+            bucket = result.setdefault(device_id, {})
+            for domain in domains:
+                bucket[domain] = min(bucket.get(domain, minutes), minutes)
+    return result
+
+
 def _currently_blocked_website_domains() -> dict:
     """device_id -> set of domains currently blocked by that device's website-targeted habit
     rules, evaluated fresh against the live schedule window and habit completion state -- the
@@ -1475,10 +1551,16 @@ def _currently_blocked_website_domains() -> dict:
     "satisfied" -- same as Android -- so it blocks unconditionally for the whole window, matching
     isWebsiteRuleSatisfied's documented semantics.
 
-    Consulted by GET /internal/dns-website-blocks, which dns_classify_mux.py polls on its own
-    short cadence (see that file) so this Mac's DNS-query-time enforcement of website habit rules
-    lifts within one poll interval of a habit being marked done, without adding a network
-    round-trip to every DNS query for every device.
+    Also folds in domains whose dailyBudgetMinutes has been used up for the day (see
+    _website_budget_minutes_by_device/WEBSITE_USAGE_PATH) -- unlike the schedule-gated rules
+    above, a budget-exceeded block ignores time-of-day/day-of-week entirely and simply stays
+    blocked for the rest of the day once the tracked usage total crosses the limit.
+
+    Consulted by GET /internal/dns-website-blocks, polled both by dns_classify_mux.py (Mac
+    clients) and mitm_nsfw_addon.py (the CONNECT-tunneled 80/443 traffic both platforms already
+    route through it -- see that file's _WebsiteRuleBlocks) on their own short cadence, so
+    enforcement lifts within one poll interval of a habit being marked done or a new day starting,
+    without adding a network round-trip to every DNS query/request for every device.
 
     Reads the global rule library (RULES_PATH, see _rules_for_device) rather than any one
     device's settings record -- a rule's deviceIds says which device(s) this applies to, with
@@ -1518,6 +1600,15 @@ def _currently_blocked_website_domains() -> dict:
         targeted_devices = all_device_ids if "all" in device_ids else device_ids
         for device_id in targeted_devices:
             result.setdefault(device_id, set()).update(domains)
+
+    budget_by_device = _website_budget_minutes_by_device()
+    if budget_by_device:
+        usage_by_device = _load_website_usage()["usage"]
+        for device_id, domain_budgets in budget_by_device.items():
+            device_usage = usage_by_device.get(device_id, {})
+            for domain, minutes in domain_budgets.items():
+                if device_usage.get(domain, 0) >= minutes * 60:
+                    result.setdefault(device_id, set()).add(domain)
     return result
 
 
@@ -1537,6 +1628,23 @@ def _dns_website_blocks_by_source_key() -> dict:
         if domains:
             result.setdefault(alias_key, set()).update(domains)
     return {key: sorted(domains) for key, domains in result.items()}
+
+
+def _website_budget_targets_by_source_key() -> dict:
+    """Same re-keying as _dns_website_blocks_by_source_key, but for _website_budget_minutes_by_device
+    -- domain->dailyBudgetMinutes per DNS/mitm-visible source identifier, regardless of whether
+    that budget is currently exceeded (see _currently_blocked_website_domains for the "is it
+    exceeded" half). Polled by mitm_nsfw_addon.py so it knows which (client, domain) pairs are
+    actually worth timing -- see that file's _BudgetTargets/_UsageTracker."""
+    by_device = _website_budget_minutes_by_device()
+    result: dict = {}
+    for device_id, domains in by_device.items():
+        result.setdefault(device_id, {}).update(domains)
+    for alias_key, canonical_id in DEVICE_ID_ALIASES.items():
+        domains = by_device.get(canonical_id)
+        if domains:
+            result.setdefault(alias_key, {}).update(domains)
+    return result
 
 
 def _default_device_settings(device_id: str = "") -> dict:
@@ -2237,6 +2345,21 @@ class Handler(BaseHTTPRequestHandler):
 
         if not self._authorized():
             return self._send_json(401, {"error": "unauthorized"})
+
+        if self.path == "/internal/website-usage-tick":
+            # mitm_nsfw_addon.py's _UsageTracker posts a batched elapsed-seconds delta here every
+            # ~15s for any (client, domain) pair under an active dailyBudgetMinutes rule --
+            # source_key is whatever identifier that container's client_conn.peername gave it (a
+            # LAN IP in practice), resolved to a canonical device_id the same way every other
+            # source-keyed report in this file is (_canonicalize_device_id).
+            body = self._read_json_body()
+            source_key = ((body or {}).get("source_key") or "").strip()
+            domain = ((body or {}).get("domain") or "").strip().lower()
+            seconds = (body or {}).get("seconds")
+            if not source_key or not domain or not isinstance(seconds, (int, float)):
+                return self._send_json(400, {"error": "source_key, domain and seconds required"})
+            _add_website_usage_seconds(_canonicalize_device_id(source_key), domain, float(seconds))
+            return self._send_json(200, {"status": "ok"})
 
         if self.path == "/lockprofile/provision":
             body = self._read_json_body()
@@ -2992,11 +3115,19 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_json(401, {"error": "unauthorized"})
 
         if parsed.path == "/internal/dns-website-blocks":
-            # Polled by dns_classify_mux.py (a separate container/process with no direct access
-            # to device_settings.json or the habit library) so it can enforce website-targeted
-            # habit rules at DNS-query time for Mac clients -- see
+            # Polled by dns_classify_mux.py and mitm_nsfw_addon.py (separate containers/processes
+            # with no direct access to device_settings.json or the habit library) so each can
+            # enforce website-targeted habit/budget rules for its own slice of traffic -- see
             # _dns_website_blocks_by_source_key's doc comment.
             return self._send_json(200, {"blocks": _dns_website_blocks_by_source_key()})
+
+        if parsed.path == "/internal/website-budget-targets":
+            # Polled by mitm_nsfw_addon.py (see that file's _BudgetTargets) so it knows which
+            # (client, domain) pairs currently sit under a dailyBudgetMinutes rule, independent of
+            # whether that budget is already exceeded -- it needs this to know what to *time*, not
+            # just what's already blocked (the /internal/dns-website-blocks route above covers
+            # that half). See _website_budget_targets_by_source_key's doc comment.
+            return self._send_json(200, {"targets": _website_budget_targets_by_source_key()})
 
         if parsed.path == "/report-config":
             # Lets the phone's own AlertReporter (Android-origin types never touch this server --

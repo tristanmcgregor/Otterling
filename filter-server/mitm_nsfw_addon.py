@@ -25,12 +25,24 @@ to a real AI classification call (see ai_classifier.classify_with_ai) that makes
 judgment a fixed keyword list can't. This only runs for pages that reach this third tier (most
 pages never do), and both outcomes are cached by exact host+path for a day, so repeat visits to
 the same page never re-pay the classification cost.
+
+Separately (and unrelated to NSFW filtering above), this addon also enforces dashboard-configured
+website rules -- schedule/habit-gated, or an exceeded dailyBudgetMinutes usage cap -- by redirecting
+to a real /blocked page (see _WebsiteRuleBlocks, _BudgetTargets, _UsageTracker, BLOCKED_PAGE_URL).
+This used to be pure DNS-layer NXDOMAIN (see dns_classify_mux.py/VpnFilterService.kt), which never
+let a browser get far enough to load any page at all; those domains now resolve normally and this
+proxy -- which essentially all of the household's 80/443 traffic already tunnels through via
+CONNECT, using a CA every managed device already trusts -- shows the real page instead.
 """
 import asyncio
 import concurrent.futures
+import json
+import os
 import re
 import threading
 import time
+import urllib.error
+import urllib.request
 
 from mitmproxy import http, ctx
 
@@ -40,6 +52,236 @@ import domain_blocklist
 import trigger_words
 
 DENY_CACHE_TTL_SECONDS = 24 * 60 * 60
+
+# lockprofile_service.py's website-rule/budget endpoints (see _WebsiteRuleBlocks/_BudgetTargets
+# below). Reached via the PUBLIC vpn.bartholomew.help URL through Caddy, same as
+# block_reporter.py's ALERTS_URL -- this container's DNS is overridden to public resolvers (see
+# docker-compose.yml's mitmproxy `dns:` block, needed so it can still dial arbitrary sites for
+# classification), so it can't resolve the internal `lockprofile` service name dns_classify_mux.py
+# uses directly.
+LOCKPROFILE_INTERNAL_URL = os.environ.get("LOCKPROFILE_INTERNAL_URL", "https://vpn.bartholomew.help").rstrip("/")
+LOCKPROFILE_TOKEN = os.environ.get("LOCKPROFILE_TOKEN", "").strip()
+WEBSITE_RULE_POLL_SECONDS = 10
+
+# Where a habit-gated or budget-exceeded website rule redirects to (see _respond_website_blocked)
+# -- its own subdomain, not a path under vpn.bartholomew.help, specifically so it's a fresh
+# same-site navigation Caddy can serve with a normal, publicly-issued cert. A raw DNS sinkhole
+# can't do this for HTTPS sites (no valid cert for a domain we don't own), which is why this
+# redirect happens here, over the TLS session mitmproxy already terminated using a CA every
+# managed device already trusts -- see this file's module docstring.
+BLOCKED_PAGE_URL = os.environ.get("BLOCKED_PAGE_URL", "https://blocked.vpn.bartholomew.help/").strip()
+
+# How long a gap between two requests to the same tracked domain still counts as one continuous
+# browsing session for _UsageTracker -- generous enough to cover normal page-load/reading pauses,
+# short enough that leaving a tab open and walking away doesn't quietly keep racking up minutes.
+WEBSITE_USAGE_ACTIVE_GAP_SECONDS = 30
+# How often _UsageTracker batches its accumulated deltas to lockprofile_service.py, rather than one
+# HTTP round-trip per request (a tracked page can easily fire several requests a second).
+WEBSITE_USAGE_FLUSH_SECONDS = 15
+
+
+def _lockprofile_get(path: str) -> dict | None:
+    if not LOCKPROFILE_TOKEN:
+        return None
+    request = urllib.request.Request(
+        f"{LOCKPROFILE_INTERNAL_URL}{path}",
+        headers={"Authorization": f"Bearer {LOCKPROFILE_TOKEN}"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except (urllib.error.URLError, OSError, json.JSONDecodeError, UnicodeDecodeError) as error:
+        print(f"[mitm_nsfw_addon] GET {path} failed: {error}", flush=True)
+        return None
+
+
+def _lockprofile_post(path: str, payload: dict) -> None:
+    if not LOCKPROFILE_TOKEN:
+        return
+    request = urllib.request.Request(
+        f"{LOCKPROFILE_INTERNAL_URL}{path}",
+        data=json.dumps(payload).encode("utf-8"),
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {LOCKPROFILE_TOKEN}",
+        },
+    )
+    try:
+        urllib.request.urlopen(request, timeout=5).close()
+    except (urllib.error.URLError, OSError) as error:
+        print(f"[mitm_nsfw_addon] POST {path} failed: {error}", flush=True)
+
+
+class _WebsiteRuleBlocks:
+    """Polls lockprofile_service.py's /internal/dns-website-blocks on the same short cadence as
+    dns_classify_mux.py's own class of the same purpose (see that file's docstring for the
+    polling-vs-per-query tradeoff this mirrors exactly).
+
+    This is what actually shows a guardian's website-rule block (schedule/habit-gated, or an
+    exceeded dailyBudgetMinutes budget) as a real page in a browser: DNS alone can only ever
+    NXDOMAIN, which stops the browser before it makes any HTTP request at all -- see
+    VpnFilterService.kt's handleDnsPacket and dns_classify_mux.py's _handle_query, both of which
+    now let these domains resolve normally specifically so this proxy (which essentially all of
+    the household's 80/443 traffic already tunnels through via CONNECT, using a CA every managed
+    device already trusts) gets a chance to intercept and redirect instead."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._by_source_key: dict[str, set[str]] = {}
+        self._last_poll = 0.0
+        self._polling = threading.Lock()
+
+    def is_stale(self) -> bool:
+        with self._lock:
+            return (time.time() - self._last_poll) >= WEBSITE_RULE_POLL_SECONDS
+
+    def refresh_if_stale(self):
+        if not self.is_stale():
+            return
+        if not self._polling.acquire(blocking=False):
+            return
+        try:
+            body = _lockprofile_get("/internal/dns-website-blocks")
+            if not isinstance(body, dict):
+                return
+            blocks = body.get("blocks") or {}
+            parsed = {k: set(v) for k, v in blocks.items() if isinstance(v, list)}
+            with self._lock:
+                self._by_source_key = parsed
+                self._last_poll = time.time()
+        except Exception as error:
+            print(f"[mitm_nsfw_addon] website-rule poll failed: {error}", flush=True)
+        finally:
+            self._polling.release()
+
+    def blocked_domain_for(self, source_ip: str, host: str) -> bool:
+        with self._lock:
+            domains = self._by_source_key.get(source_ip)
+        if not domains:
+            return False
+        candidate = host
+        while candidate:
+            if candidate in domains:
+                return True
+            dot = candidate.find(".")
+            if dot == -1:
+                break
+            candidate = candidate[dot + 1:]
+        return False
+
+
+class _BudgetTargets:
+    """Polls lockprofile_service.py's /internal/website-budget-targets on the same cadence as
+    _WebsiteRuleBlocks -- domain->dailyBudgetMinutes per source key, for every website rule that
+    sets a budget, independent of whether that budget is currently exceeded (_WebsiteRuleBlocks
+    above covers the "is it exceeded/blocked" half). Consulted on every request so _UsageTracker
+    only ever times (client, host) pairs that are actually under a budget rule."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._by_source_key: dict[str, dict[str, float]] = {}
+        self._last_poll = 0.0
+        self._polling = threading.Lock()
+
+    def is_stale(self) -> bool:
+        with self._lock:
+            return (time.time() - self._last_poll) >= WEBSITE_RULE_POLL_SECONDS
+
+    def refresh_if_stale(self):
+        if not self.is_stale():
+            return
+        if not self._polling.acquire(blocking=False):
+            return
+        try:
+            body = _lockprofile_get("/internal/website-budget-targets")
+            if not isinstance(body, dict):
+                return
+            targets = body.get("targets") or {}
+            parsed = {
+                key: {
+                    domain: minutes for domain, minutes in domains.items()
+                    if isinstance(minutes, (int, float))
+                }
+                for key, domains in targets.items() if isinstance(domains, dict)
+            }
+            with self._lock:
+                self._by_source_key = parsed
+                self._last_poll = time.time()
+        except Exception as error:
+            print(f"[mitm_nsfw_addon] budget-targets poll failed: {error}", flush=True)
+        finally:
+            self._polling.release()
+
+    def registrable_domain_for(self, source_ip: str, host: str) -> str | None:
+        """Walks host up to its parent domains and returns the first one this source_ip has a
+        budget rule for, or None -- same walk-up-parents matching every other domain-rule check in
+        this project (HabitRuleManager.kt's domainMatches, dns_classify_mux.py's
+        blocked_domain_for)."""
+        with self._lock:
+            domains = self._by_source_key.get(source_ip)
+        if not domains:
+            return None
+        candidate = host
+        while candidate:
+            if candidate in domains:
+                return candidate
+            dot = candidate.find(".")
+            if dot == -1:
+                break
+            candidate = candidate[dot + 1:]
+        return None
+
+
+class _UsageTracker:
+    """Estimates active browsing time per (client, budget-tracked domain) from raw HTTP request
+    timestamps -- the same request-gap heuristic any web-analytics tool uses when discrete request
+    timestamps are all it has to work with, not a continuous per-tab heartbeat: two consecutive
+    requests to the same tracked domain from the same client count as one continuous session (the
+    gap between them added to the running total) as long as that gap is no more than
+    WEBSITE_USAGE_ACTIVE_GAP_SECONDS; a longer gap is simply dropped, not counted, and doesn't
+    extend the session either -- the next request starts a fresh one.
+
+    Ticks accumulate in memory and flush to lockprofile_service.py's
+    /internal/website-usage-tick every WEBSITE_USAGE_FLUSH_SECONDS, batched rather than one HTTP
+    round-trip per request -- a tracked domain's pages can easily fire several requests a second
+    (images, XHRs, etc.), and this must never add latency to the request path."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._sessions: dict[tuple[str, str], dict] = {}  # (source_ip, domain) -> state
+        self._last_flush = time.time()
+
+    def record_request(self, source_ip: str, domain: str) -> None:
+        now = time.time()
+        with self._lock:
+            key = (source_ip, domain)
+            session = self._sessions.get(key)
+            if session is None:
+                self._sessions[key] = {"last_seen": now, "pending_seconds": 0.0}
+                return
+            gap = now - session["last_seen"]
+            if gap <= WEBSITE_USAGE_ACTIVE_GAP_SECONDS:
+                session["pending_seconds"] += gap
+            session["last_seen"] = now
+
+    def flush_if_due(self) -> None:
+        now = time.time()
+        with self._lock:
+            if now - self._last_flush < WEBSITE_USAGE_FLUSH_SECONDS:
+                return
+            self._last_flush = now
+            due = []
+            for (source_ip, domain), session in self._sessions.items():
+                pending = session["pending_seconds"]
+                if pending > 0:
+                    due.append((source_ip, domain, pending))
+                    session["pending_seconds"] = 0.0
+        for source_ip, domain, seconds in due:
+            _lockprofile_post(
+                "/internal/website-usage-tick",
+                {"source_key": source_ip, "domain": domain, "seconds": seconds},
+            )
 
 # Dedicated pool for classify_with_ai's `claude -p` subprocess call, deliberately *not* the
 # default run_in_executor pool (also used by the cheap, non-blocking refresh_if_stale() check
@@ -163,11 +405,33 @@ class NsfwFilter:
         self.domains = domain_blocklist.DomainList()
         self.deny_cache = _DenyCache()
         self.allow_cache = _AllowCache()
+        self.website_rule_blocks = _WebsiteRuleBlocks()
+        self.budget_targets = _BudgetTargets()
+        self.usage_tracker = _UsageTracker()
 
     @staticmethod
     def _path_key(flow: http.HTTPFlow) -> str:
         host = flow.request.pretty_host.lower().rstrip(".")
         return f"{host}{flow.request.path or ''}"
+
+    @staticmethod
+    def _client_ip(flow: http.HTTPFlow) -> str:
+        peer = getattr(flow.client_conn, "peername", None)
+        return peer[0] if peer else "lan-client"
+
+    def _respond_website_blocked(self, flow: http.HTTPFlow):
+        """Redirects to the guardian-facing /blocked page on its own subdomain -- a real,
+        Caddy-served page with a normal publicly-issued cert, so this shows cleanly in a browser
+        with no cert warning even though the request arrived for an arbitrary blocked domain (see
+        BLOCKED_PAGE_URL's comment for why that has to be a same-site redirect, not a raw sinkhole).
+
+        Deliberately its own method, not a mode of _respond_blocked: a website-rule block is a
+        guardian-authored schedule/budget decision, not a content-safety verdict, so unlike the
+        NSFW reasons below it's never reported to block_reporter -- "you're out of time on this
+        site" was never something the person visiting had any way to avoid, so there's nothing
+        accountability-relevant to report."""
+        flow.response = http.Response.make(302, b"", {"Location": BLOCKED_PAGE_URL})
+        flow.metadata["otterling_blocked_reason"] = "website-rule"
 
     def _respond_blocked(self, flow: http.HTTPFlow, reason: str):
         """Builds the block response only -- does NOT touch the deny cache; callers cache with
@@ -204,7 +468,25 @@ class NsfwFilter:
         # way a plain synchronous `def request` would (mitmproxy also supports async hooks, which
         # is what makes this off-load possible without changing the calling convention).
         await asyncio.get_running_loop().run_in_executor(None, self.domains.refresh_if_stale)
+        await asyncio.get_running_loop().run_in_executor(None, self.website_rule_blocks.refresh_if_stale)
+        await asyncio.get_running_loop().run_in_executor(None, self.budget_targets.refresh_if_stale)
         host = flow.request.pretty_host.lower().rstrip(".")
+        source_ip = self._client_ip(flow)
+
+        # Habit-gated / budget-exceeded website rules take priority over everything below, same
+        # reasoning as dns_classify_mux.py's own website-rule check: a rule-gated domain (e.g.
+        # youtube.com) is often perfectly legitimate content none of the NSFW checks below would
+        # ever flag. See _WebsiteRuleBlocks' own doc for why this now runs here instead of only
+        # NXDOMAIN-ing at DNS resolution time.
+        if self.website_rule_blocks.blocked_domain_for(source_ip, host):
+            self._respond_website_blocked(flow)
+            return
+
+        tracked_domain = self.budget_targets.registrable_domain_for(source_ip, host)
+        if tracked_domain:
+            self.usage_tracker.record_request(source_ip, tracked_domain)
+            self.usage_tracker.flush_if_due()
+
         path_key = self._path_key(flow)
 
         # A prior block may have been scoped to the whole host (domain-list) or just this exact
