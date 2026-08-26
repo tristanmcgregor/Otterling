@@ -11,8 +11,15 @@ struct ContentView: View {
     @StateObject private var viewModel = FocusLockViewModel()
     @State private var screen: Screen = .overview
 
+    // No more standalone Guardian screen/passcode field (see this project's own removal note) --
+    // any gated action instead stashes itself here and the alert below in `body` prompts for the
+    // passcode right when it's actually needed, one-shot. `passcodePromptText` is reset after
+    // every use so nothing lingers in memory once spent, same care the old bound field took.
+    @State private var pendingPasscodeAction: ((String) -> Void)?
+    @State private var passcodePromptText: String = ""
+
     enum Screen: String, CaseIterable, Identifiable {
-        case overview, apps, sites, protectedApps, filter, security, updates, terminal, assistant, multiUser
+        case overview, apps, sites, protectedApps, filter, updates, terminal, assistant, multiUser
         var id: String { rawValue }
 
         var title: String {
@@ -22,7 +29,6 @@ struct ContentView: View {
             case .sites: return "Blocked Sites"
             case .protectedApps: return "Protected Apps"
             case .filter: return "Content Filter"
-            case .security: return "Guardian"
             case .updates: return "App Updates"
             case .terminal: return "Sudo Terminal"
             case .assistant: return "AI Assistant"
@@ -37,7 +43,6 @@ struct ContentView: View {
             case .sites: return "globe"
             case .protectedApps: return "lock.app.dashed"
             case .filter: return "shield.lefthalf.filled"
-            case .security: return "key.fill"
             case .updates: return "arrow.triangle.2.circlepath"
             case .terminal: return "terminal.fill"
             case .assistant: return "sparkles"
@@ -47,7 +52,6 @@ struct ContentView: View {
 
         var group: String {
             switch self {
-            case .security: return "Guardian"
             case .terminal, .assistant, .multiUser: return "Elevation Broker"
             default: return "Protect"
             }
@@ -72,6 +76,29 @@ struct ContentView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(viewModel.errorMessage ?? "")
+        }
+        // One-shot passcode prompt for whatever gated action just requested it (see
+        // `pendingPasscodeAction`'s doc comment) -- replaces the old standalone Guardian screen's
+        // persistent passcode field with a prompt shown right when it's actually needed.
+        .alert(
+            "Guardian Passcode",
+            isPresented: Binding(
+                get: { pendingPasscodeAction != nil },
+                set: { if !$0 { pendingPasscodeAction = nil; passcodePromptText = "" } }
+            )
+        ) {
+            SecureField("Passcode", text: $passcodePromptText)
+            Button("Confirm") {
+                pendingPasscodeAction?(passcodePromptText)
+                pendingPasscodeAction = nil
+                passcodePromptText = ""
+            }
+            Button("Cancel", role: .cancel) {
+                pendingPasscodeAction = nil
+                passcodePromptText = ""
+            }
+        } message: {
+            Text("Enter the Guardian passcode to authorize this change. Set or change it with `focuslockctl set-passcode` in Terminal.")
         }
     }
 
@@ -136,8 +163,6 @@ struct ContentView: View {
                 VStack(alignment: .leading, spacing: 1) {
                     navHeader("Protect")
                     ForEach(Screen.allCases.filter { $0.group == "Protect" }) { navItem($0) }
-                    navHeader("Guardian")
-                    ForEach(Screen.allCases.filter { $0.group == "Guardian" }) { navItem($0) }
                     navHeader("Elevation Broker")
                     ForEach(Screen.allCases.filter { $0.group == "Elevation Broker" }) { navItem($0) }
                 }
@@ -213,7 +238,6 @@ struct ContentView: View {
                 case .sites: sitesScreen
                 case .protectedApps: protectedAppsScreen
                 case .filter: filterScreen
-                case .security: securityScreen
                 case .updates: updatesScreen
                 case .terminal: terminalScreen
                 case .assistant: assistantScreen
@@ -249,7 +273,6 @@ struct ContentView: View {
         case .sites: return "Domains redirected to nowhere via /etc/hosts"
         case .protectedApps: return "Apps kept alive and undeletable"
         case .filter: return "System-wide NSFW DNS filtering"
-        case .security: return "The secret that gates every removal"
         case .updates: return "Signed, verified in-app updates"
         case .terminal: return "Every command goes through the denylist → allowlist → AI-review broker -- inert until this account is Standard"
         case .assistant: return "Describe what you need in plain language -- the AI translates it, then every resulting command still goes through the same broker"
@@ -324,7 +347,7 @@ struct ContentView: View {
                     ForEach(viewModel.state.blockedApps) { app in
                         listRow(icon: "xmark.app.fill", hue: .error, title: app.displayName,
                                 subtitle: app.executableName) {
-                            viewModel.removeApp(app.executableName)
+                            pendingPasscodeAction = { passcode in viewModel.removeApp(app.executableName, passcode: passcode) }
                         }
                     }
                 }
@@ -352,7 +375,7 @@ struct ContentView: View {
                 VStack(spacing: 6) {
                     ForEach(viewModel.state.blockedDomains, id: \.self) { domain in
                         listRow(icon: "globe", hue: .info, title: domain, subtitle: nil) {
-                            viewModel.removeDomain(domain)
+                            pendingPasscodeAction = { passcode in viewModel.removeDomain(domain, passcode: passcode) }
                         }
                     }
                 }
@@ -379,7 +402,7 @@ struct ContentView: View {
                     ForEach(viewModel.state.protectedApps) { app in
                         listRow(icon: "lock.app.dashed", hue: .success, title: app.displayName,
                                 subtitle: app.bundlePath) {
-                            viewModel.removeProtectedApp(app.executableName)
+                            pendingPasscodeAction = { passcode in viewModel.removeProtectedApp(app.executableName, passcode: passcode) }
                         }
                     }
                 }
@@ -408,7 +431,9 @@ struct ContentView: View {
                         Label("Cloud + local adult lists active", systemImage: "checkmark.shield.fill")
                             .font(.system(size: 13)).foregroundStyle(Otter.secondary)
                         Spacer()
-                        Button("Disable…") { viewModel.disableDNSEnforcement() }
+                        Button("Disable…") {
+                            pendingPasscodeAction = { passcode in viewModel.disableDNSEnforcement(passcode: passcode) }
+                        }
                             .buttonStyle(OtterTonal(variant: .error))
                     } else {
                         Label("Not enforced", systemImage: "shield.slash")
@@ -423,7 +448,13 @@ struct ContentView: View {
                 SectionLabel(text: "Cloud Filter Server")
                 Toggle(isOn: Binding(
                     get: { viewModel.state.cloudFilterEnabled },
-                    set: { viewModel.setCloudFilterEnabled($0) }
+                    set: { enabled in
+                        if enabled {
+                            viewModel.setCloudFilterEnabled(true)
+                        } else {
+                            pendingPasscodeAction = { passcode in viewModel.setCloudFilterEnabled(false, passcode: passcode) }
+                        }
+                    }
                 )) {
                     Text("Use cloud filter server").font(.system(size: 13, weight: .medium))
                 }
@@ -436,8 +467,12 @@ struct ContentView: View {
                         .padding(.horizontal, 12).padding(.vertical, 8)
                         .background(Otter.surfaceVariant.opacity(0.5))
                         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                        .onSubmit { viewModel.saveCloudFilterHost() }
-                    Button("Save") { viewModel.saveCloudFilterHost() }.buttonStyle(OtterOutlined())
+                        .onSubmit {
+                            pendingPasscodeAction = { passcode in viewModel.saveCloudFilterHost(passcode: passcode) }
+                        }
+                    Button("Save") {
+                        pendingPasscodeAction = { passcode in viewModel.saveCloudFilterHost(passcode: passcode) }
+                    }.buttonStyle(OtterOutlined())
                 }
                 HStack {
                     Button("Test filter server") { viewModel.testCloudFilterReachability() }
@@ -445,58 +480,6 @@ struct ContentView: View {
                         .disabled(viewModel.cloudFilterTesting)
                     if let result = viewModel.cloudFilterTestResult {
                         Text(result).font(.system(size: 11)).foregroundStyle(Otter.onSurfaceVariant)
-                    }
-                }
-            }
-        }
-    }
-
-    // MARK: Security (passcode)
-
-    private var securityScreen: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Card {
-                HStack {
-                    SectionLabel(text: "Guardian Passcode")
-                    Spacer()
-                    Pill(text: viewModel.state.passcodeConfigured ? "Set" : "Not set",
-                         variant: viewModel.state.passcodeConfigured ? .success : .warning)
-                }
-                if viewModel.state.passcodeConfigured {
-                    Text("Removals need the passcode and apply immediately once authorised.")
-                        .font(.system(size: 12)).foregroundStyle(Otter.onSurfaceVariant)
-                } else {
-                    Text("No passcode set. Removals fall back to the admin-group check, which this account passes — nothing is actually gated. Set one and give it to someone else, or store it where you can't reach it on impulse.")
-                        .font(.system(size: 12)).foregroundStyle(Otter.tertiary)
-                }
-
-                SecureField("Guardian passcode (to authorise a change)", text: $viewModel.passcodeText)
-                    .textFieldStyle(.plain)
-                    .padding(.horizontal, 12).padding(.vertical, 8)
-                    .background(Otter.surfaceVariant.opacity(0.5))
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-
-                Divider().overlay(Otter.outlineVariant.opacity(0.4))
-
-                Text(viewModel.state.passcodeConfigured ? "Change passcode" : "Set passcode")
-                    .font(.system(size: 12, weight: .semibold))
-                SecureField("New passcode (min 6 characters)", text: $viewModel.newPasscodeText)
-                    .textFieldStyle(.plain)
-                    .padding(.horizontal, 12).padding(.vertical, 8)
-                    .background(Otter.surfaceVariant.opacity(0.5))
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                SecureField("Confirm new passcode", text: $viewModel.confirmPasscodeText)
-                    .textFieldStyle(.plain)
-                    .padding(.horizontal, 12).padding(.vertical, 8)
-                    .background(Otter.surfaceVariant.opacity(0.5))
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                HStack {
-                    Button(viewModel.state.passcodeConfigured ? "Change Passcode" : "Set Passcode") {
-                        viewModel.setGuardianPasscode()
-                    }
-                    .buttonStyle(OtterFilled())
-                    if let status = viewModel.passcodeStatusText {
-                        Text(status).font(.system(size: 11)).foregroundStyle(Otter.onSurfaceVariant)
                     }
                 }
             }
@@ -517,7 +500,9 @@ struct ContentView: View {
                     .buttonStyle(OtterOutlined())
                     .disabled(viewModel.updateChecking || viewModel.updateInstalling)
                 if viewModel.updateAvailable {
-                    Button("Install update") { viewModel.installAvailableUpdate() }
+                    Button("Install update") {
+                        pendingPasscodeAction = { passcode in viewModel.installAvailableUpdate(passcode: passcode) }
+                    }
                         .buttonStyle(OtterFilled())
                         .disabled(viewModel.updateInstalling)
                 }

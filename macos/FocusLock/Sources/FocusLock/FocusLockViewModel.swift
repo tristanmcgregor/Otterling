@@ -16,12 +16,6 @@ final class FocusLockViewModel: ObservableObject {
     @Published var updateChecking = false
     @Published var updateInstalling = false
     @Published var updateAvailable = false
-    /// Bound to the passcode field. Cleared after every gated call so it isn't left sitting in
-    /// memory (or on screen) once it's been used.
-    @Published var passcodeText: String = ""
-    @Published var newPasscodeText: String = ""
-    @Published var confirmPasscodeText: String = ""
-    @Published var passcodeStatusText: String?
 
     // MARK: Sudo broker terminal (see SudoBroker.swift) -- inert until the account is converted to
     // Standard, but the UI works the same either way since it's just a front-end for the XPC call.
@@ -99,43 +93,44 @@ final class FocusLockViewModel: ObservableObject {
         }
     }
 
-    func removeDomain(_ domain: String) {
-        Task { await handleGated(await client.removeBlockedDomain(domain, passcode: passcodeText)) }
+    func removeDomain(_ domain: String, passcode: String) {
+        Task { await handleGated(await client.removeBlockedDomain(domain, passcode: passcode)) }
     }
 
     func addApp(_ app: BlockedApp) {
         Task { await handle(await client.addBlockedApp(app)) }
     }
 
-    func removeApp(_ executableName: String) {
-        Task { await handleGated(await client.removeBlockedApp(executableName: executableName, passcode: passcodeText)) }
+    func removeApp(_ executableName: String, passcode: String) {
+        Task { await handleGated(await client.removeBlockedApp(executableName: executableName, passcode: passcode)) }
     }
 
     func addProtectedApp(_ app: ProtectedApp) {
         Task { await handle(await client.addProtectedApp(app)) }
     }
 
-    func removeProtectedApp(_ executableName: String) {
-        Task { await handleGated(await client.removeProtectedApp(executableName: executableName, passcode: passcodeText)) }
+    func removeProtectedApp(_ executableName: String, passcode: String) {
+        Task { await handleGated(await client.removeProtectedApp(executableName: executableName, passcode: passcode)) }
     }
 
     func enableDNSEnforcement() {
         Task { await handle(await client.enableDNSEnforcement()) }
     }
 
-    func disableDNSEnforcement() {
-        Task { await handleGated(await client.disableDNSEnforcement(passcode: passcodeText)) }
+    func disableDNSEnforcement(passcode: String) {
+        Task { await handleGated(await client.disableDNSEnforcement(passcode: passcode)) }
     }
 
-    func saveCloudFilterHost() {
+    func saveCloudFilterHost(passcode: String) {
         let host = cloudFilterHostText.trimmingCharacters(in: .whitespaces)
         guard !host.isEmpty else { return }
-        Task { await handleGated(await client.setCloudFilterHost(host, passcode: passcodeText)) }
+        Task { await handleGated(await client.setCloudFilterHost(host, passcode: passcode)) }
     }
 
-    func setCloudFilterEnabled(_ enabled: Bool) {
-        // Turning it on is ungated; only the off direction needs the passcode.
-        Task { await handleGated(await client.setCloudFilterEnabled(enabled, passcode: passcodeText)) }
+    /// Turning it on is ungated (no `passcode` needed); only the off direction is, since the GUI
+    /// (see ContentView's passcode-prompt alert) only ever supplies one when disabling.
+    func setCloudFilterEnabled(_ enabled: Bool, passcode: String = "") {
+        Task { await handleGated(await client.setCloudFilterEnabled(enabled, passcode: passcode)) }
     }
 
     func runTerminalCommand() {
@@ -176,28 +171,6 @@ final class FocusLockViewModel: ObservableObject {
         }
     }
 
-    func setGuardianPasscode() {
-        let new = newPasscodeText
-        guard !new.isEmpty else {
-            passcodeStatusText = "Enter a new passcode."
-            return
-        }
-        guard new == confirmPasscodeText else {
-            passcodeStatusText = "Passcodes don't match."
-            return
-        }
-        Task {
-            let result = await client.setGuardianPasscode(newPasscode: new, currentPasscode: passcodeText)
-            passcodeStatusText = result.message ?? (result.success ? "Passcode updated." : "Denied.")
-            if result.success {
-                newPasscodeText = ""
-                confirmPasscodeText = ""
-                passcodeText = ""
-            }
-            await refreshOnce()
-        }
-    }
-
     func testCloudFilterReachability() {
         let host = cloudFilterHostText.trimmingCharacters(in: .whitespaces)
         guard !host.isEmpty else {
@@ -235,12 +208,12 @@ final class FocusLockViewModel: ObservableObject {
         }
     }
 
-    func installAvailableUpdate() {
+    func installAvailableUpdate(passcode: String) {
         guard pendingUpdateManifest != nil else { return }
         updateInstalling = true
         updateStatusText = "Downloading and verifying..."
         Task {
-            switch await client.installAvailableUpdate(passcode: passcodeText) {
+            switch await client.installAvailableUpdate(passcode: passcode) {
             case .installedPendingRestart(let manifest):
                 updateStatusText = "Installed \(manifest.versionName) -- restarting the filter daemon now."
                 updateAvailable = false
@@ -259,11 +232,11 @@ final class FocusLockViewModel: ObservableObject {
     }
 
     /// For passcode-gated calls. Surfaces the success message too (unlike `handle`), since a
-    /// denial (wrong passcode, lockout) is the interesting case here.
+    /// denial (wrong passcode, lockout) is the interesting case here. The passcode itself is
+    /// supplied per-call by ContentView's passcode-prompt alert (see `pendingPasscodeAction`),
+    /// not held in any published state here, so there's nothing to clear after use.
     private func handleGated(_ result: FocusLockResult) async {
         errorMessage = result.message
-        // Never leave the passcode sitting in a bound field after it's been spent.
-        passcodeText = ""
         await refreshOnce()
     }
 }
