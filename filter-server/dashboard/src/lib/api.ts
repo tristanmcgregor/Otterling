@@ -78,17 +78,24 @@ export interface RuleSchedule {
   daysOfWeek?: number[];
 }
 
-export interface Rule {
-  id: string;
-  // "website" gates a domain (enforced via the phone's DNS filter -- see
-  // HabitRuleManager.kt's isWebsiteCurrentlyBlocked) instead of suspending an app. Absent on
-  // rules created before this field existed, which are always "app". appName holds the domain
-  // itself for a website rule (server-side display label), so existing appName-only UI still
-  // shows something sensible without checking targetType.
-  targetType?: "app" | "website";
+export interface RuleTargetApp {
   appId: string;
   appName: string;
-  websiteDomain?: string;
+}
+
+export interface RuleTargetWebsite {
+  domain: string;
+}
+
+// A rule is a single global-library entry now (see lockprofile_service.py's RULES_PATH), not
+// nested under one device -- it names its own targetApps/targetWebsites (either or both non-empty
+// -- a rule can gate an app AND a website together) and deviceIds (explicit device_id list, or the
+// sentinel ["all"]) saying which device(s) enforce it.
+export interface Rule {
+  id: string;
+  targetApps: RuleTargetApp[];
+  targetWebsites: RuleTargetWebsite[];
+  deviceIds: string[];
   requiredHabitIds: string[];
   schedule: RuleSchedule;
   dailyBudgetMinutes: number | null;
@@ -141,7 +148,10 @@ export interface DeviceSettings {
   vpnBypassApps: BypassApp[];
   blockedWebsites: BlockedWebsite[];
   frictionDelay: { enabled: boolean; seconds: number };
-  // habits is NOT here -- moved to the global library, see api.getHabits() below.
+  // habits/rules are NOT stored here -- both are global libraries (see api.getHabits() and
+  // api.listRules() below). rules IS still included in every settings fetch, though: it's the
+  // subset of the global rule library whose deviceIds includes this device (or "all"), computed
+  // fresh server-side on every GET -- see lockprofile_service.py's _rules_for_device.
   rules: Rule[];
   appBudgets: AppBudget[];
   triggerWords: TriggerWord[];
@@ -307,18 +317,22 @@ export const api = {
       body: JSON.stringify(updates),
     }),
 
-  addRule: (deviceId: string, rule: Partial<Rule>) =>
-    request<{ rules: Rule[] }>(`/devices/${enc(deviceId)}/rules`, {
+  // Global rule library -- NOT scoped under /devices/<id>, see Rule's doc comment. A rule's own
+  // deviceIds decides which device(s) it applies to, chosen in the wizard itself rather than by
+  // which device happened to be selected when it was created.
+  listRules: () => request<{ rules: Rule[] }>("/rules"),
+  addRule: (rule: Partial<Rule>) =>
+    request<{ rules: Rule[] }>("/rules", {
       method: "POST",
       body: JSON.stringify(rule),
     }),
-  updateRule: (deviceId: string, id: string, updates: Partial<Rule>) =>
-    request<{ rules: Rule[] }>(`/devices/${enc(deviceId)}/rules/${enc(id)}`, {
+  updateRule: (id: string, updates: Partial<Rule>) =>
+    request<{ rules: Rule[] }>(`/rules/${enc(id)}`, {
       method: "PATCH",
       body: JSON.stringify(updates),
     }),
-  removeRule: (deviceId: string, id: string) =>
-    request<{ rules: Rule[] }>(`/devices/${enc(deviceId)}/rules/${enc(id)}`, {
+  removeRule: (id: string) =>
+    request<{ rules: Rule[] }>(`/rules/${enc(id)}`, {
       method: "DELETE",
     }),
 

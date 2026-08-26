@@ -420,6 +420,17 @@ HABITSHARE_ACCOUNT_PATH = os.path.join(DATA_DIR, "habitshare_account.json")
 HABITS_PATH = os.path.join(DATA_DIR, "habits.json")
 HABIT_COMPLETIONS_PATH = os.path.join(DATA_DIR, "habit_completions.json")
 
+# Habit rules used to live inside each device's own record in device_settings.json (WHERE a rule
+# applies -- which device, which app/website -- was baked into it being stored there at all). That
+# meant a rule could only ever target the one device its record lived under, and could only ever
+# target an app OR a website (targetType), never both. Rules are now a single global library, same
+# "one shared list, not per-device" reasoning as HABITS_PATH above: each rule carries its own
+# targetApps/targetWebsites (both may be non-empty -- a rule can gate an app AND a website at once)
+# and deviceIds (an explicit device_id list, or the sentinel ["all"]) saying which device(s)
+# enforce it. See _rules_for_device/_build_rule below and /dashboard-api/rules. Existing per-device
+# rules are migrated in-place on first startup after this change -- see _migrate_legacy_device_rules.
+RULES_PATH = os.path.join(DATA_DIR, "rules.json")
+
 # A completion report otherwise carries NO proof at all -- POST .../complete is device-bearer
 # authenticated the same as every other low-stakes phone->server call (see Caddyfile), but that
 # bearer is embedded in the shipped APK and extractable by the same person a habit-gated app
@@ -455,6 +466,7 @@ _settings_lock = threading.Lock()
 _pin_lock = threading.Lock()
 _habits_lock = threading.Lock()
 _habit_completions_lock = threading.Lock()
+_rules_lock = threading.Lock()
 _removed_devices_lock = threading.Lock()
 _habitshare_account_lock = threading.Lock()
 _report_types_lock = threading.Lock()
@@ -934,12 +946,11 @@ def _list_device_logs() -> dict:
 LIST_ENDPOINTS = {
     "websites": ("blockedWebsites", "domain"),
     "bypass-apps": ("vpnBypassApps", "id"),
-    # habits is NOT here -- it moved to a global library (see HABITS_PATH /
-    # /dashboard-api/habits below), since a rule on ANY device can now reference a habit
-    # verified on a different device. `rules` stays per-device: `requiredHabitIds` reference
-    # the global habit ids, but WHERE a rule applies (which device, which app) is still
-    # per-device.
-    "rules": ("rules", "id"),
+    # habits and rules are NOT here -- both moved to global libraries (see HABITS_PATH /
+    # /dashboard-api/habits and RULES_PATH / /dashboard-api/rules below), since a rule on ANY
+    # device can now reference a habit verified on a different device, AND a single rule can now
+    # apply to multiple devices at once (its own deviceIds field) instead of living inside one
+    # device's record.
     "app-budgets": ("appBudgets", "id"),
     "trigger-words": ("triggerWords", "word"),
     "blocked-apps": ("blockedApps", "appId"),
@@ -982,6 +993,11 @@ DASHBOARD_DEVICE_RE = re.compile(r"^/dashboard-api/devices/([A-Za-z0-9_.-]{1,128
 # /complete forms are the only two Caddy ever lets a device bearer reach (POST /complete only) --
 # /proof and every other verb here are guardian-browser-session only, see Caddyfile.
 HABIT_ITEM_RE = re.compile(r"^/dashboard-api/habits/([A-Za-z0-9]+)(/complete|/proof)?$")
+
+# Matches /dashboard-api/rules/<id> (PATCH in-place edit, DELETE). Guardian-browser-session only,
+# same as the bare (no suffix) /dashboard-api/rules -- see RULES_PATH's comment for why rules are
+# a global library now, not nested under DASHBOARD_DEVICE_RE.
+RULE_ITEM_RE = re.compile(r"^/dashboard-api/rules/([A-Za-z0-9]+)$")
 
 # Matches /dashboard-api/report-types/<type> (PATCH enabled) -- report type keys are always
 # lower/upper snake_case (see report_types.json, e.g. "lock_profile_removed", "VPN_BLOCK"), never
@@ -1253,6 +1269,138 @@ def _save_habits(habits: list) -> None:
     os.replace(tmp_path, HABITS_PATH)
 
 
+def _load_rules() -> list:
+    try:
+        with open(RULES_PATH, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+            return data.get("rules", []) if isinstance(data, dict) else []
+    except (FileNotFoundError, json.JSONDecodeError):
+        return []
+
+
+def _save_rules(rules: list) -> None:
+    os.makedirs(DATA_DIR, exist_ok=True)
+    tmp_path = RULES_PATH + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as fh:
+        json.dump({"rules": rules}, fh, indent=2, sort_keys=True)
+    os.replace(tmp_path, RULES_PATH)
+
+
+def _rule_applies_to_device(rule: dict, device_id: str) -> bool:
+    """`deviceIds: ["all"]` (the dashboard's "All devices" shortcut) applies everywhere;
+    otherwise the device must be explicitly listed. device_id is already canonicalized by every
+    caller (see _safe_device_id), same as the ids _build_rule stores in deviceIds."""
+    device_ids = rule.get("deviceIds") or []
+    return "all" in device_ids or device_id in device_ids
+
+
+def _rules_for_device(device_id: str) -> list:
+    """The subset (and shape) of the global rule library GET .../settings embeds for one device --
+    same "rules" key devices have always read, just sourced from RULES_PATH now instead of the
+    device's own settings record. See _currently_blocked_website_domains for the equivalent used
+    by the DNS-blocks endpoint."""
+    return [rule for rule in _load_rules() if _rule_applies_to_device(rule, device_id)]
+
+
+def _build_rule(body: dict) -> dict | None:
+    """Validates and shapes a POST body for the global rule library (/dashboard-api/rules) into
+    the stored item shape. A rule may target apps and/or websites at once (the dashboard's
+    HabitRuleWizard lets a guardian add any mix of both to one rule) -- at least one of
+    targetApps/targetWebsites must end up non-empty, and deviceIds must name at least one device
+    (or the ["all"] sentinel). Returns None on an invalid/empty payload, caller sends 400."""
+    target_apps = []
+    for entry in body.get("targetApps") or []:
+        if not isinstance(entry, dict):
+            continue
+        app_id = (entry.get("appId") or "").strip()
+        app_name = (entry.get("appName") or "").strip()
+        if app_id and app_name:
+            target_apps.append({"appId": app_id, "appName": app_name})
+    target_websites = []
+    for entry in body.get("targetWebsites") or []:
+        if not isinstance(entry, dict):
+            continue
+        domain = (entry.get("domain") or "").strip().lower()
+        if domain:
+            target_websites.append({"domain": domain})
+    if not target_apps and not target_websites:
+        return None
+    raw_device_ids = body.get("deviceIds")
+    if not isinstance(raw_device_ids, list) or not raw_device_ids:
+        return None
+    if "all" in raw_device_ids:
+        device_ids = ["all"]
+    else:
+        seen: list[str] = []
+        for raw_id in raw_device_ids:
+            safe_id = _safe_device_id(str(raw_id))
+            if safe_id and safe_id not in seen:
+                seen.append(safe_id)
+        device_ids = seen
+    if not device_ids:
+        return None
+    return {
+        "id": uuid.uuid4().hex,
+        "targetApps": target_apps,
+        "targetWebsites": target_websites,
+        "deviceIds": device_ids,
+        "requiredHabitIds": body.get("requiredHabitIds") or [],
+        "schedule": body.get("schedule") or {},
+        "dailyBudgetMinutes": body.get("dailyBudgetMinutes"),
+        "createdAt": time.time(),
+    }
+
+
+def _migrate_legacy_device_rules() -> None:
+    """One-time upgrade from the old per-device `rules` list (inside each device's own
+    device_settings.json record) to the new global RULES_PATH library -- see RULES_PATH's doc
+    comment for why. Runs once at process startup (see bottom of file); a no-op after the first
+    successful run, guarded by RULES_PATH already existing (an empty library still writes the
+    file, via _save_rules, so this never re-runs and never re-migrates a guardian's from-scratch
+    deletion of every rule as if it were "not migrated yet"). Preserves each legacy rule's
+    original device scope exactly (deviceIds = [that one device_id]) rather than broadening it to
+    "all" -- a migration must not silently change what's currently blocked for anyone."""
+    if os.path.exists(RULES_PATH):
+        return
+    with _settings_lock, _rules_lock:
+        settings = _load_settings()
+        migrated: list[dict] = []
+        changed = False
+        for device_id, record in settings.items():
+            legacy_rules = record.pop("rules", None)
+            if not legacy_rules:
+                continue
+            changed = True
+            for legacy in legacy_rules:
+                target_type = legacy.get("targetType") if legacy.get("targetType") in ("app", "website") else "app"
+                if target_type == "website":
+                    target_apps: list = []
+                    website_domain = (legacy.get("websiteDomain") or "").strip().lower()
+                    target_websites = [{"domain": website_domain}] if website_domain else []
+                else:
+                    target_websites = []
+                    app_id = (legacy.get("appId") or "").strip()
+                    app_name = (legacy.get("appName") or "").strip() or app_id
+                    target_apps = [{"appId": app_id, "appName": app_name}] if app_name else []
+                if not target_apps and not target_websites:
+                    continue
+                migrated.append({
+                    "id": legacy.get("id") or uuid.uuid4().hex,
+                    "targetApps": target_apps,
+                    "targetWebsites": target_websites,
+                    "deviceIds": [device_id],
+                    "requiredHabitIds": legacy.get("requiredHabitIds") or [],
+                    "schedule": legacy.get("schedule") or {},
+                    "dailyBudgetMinutes": legacy.get("dailyBudgetMinutes"),
+                    "createdAt": legacy.get("createdAt", time.time()),
+                })
+        _save_rules(migrated)
+        if changed:
+            _save_settings(settings)
+        if migrated:
+            print(f"[lockprofile] migrated {len(migrated)} legacy per-device rule(s) into {RULES_PATH}", flush=True)
+
+
 def _load_habit_completions() -> dict:
     try:
         with open(HABIT_COMPLETIONS_PATH, "r", encoding="utf-8") as fh:
@@ -1325,8 +1473,8 @@ def _is_within_window(minute_of_day: int, start: int, end: int) -> bool:
 
 def _currently_blocked_website_domains() -> dict:
     """device_id -> set of domains currently blocked by that device's website-targeted habit
-    rules (targetType "website"), evaluated fresh against the live schedule window and habit
-    completion state -- the server-side equivalent of HabitRuleManager.kt's
+    rules, evaluated fresh against the live schedule window and habit completion state -- the
+    server-side equivalent of HabitRuleManager.kt's
     isWebsiteCurrentlyBlocked/isWithinWindow/isWebsiteRuleSatisfied (Android's own reference
     implementation, which the phone's VpnFilterService consults on every DNS query). Compares
     requiredHabitIds directly against doneToday rather than Android's fuzzy name-matching, since
@@ -1338,8 +1486,12 @@ def _currently_blocked_website_domains() -> dict:
     short cadence (see that file) so this Mac's DNS-query-time enforcement of website habit rules
     lifts within one poll interval of a habit being marked done, without adding a network
     round-trip to every DNS query for every device.
+
+    Reads the global rule library (RULES_PATH, see _rules_for_device) rather than any one
+    device's settings record -- a rule's deviceIds says which device(s) this applies to, with
+    ["all"] expanding to every device_id currently known to _list_known_device_ids.
     """
-    settings = _load_settings()
+    all_device_ids = list(_list_known_device_ids().keys())
     habits_by_id = {h["id"]: h for h in _habits_with_completion_status()}
     now = time.localtime()
     now_minute_of_day = now.tm_hour * 60 + now.tm_min
@@ -1349,30 +1501,30 @@ def _currently_blocked_website_domains() -> dict:
     now_js_weekday = (now.tm_wday + 1) % 7
 
     result: dict = {}
-    for device_id, record in settings.items():
-        for rule in record.get("rules") or []:
-            if rule.get("targetType") != "website":
-                continue
-            domain = (rule.get("websiteDomain") or "").strip().lower()
-            if not domain:
-                continue
-            schedule = rule.get("schedule") or {}
-            start = _parse_time_to_minute_of_day(schedule.get("startTime", ""))
-            end = _parse_time_to_minute_of_day(schedule.get("endTime", ""))
-            if start is None or end is None:
-                continue
-            days_of_week = schedule.get("daysOfWeek") or []
-            if days_of_week and now_js_weekday not in days_of_week:
-                continue
-            if not _is_within_window(now_minute_of_day, start, end):
-                continue
-            required_ids = rule.get("requiredHabitIds") or []
-            satisfied = bool(required_ids) and all(
-                habits_by_id.get(habit_id, {}).get("doneToday") for habit_id in required_ids
-            )
-            if satisfied:
-                continue
-            result.setdefault(device_id, set()).add(domain)
+    for rule in _load_rules():
+        domains = [w.get("domain", "") for w in (rule.get("targetWebsites") or []) if w.get("domain")]
+        if not domains:
+            continue
+        schedule = rule.get("schedule") or {}
+        start = _parse_time_to_minute_of_day(schedule.get("startTime", ""))
+        end = _parse_time_to_minute_of_day(schedule.get("endTime", ""))
+        if start is None or end is None:
+            continue
+        days_of_week = schedule.get("daysOfWeek") or []
+        if days_of_week and now_js_weekday not in days_of_week:
+            continue
+        if not _is_within_window(now_minute_of_day, start, end):
+            continue
+        required_ids = rule.get("requiredHabitIds") or []
+        satisfied = bool(required_ids) and all(
+            habits_by_id.get(habit_id, {}).get("doneToday") for habit_id in required_ids
+        )
+        if satisfied:
+            continue
+        device_ids = rule.get("deviceIds") or []
+        targeted_devices = all_device_ids if "all" in device_ids else device_ids
+        for device_id in targeted_devices:
+            result.setdefault(device_id, set()).update(domains)
     return result
 
 
@@ -1422,8 +1574,9 @@ def _default_device_settings(device_id: str = "") -> dict:
         "vpnBypassApps": [],
         "blockedWebsites": [],
         "frictionDelay": friction_delay,
-        # habits deliberately NOT here -- moved to the global library, see LIST_ENDPOINTS' comment.
-        "rules": [],
+        # habits/rules deliberately NOT here -- both moved to global libraries, see
+        # LIST_ENDPOINTS' comment. GET .../settings embeds this device's applicable rules
+        # dynamically (see _rules_for_device), it's never a stored key on the record itself.
         "appBudgets": [],
         "triggerWords": [],
         "blockedApps": [],
@@ -1602,41 +1755,6 @@ def _build_list_item(kind: str, body: dict) -> dict | None:
             "executableName": executable_name,
             "bundlePath": bundle_path,
             "addedAt": time.time(),
-        }
-    if kind == "rules":
-        # targetType "website" gates a domain (via the phone's DNS filter, see
-        # HabitRuleManager.kt's isWebsiteCurrentlyBlocked) instead of suspending an app package --
-        # same requiredHabitIds/schedule condition, different enforcement mechanism. Defaults to
-        # "app" so every rule created before this field existed keeps its old meaning.
-        target_type = body.get("targetType") if body.get("targetType") in ("app", "website") else "app"
-        if target_type == "website":
-            website_domain = (body.get("websiteDomain") or "").strip().lower()
-            if not website_domain:
-                return None
-            return {
-                "id": uuid.uuid4().hex,
-                "targetType": "website",
-                "appId": "",
-                "appName": website_domain,
-                "websiteDomain": website_domain,
-                "requiredHabitIds": body.get("requiredHabitIds") or [],
-                "schedule": body.get("schedule") or {},
-                "dailyBudgetMinutes": body.get("dailyBudgetMinutes"),
-                "createdAt": time.time(),
-            }
-        app_name = (body.get("appName") or "").strip()
-        if not app_name:
-            return None
-        return {
-            "id": uuid.uuid4().hex,
-            "targetType": "app",
-            "appId": body.get("appId", ""),
-            "appName": app_name,
-            "websiteDomain": "",
-            "requiredHabitIds": body.get("requiredHabitIds") or [],
-            "schedule": body.get("schedule") or {},
-            "dailyBudgetMinutes": body.get("dailyBudgetMinutes"),
-            "createdAt": time.time(),
         }
     if kind == "app-budgets":
         app_name = (body.get("appName") or "").strip()
@@ -2526,6 +2644,67 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(200, {"habits": _habits_with_completion_status(), "imported": imported})
             return True
 
+        # Global habit-rule library: one shared list for the whole fleet, not nested under any one
+        # device -- see RULES_PATH's comment. Each rule carries its own targetApps/targetWebsites
+        # (either or both, so one rule can gate an app AND a website together) and deviceIds
+        # (explicit ids, or ["all"]) saying which device(s) enforce it. GET .../devices/<id>/settings
+        # embeds the subset that applies to that device (see _rules_for_device) in the same "rules"
+        # key devices have always read, so DashboardConfigStore.kt / DashboardConfigSync.swift need
+        # no endpoint changes, only new fields to parse.
+        if path == "/dashboard-api/rules" and method == "GET":
+            self._send_json(200, {"rules": _load_rules()})
+            return True
+
+        if path == "/dashboard-api/rules" and method == "POST":
+            if body is None:
+                self._send_json(400, {"error": "bad json"})
+                return True
+            rule = _build_rule(body)
+            if rule is None:
+                self._send_json(400, {"error": "invalid payload"})
+                return True
+            with _rules_lock:
+                rules = _load_rules()
+                rules.append(rule)
+                _save_rules(rules)
+            self._send_json(200, {"rules": rules})
+            return True
+
+        rule_match = RULE_ITEM_RE.match(path)
+        if rule_match and method == "DELETE":
+            rule_id = rule_match.group(1)
+            with _rules_lock:
+                rules = [r for r in _load_rules() if str(r.get("id")) != rule_id]
+                _save_rules(rules)
+            self._send_json(200, {"rules": rules})
+            return True
+
+        if rule_match and method == "PATCH":
+            if body is None:
+                self._send_json(400, {"error": "bad json"})
+                return True
+            rule_id = rule_match.group(1)
+            with _rules_lock:
+                rules = _load_rules()
+                existing = next((r for r in rules if str(r.get("id")) == rule_id), None)
+                if existing is None:
+                    self._send_json(404, {"error": "no such rule"})
+                    return True
+                # Re-validate through _build_rule (same as creating a new one) rather than a raw
+                # merge, so a PATCH can't leave targetApps/targetWebsites/deviceIds in a shape the
+                # rest of this file doesn't expect -- then keep the original id/createdAt.
+                merged = {**existing, **body}
+                rebuilt = _build_rule(merged)
+                if rebuilt is None:
+                    self._send_json(400, {"error": "invalid payload"})
+                    return True
+                rebuilt["id"] = existing["id"]
+                rebuilt["createdAt"] = existing.get("createdAt", time.time())
+                rules = [rebuilt if str(r.get("id")) == rule_id else r for r in rules]
+                _save_rules(rules)
+            self._send_json(200, {"rules": rules})
+            return True
+
         # Guardian-only report-type enable/disable list -- deliberately a SEPARATE path from the
         # plain `/report-config` route (see Caddyfile), which is device-bearer-reachable so the
         # phone's own ReportConfigStore.kt can fetch it. That bearer token is embedded in the
@@ -2769,7 +2948,12 @@ class Handler(BaseHTTPRequestHandler):
             record = _device_settings(device_id, updates)
             # platform is computed, not stored -- see _detect_platform's doc comment. Lets the
             # dashboard show/hide Android-only sections (most of this record) per selected device.
-            self._send_json(200, {**record, "platform": _detect_platform(device_id)})
+            # rules is likewise computed, not stored on the record -- see _rules_for_device.
+            self._send_json(200, {
+                **record,
+                "platform": _detect_platform(device_id),
+                "rules": _rules_for_device(device_id),
+            })
             return True
 
         # Device-reported: what's actually installed on this phone/Mac, so the dashboard's Habit
@@ -2844,9 +3028,11 @@ class Handler(BaseHTTPRequestHandler):
                 record = _list_item_remove(device_id, list_key, id_field, item_id)
                 self._send_json(200, {list_key: record.get(list_key, [])})
                 return True
-            # PATCH (in-place edit): only rules/app-budgets support this -- websites/bypass-apps/
-            # habits are add-only-with-guardian-remove per the design doc, no edit-in-place case.
-            if parts[0] not in ("rules", "app-budgets"):
+            # PATCH (in-place edit): only app-budgets supports this among the per-device
+            # LIST_ENDPOINTS -- websites/bypass-apps/habits are add-only-with-guardian-remove per
+            # the design doc, no edit-in-place case. Rules have their own PATCH at
+            # /dashboard-api/rules/<id> now (see RULE_ITEM_RE above), not routed through here.
+            if parts[0] != "app-budgets":
                 self._send_json(405, {"error": "method not allowed"})
                 return True
             if body is None:
@@ -2945,6 +3131,7 @@ class Handler(BaseHTTPRequestHandler):
 def main() -> None:
     if not TOKEN:
         raise SystemExit("LOCKPROFILE_TOKEN must be set -- refusing to start unauthenticated")
+    _migrate_legacy_device_rules()
     server = ThreadingHTTPServer((LISTEN_HOST, LISTEN_PORT), Handler)
     print(f"[lockprofile] listening on {LISTEN_HOST}:{LISTEN_PORT}", flush=True)
     server.serve_forever()

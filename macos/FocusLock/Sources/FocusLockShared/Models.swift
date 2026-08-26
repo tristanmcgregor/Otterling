@@ -38,27 +38,35 @@ public struct ProtectedApp: Codable, Hashable, Identifiable, Sendable {
 }
 
 /// A dashboard-authored rule targeting THIS device (see `filter-server/lockprofile_service.py`'s
-/// per-device `rules` list) -- "block `executableName` unless every habit in `requiredHabitIds`
-/// is done today, and only during this schedule window." Always windowed: the dashboard wizard
-/// always sets a schedule (see Android's `HabitRuleManager`'s own "Phase 5" doc comment, which
-/// this mirrors), so there's no non-windowed/grant-duration case to handle here at all -- unlike
-/// Android, which also has locally-authored non-windowed rules with no Mac equivalent.
-/// `windowStartMinute`/`windowEndMinute` are minutes-since-midnight (0...1439); `daysOfWeek` uses
-/// the dashboard's own JS `Date.getDay()` convention (0=Sunday...6=Saturday), NOT `Calendar`'s.
-/// Never persisted -- `RuleBlockEnforcer` re-derives the live block/unblock verdict fresh on
-/// every tick from this plus `FocusLockState.globalHabitsCache`, the same way Android's
-/// `isTargetUnlocked` does for its own synthetic dashboard rules.
+/// global rule library, `RULES_PATH` -- a rule now names its own `deviceIds`, filtered onto this
+/// device server-side before it ever reaches here, same as always) -- "block every name in
+/// `executableNames` unless every habit in `requiredHabitIds` is done today, and only during this
+/// schedule window." Always windowed: the dashboard wizard always sets a schedule (see Android's
+/// `HabitRuleManager`'s own "Phase 5" doc comment, which this mirrors), so there's no
+/// non-windowed/grant-duration case to handle here at all -- unlike Android, which also has
+/// locally-authored non-windowed rules with no Mac equivalent. `executableNames` can name more
+/// than one app (the dashboard's targetApps, see api.ts's Rule doc comment) -- mirrors Android's
+/// `HabitRule.targetPackages` supporting multiple targets per rule, just as a plain array instead
+/// of a delimited string since this has no Room-style single-column constraint to work around.
+/// A rule's `targetWebsites` (if any) has no Mac-side representation here -- website blocking is
+/// enforced purely server-side via DNS (see `filter-server/dns_classify_mux.py`), not something
+/// this daemon evaluates itself. `windowStartMinute`/`windowEndMinute` are minutes-since-midnight
+/// (0...1439); `daysOfWeek` uses the dashboard's own JS `Date.getDay()` convention
+/// (0=Sunday...6=Saturday), NOT `Calendar`'s. Never persisted -- `RuleBlockEnforcer` re-derives
+/// the live block/unblock verdict fresh on every tick from this plus
+/// `FocusLockState.globalHabitsCache`, the same way Android's `isTargetUnlocked` does for its own
+/// synthetic dashboard rules.
 public struct MacRule: Codable, Sendable {
     public let id: String
-    public let executableName: String
+    public let executableNames: [String]
     public let requiredHabitIds: [String]
     public let windowStartMinute: Int
     public let windowEndMinute: Int
     public let daysOfWeek: Set<Int>
 
-    public init(id: String, executableName: String, requiredHabitIds: [String], windowStartMinute: Int, windowEndMinute: Int, daysOfWeek: Set<Int>) {
+    public init(id: String, executableNames: [String], requiredHabitIds: [String], windowStartMinute: Int, windowEndMinute: Int, daysOfWeek: Set<Int>) {
         self.id = id
-        self.executableName = executableName
+        self.executableNames = executableNames
         self.requiredHabitIds = requiredHabitIds
         self.windowStartMinute = windowStartMinute
         self.windowEndMinute = windowEndMinute

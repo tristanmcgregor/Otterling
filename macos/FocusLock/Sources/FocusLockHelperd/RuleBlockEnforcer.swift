@@ -38,7 +38,7 @@ enum RuleBlockEnforcer {
             }
             let satisfied = rule.requiredHabitIds.allSatisfy { habitsById[$0]?.doneToday == true }
             if !satisfied {
-                blocked.insert(rule.executableName)
+                blocked.formUnion(rule.executableNames)
             }
         }
         return blocked

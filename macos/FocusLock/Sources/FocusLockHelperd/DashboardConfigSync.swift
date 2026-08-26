@@ -186,11 +186,12 @@ enum DashboardConfigSync {
         return hour * 60 + minute
     }
 
-    /// Skips entries missing a package/executable name or a valid schedule -- the dashboard
-    /// wizard always sets one (see `MacRule`'s doc comment), so a missing one here means an
-    /// older/malformed entry, not a real windowless rule to somehow handle.
+    /// Skips entries with no `targetApps` (a website-only rule -- see `MacRule`'s doc comment on
+    /// why those have no Mac-side representation here -- or an older/malformed entry) or no valid
+    /// schedule; the dashboard wizard always sets one.
     private static func parseRule(_ raw: RawDashboardDeviceSettings.RuleItem) -> MacRule? {
-        guard !raw.appId.isEmpty, let schedule = raw.schedule,
+        let executableNames = (raw.targetApps ?? []).map { $0.appId }.filter { !$0.isEmpty }
+        guard !executableNames.isEmpty, let schedule = raw.schedule,
               let start = parseTimeToMinuteOfDay(schedule.startTime ?? ""),
               let end = parseTimeToMinuteOfDay(schedule.endTime ?? "") else {
             return nil
@@ -198,7 +199,7 @@ enum DashboardConfigSync {
         let daysOfWeek = Set((schedule.daysOfWeek ?? []).filter { (0...6).contains($0) })
         return MacRule(
             id: raw.id,
-            executableName: raw.appId,
+            executableNames: executableNames,
             requiredHabitIds: raw.requiredHabitIds ?? [],
             windowStartMinute: start,
             windowEndMinute: end,
@@ -382,9 +383,10 @@ enum DashboardConfigSync {
         struct ProxyFilter: Decodable { let enabled: Bool?; let forceViaFirewall: Bool? }
         struct RuleItem: Decodable {
             let id: String
-            let appId: String
+            let targetApps: [TargetApp]?
             let requiredHabitIds: [String]?
             let schedule: Schedule?
+            struct TargetApp: Decodable { let appId: String }
             struct Schedule: Decodable {
                 let startTime: String?
                 let endTime: String?

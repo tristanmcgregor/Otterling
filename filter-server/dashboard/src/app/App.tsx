@@ -8,8 +8,8 @@ import {
 import { cn, Card, Button, Switch, Pill } from "./components/ui";
 import { api, ApiError, logout } from "../lib/api";
 import type {
-  DeviceSettings, DeviceSummary, ActivityEvent, Rule, RuleSchedule, AppBudget, ProtectedApp, Habit,
-  ReportType, ReportTypesFile, DefaultSettings, Protections,
+  DeviceSettings, DeviceSummary, ActivityEvent, Rule, RuleSchedule, RuleTargetApp, RuleTargetWebsite,
+  AppBudget, ProtectedApp, Habit, ReportType, ReportTypesFile, DefaultSettings, Protections,
 } from "../lib/api";
 
 type Screen = "Dashboard" | "Settings" | "GlobalSettings" | "Wizard";
@@ -46,11 +46,13 @@ export default function App() {
   const [settings, setSettings] = useState<DeviceSettings | null>(null);
   const [activity, setActivity] = useState<ActivityEvent[]>([]);
   const [habits, setHabits] = useState<Habit[]>([]);
+  const [rules, setRules] = useState<Rule[]>([]);
   const [editingRule, setEditingRule] = useState<Rule | null>(null);
   const [refreshToken, setRefreshToken] = useState(0);
   const [loadError, setLoadError] = useState<string | null>(null);
   const reload = () => setRefreshToken((t) => t + 1);
   const reloadHabits = () => api.getHabits().then((res) => setHabits(res.habits)).catch(() => setHabits([]));
+  const reloadRules = () => api.listRules().then((res) => setRules(res.rules)).catch(() => setRules([]));
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", dark);
@@ -74,6 +76,15 @@ export default function App() {
   // Global habit library -- not scoped to the selected device, unlike settings/activity below.
   useEffect(() => {
     reloadHabits();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refreshToken]);
+
+  // Global rule library -- likewise not scoped to the selected device (see lockprofile_service.py's
+  // RULES_PATH). GET .../devices/<id>/settings still embeds the subset that applies to THIS
+  // device (settings.rules) for the per-device summary; this is the full fleet-wide list, used by
+  // GlobalSettingsScreen's Habit Rules section.
+  useEffect(() => {
+    reloadRules();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refreshToken]);
 
@@ -127,10 +138,35 @@ export default function App() {
     if (loadError) {
       return <ErrorScreen message={loadError} onRetry={reload} />;
     }
-    // Global Settings is fleet-wide, not scoped to a device, so it's reachable even before any
-    // device has ever registered -- unlike every other screen below, which needs one selected.
+    // Global Settings and the rule Wizard are both fleet-wide, not scoped to a device, so they're
+    // reachable even before any device has ever registered -- unlike every other screen below,
+    // which needs one selected. A rule now names its own deviceIds (chosen inside the wizard
+    // itself, see HabitRuleWizard's Devices step) instead of being tied to whichever device
+    // happened to be selected in the sidebar when "Add Rule" was clicked.
     if (screen === "GlobalSettings") {
-      return <GlobalSettingsScreen habits={habits} onHabitsChanged={reloadHabits} />;
+      return (
+        <GlobalSettingsScreen
+          habits={habits}
+          onHabitsChanged={reloadHabits}
+          rules={rules}
+          devices={devices}
+          onRulesChanged={reload}
+          onAddRule={startNewRule}
+          onEditRule={startEditRule}
+        />
+      );
+    }
+    if (screen === "Wizard") {
+      return (
+        <HabitRuleWizard
+          devices={devices}
+          settings={settings}
+          habits={habits}
+          editingRule={editingRule}
+          onNavigate={navigate}
+          onSaved={reload}
+        />
+      );
     }
     if (!deviceId) {
       return <NoDeviceScreen devices={devices} />;
@@ -144,9 +180,6 @@ export default function App() {
             activity={activity}
             habits={habits}
             onNavigate={navigate}
-            onAddRule={startNewRule}
-            onEditRule={startEditRule}
-            onReload={reload}
           />
         );
       case "Settings":
@@ -155,20 +188,8 @@ export default function App() {
             deviceId={deviceId}
             settings={settings}
             onNavigate={navigate}
-            onAddRule={startNewRule}
             onChanged={reload}
             onDeviceRemoved={() => { setDeviceId(""); reload(); }}
-          />
-        );
-      case "Wizard":
-        return (
-          <HabitRuleWizard
-            deviceId={deviceId}
-            settings={settings}
-            habits={habits}
-            editingRule={editingRule}
-            onNavigate={navigate}
-            onSaved={reload}
           />
         );
     }
@@ -411,32 +432,18 @@ function ErrorScreen({ message, onRetry }: { message: string; onRetry: () => voi
 // ─── Dashboard ────────────────────────────────────────────────────────────────
 
 function DashboardScreen({
-  deviceId, settings, activity, habits, onNavigate, onAddRule, onEditRule, onReload,
+  deviceId, settings, activity, habits, onNavigate,
 }: {
   deviceId: string;
   settings: DeviceSettings | null;
   activity: ActivityEvent[];
   habits: Habit[];
   onNavigate: (s: Screen) => void;
-  onAddRule: () => void;
-  onEditRule: (rule: Rule) => void;
-  onReload: () => void;
 }) {
-  const [busyRuleId, setBusyRuleId] = useState<string | null>(null);
-
   if (!settings) {
     return <div className="p-7 text-sm text-on-surface-variant">Loading…</div>;
   }
-
-  const removeRule = async (id: string) => {
-    setBusyRuleId(id);
-    try {
-      await api.removeRule(deviceId, id);
-      onReload();
-    } finally {
-      setBusyRuleId(null);
-    }
-  };
+  const goToRules = () => onNavigate("GlobalSettings");
 
   if (settings.platform === "macos") {
     const dnsOn = settings.vpnFilter.enabled;
@@ -459,7 +466,7 @@ function DashboardScreen({
               {new Date().toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })}
             </p>
           </div>
-          <Button size="sm" className="gap-2 mt-0.5" onClick={onAddRule}>
+          <Button size="sm" className="gap-2 mt-0.5" onClick={goToRules}>
             <Plus className="w-4 h-4" /> Add Rule
           </Button>
         </div>
@@ -501,70 +508,12 @@ function DashboardScreen({
         {/* Main grid */}
         <div className="grid grid-cols-5 gap-4">
           {/* Rules column -- same rendering as the Android dashboard; rules work identically for
-              a Mac device (see HabitRuleWizard's platform-conditional app-identifier field). */}
+              a Mac device (see HabitRuleWizard's platform-conditional app-identifier field). Read
+              -only here: creating/editing/deleting a rule (including which devices it targets)
+              happens in Global Settings now, since a rule is no longer tied to whichever device
+              happens to be selected in the sidebar. */}
           <div className="col-span-3 space-y-3">
-            <div className="flex items-center justify-between px-0.5">
-              <h2 className="font-semibold text-base">Active Rules</h2>
-              <button
-                onClick={onReload}
-                className="p-1.5 rounded-lg hover:bg-surface-variant text-on-surface-variant transition-colors"
-              >
-                <RefreshCw className="w-3.5 h-3.5" />
-              </button>
-            </div>
-
-            {settings.rules.length === 0 && (
-              <Card className="rounded-2xl text-center py-8">
-                <p className="text-sm text-on-surface-variant">No habit rules yet.</p>
-                <Button size="sm" className="mt-3 gap-1.5" onClick={onAddRule}>
-                  <Plus className="w-3.5 h-3.5" /> Add your first rule
-                </Button>
-              </Card>
-            )}
-
-            {settings.rules.map((rule) => (
-              <Card key={rule.id} className="rounded-2xl space-y-3">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-3 min-w-0">
-                    <AppIcon name={(rule.appName || "?").slice(0, 2).toUpperCase()} color="bg-primary/10 text-primary" />
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-1.5">
-                        <p className="font-semibold leading-tight truncate">{rule.appName}</p>
-                        {rule.targetType === "website" && <Pill>Website</Pill>}
-                      </div>
-                      <p className="text-xs text-on-surface-variant">{describeSchedule(rule.schedule)}</p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-1.5 shrink-0">
-                    <Button variant="text" size="sm" className="h-7 px-2 text-xs" onClick={() => onEditRule(rule)}>
-                      Edit
-                    </Button>
-                    <button
-                      onClick={() => removeRule(rule.id)}
-                      disabled={busyRuleId === rule.id}
-                      className="w-7 h-7 rounded-lg flex items-center justify-center text-on-surface-variant hover:bg-error-container hover:text-error transition-colors disabled:opacity-50"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </div>
-                {rule.requiredHabitIds.length > 0 && (
-                  <>
-                    <div className="h-px bg-outline-variant/30" />
-                    <div className="flex flex-wrap gap-1.5">
-                      {rule.requiredHabitIds.map((hid) => {
-                        const habit = habits.find((h) => h.id === hid);
-                        return (
-                          <Pill key={hid} variant={habit?.doneToday ? "success" : "default"}>
-                            {habit ? habit.name : "Unknown habit"} {habit?.doneToday ? "✓" : ""}
-                          </Pill>
-                        );
-                      })}
-                    </div>
-                  </>
-                )}
-              </Card>
-            ))}
+            <ActiveRulesSummary rules={settings.rules} habits={habits} onManage={goToRules} />
           </div>
 
           {/* Right column */}
@@ -621,7 +570,7 @@ function DashboardScreen({
           <Button variant="outlined" size="sm" className="gap-2" onClick={() => onNavigate("Settings")}>
             <Globe className="w-4 h-4" /> Block Website
           </Button>
-          <Button size="sm" className="gap-2" onClick={onAddRule}>
+          <Button size="sm" className="gap-2" onClick={goToRules}>
             <Plus className="w-4 h-4" /> Add Rule
           </Button>
         </div>
@@ -637,75 +586,9 @@ function DashboardScreen({
 
       {/* Main grid */}
       <div className="grid grid-cols-5 gap-4">
-        {/* Rules column */}
+        {/* Rules column -- read-only, see the mac branch's own comment on why. */}
         <div className="col-span-3 space-y-3">
-          <div className="flex items-center justify-between px-0.5">
-            <h2 className="font-semibold text-base">Active Rules</h2>
-            <button
-              onClick={onReload}
-              className="p-1.5 rounded-lg hover:bg-surface-variant text-on-surface-variant transition-colors"
-            >
-              <RefreshCw className="w-3.5 h-3.5" />
-            </button>
-          </div>
-
-          {settings.rules.length === 0 && (
-            <Card className="rounded-2xl text-center py-8">
-              <p className="text-sm text-on-surface-variant">No habit rules yet.</p>
-              <Button size="sm" className="mt-3 gap-1.5" onClick={onAddRule}>
-                <Plus className="w-3.5 h-3.5" /> Add your first rule
-              </Button>
-            </Card>
-          )}
-
-          {settings.rules.map((rule) => (
-            <Card key={rule.id} className="rounded-2xl space-y-3">
-              <div className="flex items-center justify-between gap-3">
-                <div className="flex items-center gap-3 min-w-0">
-                  <AppIcon name={(rule.appName || "?").slice(0, 2).toUpperCase()} color="bg-primary/10 text-primary" />
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-1.5">
-                      <p className="font-semibold leading-tight truncate">{rule.appName}</p>
-                      {rule.targetType === "website" && <Pill>Website</Pill>}
-                    </div>
-                    <p className="text-xs text-on-surface-variant">{describeSchedule(rule.schedule)}</p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-1.5 shrink-0">
-                  <Button variant="text" size="sm" className="h-7 px-2 text-xs" onClick={() => onEditRule(rule)}>
-                    Edit
-                  </Button>
-                  <button
-                    onClick={() => removeRule(rule.id)}
-                    disabled={busyRuleId === rule.id}
-                    className="w-7 h-7 rounded-lg flex items-center justify-center text-on-surface-variant hover:bg-error-container hover:text-error transition-colors disabled:opacity-50"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              </div>
-              {rule.requiredHabitIds.length > 0 && (
-                <>
-                  <div className="h-px bg-outline-variant/30" />
-                  <div className="flex flex-wrap gap-1.5">
-                    {rule.requiredHabitIds.map((hid) => {
-                      const habit = habits.find((h) => h.id === hid);
-                      return (
-                        <Pill key={hid} variant={habit?.doneToday ? "success" : "default"}>
-                          {habit ? habit.name : "Unknown habit"} {habit?.doneToday ? "✓" : ""}
-                        </Pill>
-                      );
-                    })}
-                  </div>
-                </>
-              )}
-              {rule.dailyBudgetMinutes != null && (
-                <div className="flex items-center gap-2 text-xs font-medium text-tertiary">
-                  <Clock className="w-3 h-3 shrink-0" /> {rule.dailyBudgetMinutes}m daily budget
-                </div>
-              )}
-            </Card>
-          ))}
+          <ActiveRulesSummary rules={settings.rules} habits={habits} onManage={goToRules} />
         </div>
 
         {/* Right column */}
@@ -782,15 +665,97 @@ function describeSchedule(schedule: RuleSchedule): string {
   return [days, window].filter(Boolean).join(", ");
 }
 
+// A rule can gate an app AND a website at once now (see api.ts's Rule doc comment) -- this is the
+// one place that turns targetApps/targetWebsites into a single display label, reused everywhere a
+// rule is rendered (DashboardScreen's read-only summary, GlobalSettingsScreen's editable list).
+function ruleTargetLabel(rule: Rule): string {
+  const names = [...rule.targetApps.map((a) => a.appName), ...rule.targetWebsites.map((w) => w.domain)];
+  return names.length > 0 ? names.join(", ") : "(no target)";
+}
+
+function ruleDeviceLabel(rule: Rule, devices: DeviceSummary[]): string {
+  if (rule.deviceIds.includes("all")) return "All devices";
+  const names = rule.deviceIds.map((id) => devices.find((d) => d.device_id === id)?.device_name || id);
+  return names.length > 0 ? names.join(", ") : "No devices";
+}
+
+// Read-only rule list shown on a device's own Dashboard -- creating/editing/deleting (including
+// which devices a rule targets) happens in Global Settings now, since a rule is no longer tied to
+// whichever device happens to be selected in the sidebar. This is just "what's currently active
+// for THIS device" (settings.rules is already server-filtered to that, see
+// lockprofile_service.py's _rules_for_device).
+function ActiveRulesSummary({
+  rules, habits, onManage,
+}: {
+  rules: Rule[];
+  habits: Habit[];
+  onManage: () => void;
+}) {
+  return (
+    <>
+      <div className="flex items-center justify-between px-0.5">
+        <h2 className="font-semibold text-base">Active Rules</h2>
+        <Button variant="text" size="sm" className="h-7 px-2 text-xs" onClick={onManage}>
+          Manage in Global Settings →
+        </Button>
+      </div>
+
+      {rules.length === 0 && (
+        <Card className="rounded-2xl text-center py-8">
+          <p className="text-sm text-on-surface-variant">No habit rules yet.</p>
+          <Button size="sm" className="mt-3 gap-1.5" onClick={onManage}>
+            <Plus className="w-3.5 h-3.5" /> Add your first rule
+          </Button>
+        </Card>
+      )}
+
+      {rules.map((rule) => (
+        <Card key={rule.id} className="rounded-2xl space-y-3">
+          <div className="flex items-center gap-3 min-w-0">
+            <AppIcon name={ruleTargetLabel(rule).slice(0, 2).toUpperCase()} color="bg-primary/10 text-primary" />
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <p className="font-semibold leading-tight truncate">{ruleTargetLabel(rule)}</p>
+                {rule.targetWebsites.length > 0 && <Pill>Website</Pill>}
+                {rule.targetApps.length > 0 && <Pill>App</Pill>}
+              </div>
+              <p className="text-xs text-on-surface-variant">{describeSchedule(rule.schedule)}</p>
+            </div>
+          </div>
+          {rule.requiredHabitIds.length > 0 && (
+            <>
+              <div className="h-px bg-outline-variant/30" />
+              <div className="flex flex-wrap gap-1.5">
+                {rule.requiredHabitIds.map((hid) => {
+                  const habit = habits.find((h) => h.id === hid);
+                  return (
+                    <Pill key={hid} variant={habit?.doneToday ? "success" : "default"}>
+                      {habit ? habit.name : "Unknown habit"} {habit?.doneToday ? "✓" : ""}
+                    </Pill>
+                  );
+                })}
+              </div>
+            </>
+          )}
+          {rule.dailyBudgetMinutes != null && (
+            <div className="flex items-center gap-2 text-xs font-medium text-tertiary">
+              <Clock className="w-3 h-3 shrink-0" /> {rule.dailyBudgetMinutes}m daily budget
+            </div>
+          )}
+        </Card>
+      ))}
+    </>
+  );
+}
+
 // ─── Settings ────────────────────────────────────────────────────────────────
 
 function SettingsScreen({
-  deviceId, settings, onNavigate, onAddRule, onChanged, onDeviceRemoved,
+  deviceId, settings, onNavigate, onChanged, onDeviceRemoved,
 }: {
   deviceId: string;
   settings: DeviceSettings | null;
   onNavigate: (s: Screen) => void;
-  onAddRule: () => void;
   onChanged: () => void;
   onDeviceRemoved: () => void;
 }) {
@@ -1117,18 +1082,18 @@ function SettingsScreen({
         </div>
         )}
 
-        {/* Rules -- per-device (targets an app on THIS device specifically), but no longer
-            Android-only: a rule can now block an app on the Mac too. The habit library itself
-            moved to Global Settings (fleet-wide, not per-device) -- see GlobalSettingsScreen. */}
+        {/* Rules now live entirely in Global Settings -- a rule names its own targets AND its
+            own deviceIds (see api.ts's Rule doc comment), so it's no longer "this device's"
+            setting the way it used to be. */}
         <div className="space-y-3">
           <SectionLabel>Rules</SectionLabel>
           <Card className="rounded-2xl">
             <p className="text-xs text-on-surface-variant mb-2">
-              Blocks an app on {settings.device_name || deviceId} until required habits from
-              Global Settings → Habit Library are done, during a schedule window.
+              Habit rules (which apps/websites are gated, which devices they apply to) are managed
+              from Global Settings now, not per-device.
             </p>
-            <Button variant="text" size="sm" className="px-0 text-xs h-7" onClick={onAddRule}>
-              Add new rule →
+            <Button variant="text" size="sm" className="px-0 text-xs h-7" onClick={() => onNavigate("GlobalSettings")}>
+              Manage rules →
             </Button>
           </Card>
         </div>
@@ -1294,10 +1259,15 @@ function SettingsScreen({
 // habit library shared across every device) but used to live inside per-device SettingsScreen,
 // which read as "a setting of this device" when it wasn't. HabitShare account is new here.
 function GlobalSettingsScreen({
-  habits, onHabitsChanged,
+  habits, onHabitsChanged, rules, devices, onRulesChanged, onAddRule, onEditRule,
 }: {
   habits: Habit[];
   onHabitsChanged: () => void;
+  rules: Rule[];
+  devices: DeviceSummary[];
+  onRulesChanged: () => void;
+  onAddRule: () => void;
+  onEditRule: (rule: Rule) => void;
 }) {
   const [pinModalOpen, setPinModalOpen] = useState(false);
   const [pinStatus, setPinStatus] = useState<{ pin: string | null; updatedAt: number | null } | null>(null);
@@ -1348,6 +1318,21 @@ function GlobalSettingsScreen({
           </p>
           <HabitLibraryList habits={habits} onChanged={onHabitsChanged} />
         </Card>
+      </div>
+
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <SectionLabel>Habit Rules</SectionLabel>
+          <Button size="sm" className="gap-1.5" onClick={onAddRule}>
+            <Plus className="w-3.5 h-3.5" /> Add Rule
+          </Button>
+        </div>
+        <p className="text-xs text-on-surface-variant -mt-1">
+          Gates an app and/or a website behind required habits, on whichever device(s) you choose
+          below — a single rule can target both an app and a website at once, and apply to one
+          device, several, or "All devices".
+        </p>
+        <GlobalRulesList rules={rules} habits={habits} devices={devices} onChanged={onRulesChanged} onEdit={onEditRule} onAdd={onAddRule} />
       </div>
 
       <div className="space-y-3">
@@ -1403,6 +1388,101 @@ function GlobalSettingsScreen({
           />
         </div>
       )}
+    </div>
+  );
+}
+
+// The fleet-wide rule library's editable list -- see api.ts's Rule doc comment for why a rule now
+// carries its own targetApps/targetWebsites (either/both) and deviceIds instead of living inside
+// one device's settings. This is the only place rules can be created/edited/deleted now; the
+// per-device Dashboard just shows a read-only summary (see ActiveRulesSummary) and links here.
+function GlobalRulesList({
+  rules, habits, devices, onChanged, onEdit, onAdd,
+}: {
+  rules: Rule[];
+  habits: Habit[];
+  devices: DeviceSummary[];
+  onChanged: () => void;
+  onEdit: (rule: Rule) => void;
+  onAdd: () => void;
+}) {
+  const [busyRuleId, setBusyRuleId] = useState<string | null>(null);
+
+  const removeRule = async (id: string) => {
+    setBusyRuleId(id);
+    try {
+      await api.removeRule(id);
+      onChanged();
+    } finally {
+      setBusyRuleId(null);
+    }
+  };
+
+  if (rules.length === 0) {
+    return (
+      <Card className="rounded-2xl text-center py-8">
+        <p className="text-sm text-on-surface-variant">No habit rules yet.</p>
+        <Button size="sm" className="mt-3 gap-1.5" onClick={onAdd}>
+          <Plus className="w-3.5 h-3.5" /> Add your first rule
+        </Button>
+      </Card>
+    );
+  }
+
+  return (
+    <div className="space-y-2.5">
+      {rules.map((rule) => (
+        <Card key={rule.id} className="rounded-2xl space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3 min-w-0">
+              <AppIcon name={ruleTargetLabel(rule).slice(0, 2).toUpperCase()} color="bg-primary/10 text-primary" />
+              <div className="min-w-0">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <p className="font-semibold leading-tight truncate">{ruleTargetLabel(rule)}</p>
+                  {rule.targetApps.length > 0 && <Pill>{rule.targetApps.length} app{rule.targetApps.length === 1 ? "" : "s"}</Pill>}
+                  {rule.targetWebsites.length > 0 && <Pill>{rule.targetWebsites.length} website{rule.targetWebsites.length === 1 ? "" : "s"}</Pill>}
+                </div>
+                <p className="text-xs text-on-surface-variant">{describeSchedule(rule.schedule)}</p>
+                <p className="text-xs text-on-surface-variant flex items-center gap-1 mt-0.5">
+                  <Laptop className="w-3 h-3 shrink-0" /> {ruleDeviceLabel(rule, devices)}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-1.5 shrink-0">
+              <Button variant="text" size="sm" className="h-7 px-2 text-xs" onClick={() => onEdit(rule)}>
+                Edit
+              </Button>
+              <button
+                onClick={() => removeRule(rule.id)}
+                disabled={busyRuleId === rule.id}
+                className="w-7 h-7 rounded-lg flex items-center justify-center text-on-surface-variant hover:bg-error-container hover:text-error transition-colors disabled:opacity-50"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+          {rule.requiredHabitIds.length > 0 && (
+            <>
+              <div className="h-px bg-outline-variant/30" />
+              <div className="flex flex-wrap gap-1.5">
+                {rule.requiredHabitIds.map((hid) => {
+                  const habit = habits.find((h) => h.id === hid);
+                  return (
+                    <Pill key={hid} variant={habit?.doneToday ? "success" : "default"}>
+                      {habit ? habit.name : "Unknown habit"} {habit?.doneToday ? "✓" : ""}
+                    </Pill>
+                  );
+                })}
+              </div>
+            </>
+          )}
+          {rule.dailyBudgetMinutes != null && (
+            <div className="flex items-center gap-2 text-xs font-medium text-tertiary">
+              <Clock className="w-3 h-3 shrink-0" /> {rule.dailyBudgetMinutes}m daily budget
+            </div>
+          )}
+        </Card>
+      ))}
     </div>
   );
 }
@@ -2241,9 +2321,9 @@ const COMMON_APPS = [
 ];
 
 function HabitRuleWizard({
-  deviceId, settings, habits, editingRule, onNavigate, onSaved,
+  devices, settings, habits, editingRule, onNavigate, onSaved,
 }: {
-  deviceId: string;
+  devices: DeviceSummary[];
   settings: DeviceSettings | null;
   habits: Habit[];
   editingRule: Rule | null;
@@ -2251,11 +2331,23 @@ function HabitRuleWizard({
   onSaved: () => void;
 }) {
   const [step, setStep] = useState(1);
-  const [targetType, setTargetType] = useState<"app" | "website">(editingRule?.targetType ?? "app");
-  const [websiteDomain, setWebsiteDomain] = useState(editingRule?.websiteDomain ?? "");
+
+  // Devices this rule applies to -- see api.ts's Rule doc comment. "All devices" is a sentinel
+  // (deviceIds === ["all"]) rather than literally listing every device_id, so a rule stays
+  // "everyone" even as devices are added/removed later.
+  const [allDevices, setAllDevices] = useState(editingRule ? editingRule.deviceIds.includes("all") : true);
+  const [selectedDeviceIds, setSelectedDeviceIds] = useState<string[]>(
+    editingRule && !editingRule.deviceIds.includes("all") ? editingRule.deviceIds : []
+  );
+
+  // Targets: a rule can gate any mix of apps and websites at once now, not one-or-the-other.
+  const [targetApps, setTargetApps] = useState<RuleTargetApp[]>(editingRule?.targetApps ?? []);
+  const [targetWebsites, setTargetWebsites] = useState<RuleTargetWebsite[]>(editingRule?.targetWebsites ?? []);
   const [appQuery, setAppQuery] = useState("");
-  const [selectedApp, setSelectedApp] = useState(editingRule?.appName ?? "");
-  const [appId, setAppId] = useState(editingRule?.appId ?? "");
+  const [customAppName, setCustomAppName] = useState("");
+  const [customAppId, setCustomAppId] = useState("");
+  const [websiteDraft, setWebsiteDraft] = useState("");
+
   const [selectedHabitIds, setSelectedHabitIds] = useState<string[]>(editingRule?.requiredHabitIds ?? []);
   const [newHabit, setNewHabit] = useState("");
   const [startTime, setStartTime] = useState(editingRule?.schedule.startTime ?? "00:00");
@@ -2265,16 +2357,23 @@ function HabitRuleWizard({
   const [saving, setSaving] = useState(false);
 
   const steps = [
-    { n: 1, label: targetType === "website" ? "Choose Website" : "Choose App", sub: "Select what's gated" },
-    { n: 2, label: "Require Habits", sub: "Must be completed to unlock" },
-    { n: 3, label: "Set Schedule", sub: "When rule applies" },
+    { n: 1, label: "Choose Devices", sub: "Who this rule applies to" },
+    { n: 2, label: "Choose Targets", sub: "Apps and/or websites to gate" },
+    { n: 3, label: "Require Habits", sub: "Must be completed to unlock" },
+    { n: 4, label: "Set Schedule", sub: "When rule applies" },
   ];
 
+  const devicesValid = allDevices || selectedDeviceIds.length > 0;
+  const targetsValid = targetApps.length > 0 || targetWebsites.length > 0;
+
+  const toggleDevice = (id: string) =>
+    setSelectedDeviceIds((prev) => (prev.includes(id) ? prev.filter((d) => d !== id) : [...prev, id]));
+
   // Real installed apps this device reported (see api.ts's DeviceSettings.installedApps doc) --
-  // preferred over the hardcoded COMMON_APPS fallback whenever the device has actually synced any,
-  // since picking one of these fills in the exact id too, not just the display name. Once real
-  // data exists, COMMON_APPS stops being shown at all -- it's a bootstrap for a device that
-  // hasn't synced yet, not meant to be mixed in alongside real search results.
+  // preferred over the hardcoded COMMON_APPS fallback whenever a device has actually synced any,
+  // since picking one of these fills in the exact id too, not just the display name. `settings` is
+  // whichever device happens to be selected in the sidebar right now -- just a search convenience,
+  // not a constraint on which device(s) the rule actually applies to (that's step 1, above).
   const installedApps = settings?.installedApps ?? [];
   const hasInstalledApps = installedApps.length > 0;
   const query = appQuery.trim().toLowerCase();
@@ -2282,8 +2381,24 @@ function HabitRuleWizard({
     ? installedApps.filter((a) => a.name.toLowerCase().includes(query) || a.id.toLowerCase().includes(query))
     : installedApps;
   const filteredCommon = COMMON_APPS.filter((a) => a.name.toLowerCase().includes(query));
-  const appResults = hasInstalledApps ? filteredInstalled : filteredCommon;
   const isMac = settings?.platform === "macos";
+
+  const addTargetApp = (appName: string, appId: string) => {
+    if (!appName.trim() || !appId.trim()) return;
+    setTargetApps((prev) => (prev.some((a) => a.appId === appId) ? prev : [...prev, { appName: appName.trim(), appId: appId.trim() }]));
+    setAppQuery("");
+    setCustomAppName("");
+    setCustomAppId("");
+  };
+  const removeTargetApp = (appId: string) => setTargetApps((prev) => prev.filter((a) => a.appId !== appId));
+
+  const addTargetWebsite = () => {
+    const domain = websiteDraft.trim().toLowerCase();
+    if (!domain) return;
+    setTargetWebsites((prev) => (prev.some((w) => w.domain === domain) ? prev : [...prev, { domain }]));
+    setWebsiteDraft("");
+  };
+  const removeTargetWebsite = (domain: string) => setTargetWebsites((prev) => prev.filter((w) => w.domain !== domain));
 
   const toggleHabit = (id: string) =>
     setSelectedHabitIds((prev) => (prev.includes(id) ? prev.filter((h) => h !== id) : [...prev, id]));
@@ -2302,39 +2417,30 @@ function HabitRuleWizard({
   };
 
   const save = async () => {
-    if (targetType === "website" ? !websiteDomain.trim() : !selectedApp || !appId.trim()) return;
+    if (!devicesValid || !targetsValid) return;
     setSaving(true);
-    const payload: Partial<Rule> = targetType === "website"
-      ? {
-          targetType: "website",
-          websiteDomain: websiteDomain.trim().toLowerCase(),
-          appId: "",
-          appName: websiteDomain.trim().toLowerCase(),
-          requiredHabitIds: selectedHabitIds,
-          schedule: { startTime, endTime, daysOfWeek: days },
-          dailyBudgetMinutes: budget.trim() ? Number(budget) : null,
-        }
-      : {
-          targetType: "app",
-          appId: appId.trim(),
-          appName: selectedApp,
-          websiteDomain: "",
-          requiredHabitIds: selectedHabitIds,
-          schedule: { startTime, endTime, daysOfWeek: days },
-          dailyBudgetMinutes: budget.trim() ? Number(budget) : null,
-        };
+    const payload: Partial<Rule> = {
+      targetApps,
+      targetWebsites,
+      deviceIds: allDevices ? ["all"] : selectedDeviceIds,
+      requiredHabitIds: selectedHabitIds,
+      schedule: { startTime, endTime, daysOfWeek: days },
+      dailyBudgetMinutes: budget.trim() ? Number(budget) : null,
+    };
     try {
       if (editingRule) {
-        await api.updateRule(deviceId, editingRule.id, payload);
+        await api.updateRule(editingRule.id, payload);
       } else {
-        await api.addRule(deviceId, payload);
+        await api.addRule(payload);
       }
       onSaved();
-      onNavigate("Dashboard");
+      onNavigate("GlobalSettings");
     } finally {
       setSaving(false);
     }
   };
+
+  const canContinue = step === 1 ? devicesValid : step === 2 ? targetsValid : true;
 
   return (
     <div className="h-full flex flex-col">
@@ -2342,7 +2448,7 @@ function HabitRuleWizard({
         {/* Step sidebar */}
         <div className="w-60 border-r border-outline-variant/30 p-6 shrink-0 flex flex-col">
           <h2 className="text-xl font-bold mb-1">{editingRule ? "Edit Rule" : "Create Rule"}</h2>
-          <p className="text-xs text-on-surface-variant mb-6">Define habit requirements for app access</p>
+          <p className="text-xs text-on-surface-variant mb-6">Define habit requirements for app/website access</p>
           <div className="space-y-2">
             {steps.map((s) => (
               <div key={s.n} className={cn("flex items-start gap-3 p-3 rounded-xl transition-colors", step === s.n && "bg-primary/10")}>
@@ -2370,147 +2476,187 @@ function HabitRuleWizard({
           {step === 1 && (
             <div className="max-w-xl space-y-4">
               <div>
-                <h3 className="text-lg font-bold">
-                  {targetType === "website" ? "Which website should be gated?" : "Which app should be gated?"}
-                </h3>
+                <h3 className="text-lg font-bold">Which device(s) enforce this rule?</h3>
                 <p className="text-sm text-on-surface-variant mt-0.5">
-                  The child must complete their habits before accessing this {targetType === "website" ? "website" : "app"}.
+                  Pick specific devices, or apply it fleet-wide so it stays in effect on any device
+                  you add later too.
                 </p>
               </div>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => setTargetType("app")}
-                  className={cn(
-                    "flex-1 h-10 rounded-xl border text-sm font-medium transition-colors",
-                    targetType === "app" ? "border-primary bg-primary/10 text-primary" : "border-outline-variant/40 hover:bg-surface-variant"
-                  )}
-                >
-                  App
-                </button>
-                <button
-                  onClick={() => setTargetType("website")}
-                  className={cn(
-                    "flex-1 h-10 rounded-xl border text-sm font-medium transition-colors",
-                    targetType === "website" ? "border-primary bg-primary/10 text-primary" : "border-outline-variant/40 hover:bg-surface-variant"
-                  )}
-                >
-                  Website
-                </button>
-              </div>
-              {targetType === "website" ? (
-                <div>
-                  <label className="text-sm font-semibold block mb-1.5">Domain</label>
-                  <input
-                    type="text"
-                    value={websiteDomain}
-                    onChange={(e) => setWebsiteDomain(e.target.value)}
-                    placeholder="youtube.com"
-                    className="w-full h-11 px-4 rounded-xl border border-outline bg-surface text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-                  />
-                  <p className="text-xs text-on-surface-variant mt-1.5">
-                    Blocks this domain and its subdomains via the phone's DNS filter -- enforced the
-                    same way as a domain in Blocked Websites, just conditional on the habit(s) below
-                    instead of always-on.
-                  </p>
+              <button
+                onClick={() => setAllDevices(true)}
+                className={cn(
+                  "w-full flex items-center gap-3 p-3.5 rounded-xl border transition-all text-left",
+                  allDevices ? "border-primary bg-primary/5" : "border-outline-variant/40 hover:bg-surface-variant"
+                )}
+              >
+                <div className={cn("w-5 h-5 rounded-full border-2 flex items-center justify-center shrink-0", allDevices ? "border-primary bg-primary" : "border-outline")}>
+                  {allDevices && <Check className="w-3 h-3 text-on-primary" />}
                 </div>
-              ) : (
-                <>
-              <input
-                type="text"
-                value={appQuery}
-                onChange={(e) => setAppQuery(e.target.value)}
-                placeholder={hasInstalledApps ? `Search apps installed on ${settings?.device_name || deviceId}…` : "Search or type a custom app name…"}
-                className="w-full h-11 px-4 rounded-xl border border-outline bg-surface text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-              />
-              <div className="grid grid-cols-2 gap-2">
-                {hasInstalledApps ? (
-                  filteredInstalled.slice(0, 40).map((app) => (
-                    <button
-                      key={app.id}
-                      onClick={() => { setSelectedApp(app.name); setAppId(app.id); setStep(2); }}
-                      className={cn(
-                        "flex items-center gap-3 p-3.5 rounded-xl border transition-all text-left min-w-0",
-                        appId === app.id ? "border-primary bg-primary/5" : "border-outline-variant/40 hover:bg-surface-variant"
-                      )}
-                    >
-                      <div className="w-9 h-9 rounded-lg flex items-center justify-center text-xs font-bold bg-primary/10 text-primary shrink-0">
-                        {app.name.slice(0, 2).toUpperCase()}
-                      </div>
-                      <div className="min-w-0">
-                        <p className="font-medium text-sm truncate">{app.name}</p>
-                        <p className="text-[11px] text-on-surface-variant truncate">{app.id}</p>
-                      </div>
-                    </button>
-                  ))
-                ) : (
-                  filteredCommon.map((app) => (
-                    <button
-                      key={app.name}
-                      onClick={() => { setSelectedApp(app.name); setStep(2); }}
-                      className={cn(
-                        "flex items-center gap-3 p-3.5 rounded-xl border transition-all text-left",
-                        selectedApp === app.name ? "border-primary bg-primary/5" : "border-outline-variant/40 hover:bg-surface-variant"
-                      )}
-                    >
-                      <div className={cn("w-9 h-9 rounded-lg flex items-center justify-center text-xs font-bold", app.color)}>
-                        {app.name.slice(0, 2)}
-                      </div>
-                      <span className="font-medium text-sm">{app.name}</span>
-                    </button>
-                  ))
-                )}
-                {query && appResults.length === 0 && (
-                  <button
-                    onClick={() => { setSelectedApp(appQuery.trim()); setStep(2); }}
-                    className="flex items-center gap-3 p-3.5 rounded-xl border border-dashed border-outline-variant/60 hover:bg-surface-variant transition-all text-left col-span-2"
-                  >
-                    <Plus className="w-4 h-4 text-primary" />
-                    <span className="font-medium text-sm">Use "{appQuery.trim()}"</span>
-                  </button>
-                )}
-              </div>
+                <div>
+                  <p className="font-medium text-sm">All devices</p>
+                  <p className="text-[11px] text-on-surface-variant">Applies to every device now and any registered later</p>
+                </div>
+              </button>
               <div>
-                <label className="text-sm font-semibold block mb-1.5">
-                  {isMac ? "Executable name" : "Android package name"}
-                </label>
-                <input
-                  type="text"
-                  value={appId}
-                  onChange={(e) => setAppId(e.target.value)}
-                  placeholder={isMac ? "Safari" : "com.example.app"}
-                  className="w-full h-11 px-4 rounded-xl border border-outline bg-surface text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-                />
-                <p className="text-xs text-on-surface-variant mt-1.5">
-                  {hasInstalledApps ? (
-                    "Filled in automatically when you pick a search result above — only edit this if you need to target something not in that list."
-                  ) : isMac ? (
-                    <>
-                      The exact process/executable name as it appears in Activity Monitor (e.g.{" "}
-                      <code>Steam</code>) — not the app's display name or bundle identifier.
-                      {" "}This device hasn't reported its installed apps yet, so search above only
-                      matches common apps.
-                    </>
-                  ) : (
-                    <>
-                      The exact Android package name (e.g. <code>com.zhiliaoapp.musically</code>) — the phone matches on
-                      this literally, not the display name above.
-                      {" "}This device hasn't reported its installed apps yet, so search above only
-                      matches common apps.
-                    </>
+                <button
+                  onClick={() => setAllDevices(false)}
+                  className={cn(
+                    "w-full flex items-center gap-3 p-3.5 rounded-xl border transition-all text-left mb-2",
+                    !allDevices ? "border-primary bg-primary/5" : "border-outline-variant/40 hover:bg-surface-variant"
                   )}
-                </p>
+                >
+                  <div className={cn("w-5 h-5 rounded-full border-2 flex items-center justify-center shrink-0", !allDevices ? "border-primary bg-primary" : "border-outline")}>
+                    {!allDevices && <Check className="w-3 h-3 text-on-primary" />}
+                  </div>
+                  <p className="font-medium text-sm">Specific devices</p>
+                </button>
+                {!allDevices && (
+                  devices.length === 0 ? (
+                    <p className="text-sm text-on-surface-variant pl-8">No devices registered yet.</p>
+                  ) : (
+                    <div className="grid grid-cols-2 gap-2 pl-8">
+                      {devices.map((d) => {
+                        const sel = selectedDeviceIds.includes(d.device_id);
+                        return (
+                          <button
+                            key={d.device_id}
+                            onClick={() => toggleDevice(d.device_id)}
+                            className={cn(
+                              "flex items-center gap-3 p-3 rounded-xl border transition-all text-left",
+                              sel ? "border-secondary bg-secondary-container/40" : "border-outline-variant/40 hover:bg-surface-variant"
+                            )}
+                          >
+                            <div className={cn("w-5 h-5 rounded-full border-2 flex items-center justify-center shrink-0", sel ? "border-secondary bg-secondary" : "border-outline")}>
+                              {sel && <Check className="w-3 h-3 text-on-secondary" />}
+                            </div>
+                            <span className="text-sm font-medium truncate">{d.device_name || d.device_id}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )
+                )}
               </div>
-                </>
-              )}
             </div>
           )}
 
           {step === 2 && (
+            <div className="max-w-xl space-y-6">
+              <div>
+                <h3 className="text-lg font-bold">What should be gated?</h3>
+                <p className="text-sm text-on-surface-variant mt-0.5">
+                  Add any mix of apps and websites -- all of them unlock together once the
+                  required habits (next step) are done.
+                </p>
+              </div>
+
+              {/* Apps */}
+              <div className="space-y-2.5">
+                <label className="text-sm font-semibold block">Apps</label>
+                {targetApps.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {targetApps.map((a) => (
+                      <Pill key={a.appId}>
+                        {a.appName}
+                        <button onClick={() => removeTargetApp(a.appId)} className="ml-1.5 align-middle">
+                          <X className="w-3 h-3 inline" />
+                        </button>
+                      </Pill>
+                    ))}
+                  </div>
+                )}
+                <input
+                  type="text"
+                  value={appQuery}
+                  onChange={(e) => setAppQuery(e.target.value)}
+                  placeholder={hasInstalledApps ? `Search apps installed on ${settings?.device_name || "a device"}…` : "Search common apps…"}
+                  className="w-full h-11 px-4 rounded-xl border border-outline bg-surface text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                />
+                <div className="grid grid-cols-2 gap-2">
+                  {(hasInstalledApps ? filteredInstalled.slice(0, 40) : filteredCommon).map((app) => (
+                    <button
+                      key={"id" in app ? app.id : app.name}
+                      onClick={() => addTargetApp(app.name, "id" in app ? app.id : app.name)}
+                      className="flex items-center gap-3 p-3 rounded-xl border border-outline-variant/40 hover:bg-surface-variant transition-all text-left min-w-0"
+                    >
+                      <div className={cn("w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold shrink-0", "color" in app ? app.color : "bg-primary/10 text-primary")}>
+                        {app.name.slice(0, 2).toUpperCase()}
+                      </div>
+                      <div className="min-w-0">
+                        <p className="font-medium text-sm truncate">{app.name}</p>
+                        {"id" in app && <p className="text-[11px] text-on-surface-variant truncate">{app.id}</p>}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+                <div className="flex items-center gap-2 pt-1">
+                  <input
+                    type="text"
+                    value={customAppName}
+                    onChange={(e) => setCustomAppName(e.target.value)}
+                    placeholder="Custom app name"
+                    className="flex-1 h-9 px-3 rounded-xl border border-outline bg-surface text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                  />
+                  <input
+                    type="text"
+                    value={customAppId}
+                    onChange={(e) => setCustomAppId(e.target.value)}
+                    placeholder={isMac ? "Executable name" : "Package name"}
+                    className="flex-1 h-9 px-3 rounded-xl border border-outline bg-surface text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                  />
+                  <Button variant="text" size="sm" className="gap-1.5 text-xs shrink-0" onClick={() => addTargetApp(customAppName, customAppId)}>
+                    <Plus className="w-3.5 h-3.5" /> Add
+                  </Button>
+                </div>
+                <p className="text-xs text-on-surface-variant">
+                  {isMac
+                    ? <>The exact process/executable name as it appears in Activity Monitor (e.g. <code>Steam</code>) -- not the display name or bundle identifier.</>
+                    : <>The exact Android package name (e.g. <code>com.zhiliaoapp.musically</code>) -- the phone matches on this literally.</>}
+                </p>
+              </div>
+
+              {/* Websites */}
+              <div className="space-y-2.5">
+                <label className="text-sm font-semibold block">Websites</label>
+                {targetWebsites.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {targetWebsites.map((w) => (
+                      <Pill key={w.domain}>
+                        {w.domain}
+                        <button onClick={() => removeTargetWebsite(w.domain)} className="ml-1.5 align-middle">
+                          <X className="w-3 h-3 inline" />
+                        </button>
+                      </Pill>
+                    ))}
+                  </div>
+                )}
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={websiteDraft}
+                    onChange={(e) => setWebsiteDraft(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") addTargetWebsite(); }}
+                    placeholder="youtube.com"
+                    className="flex-1 h-11 px-4 rounded-xl border border-outline bg-surface text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                  />
+                  <Button variant="text" size="sm" className="gap-1.5 text-xs shrink-0" onClick={addTargetWebsite}>
+                    <Plus className="w-3.5 h-3.5" /> Add
+                  </Button>
+                </div>
+                <p className="text-xs text-on-surface-variant">
+                  Blocks this domain and its subdomains via DNS -- same enforcement as a domain in
+                  Blocked Websites, just conditional on the habit(s) below instead of always-on.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {step === 3 && (
             <div className="max-w-xl space-y-4">
               <div>
                 <h3 className="text-lg font-bold">Required habits</h3>
                 <p className="text-sm text-on-surface-variant mt-0.5">
-                  Select which habits must be done before {(targetType === "website" ? websiteDomain : selectedApp) || (targetType === "website" ? "the website" : "the app")} unlocks.
+                  Select which habits must be done before {targetApps.map((a) => a.appName).concat(targetWebsites.map((w) => w.domain)).join(", ") || "the target(s)"} unlock.
                 </p>
               </div>
               {habits.length === 0 ? (
@@ -2552,7 +2698,7 @@ function HabitRuleWizard({
             </div>
           )}
 
-          {step === 3 && (
+          {step === 4 && (
             <div className="max-w-xl space-y-5">
               <div>
                 <h3 className="text-lg font-bold">When does this rule apply?</h3>
@@ -2606,21 +2752,21 @@ function HabitRuleWizard({
 
       {/* Wizard footer */}
       <div className="border-t border-outline-variant/30 px-7 py-4 flex items-center justify-between bg-surface/40">
-        <Button variant="text" size="sm" onClick={() => (step > 1 ? setStep(step - 1) : onNavigate("Dashboard"))}>
+        <Button variant="text" size="sm" onClick={() => (step > 1 ? setStep(step - 1) : onNavigate("GlobalSettings"))}>
           {step > 1 ? "← Back" : "Cancel"}
         </Button>
         <div className="flex items-center gap-3">
           <div className="flex gap-1.5">
-            {[1, 2, 3].map((n) => (
+            {[1, 2, 3, 4].map((n) => (
               <div key={n} className={cn("w-1.5 h-1.5 rounded-full transition-all", step >= n ? "bg-primary" : "bg-surface-variant")} />
             ))}
           </div>
           <Button
             size="sm"
-            disabled={(step === 1 && (targetType === "website" ? !websiteDomain.trim() : !selectedApp || !appId.trim())) || saving}
-            onClick={() => (step < 3 ? setStep(step + 1) : save())}
+            disabled={!canContinue || saving}
+            onClick={() => (step < 4 ? setStep(step + 1) : save())}
           >
-            {saving ? "Saving…" : step < 3 ? "Continue →" : "Save Rule"}
+            {saving ? "Saving…" : step < 4 ? "Continue →" : "Save Rule"}
           </Button>
         </div>
       </div>

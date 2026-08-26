@@ -80,8 +80,13 @@ class HabitRuleManager(private val context: Context) {
     fun isDashboardManaged(rule: HabitRule): Boolean = rule.id <= 0L
 
     /** Parses the dashboard's `rules` list into synthetic, always-windowed [HabitRule]s. Never
-     *  persisted -- see this class's Phase 5 doc for why that's safe. Skips any entry missing a
-     *  package name (older rules saved before the dashboard collected one) or a valid schedule. */
+     *  persisted -- see this class's Phase 5 doc for why that's safe. Skips any entry with no
+     *  `targetApps` (a website-only rule, or an older rule saved before this field existed) or no
+     *  valid schedule. A rule's `targetApps` can name more than one app -- all of them share the
+     *  same [HabitRule.targetPackages], same as a local multi-target rule created via [addRule].
+     *  See [dashboardWebsiteRules] for the same entries' website targets: a single rule can carry
+     *  both non-empty `targetApps` and `targetWebsites` at once (see api.ts's Rule doc comment on
+     *  the dashboard side) -- this method and that one just each pick out their own half. */
     private fun dashboardRules(): List<HabitRule> {
         val snapshot = DashboardConfigStore(context).snapshot() ?: return emptyList()
         val entries = snapshot.optJSONArray("rules") ?: return emptyList()
@@ -98,7 +103,10 @@ class HabitRuleManager(private val context: Context) {
         val result = mutableListOf<HabitRule>()
         for (i in 0 until entries.length()) {
             val entry = entries.optJSONObject(i) ?: continue
-            val appId = entry.optString("appId").takeIf { it.isNotBlank() } ?: continue
+            val appIds = entry.optJSONArray("targetApps")?.let { apps ->
+                (0 until apps.length()).mapNotNull { apps.optJSONObject(it)?.optString("appId")?.takeIf(String::isNotBlank) }
+            }.orEmpty()
+            if (appIds.isEmpty()) continue
             val schedule = entry.optJSONObject("schedule") ?: continue
             val start = parseTimeToMinuteOfDay(schedule.optString("startTime"))
             val end = parseTimeToMinuteOfDay(schedule.optString("endTime"))
@@ -116,7 +124,8 @@ class HabitRuleManager(private val context: Context) {
             result += HabitRule(
                 id = dashboardRuleSyntheticId(entry.optString("id")),
                 triggerPackageName = HabitTrackerScanner.HABITSHARE_PACKAGE_NAME,
-                targetPackageName = appId,
+                targetPackageName = appIds.first(),
+                targetPackages = encodeTargetPackages(appIds),
                 unlockMinutes = 0,
                 habitName = encodeRequiredHabitNames(habitNames),
                 windowStartMinute = start,
@@ -133,14 +142,17 @@ class HabitRuleManager(private val context: Context) {
         -(1L + (dashboardId.hashCode().toLong() and 0x7FFFFFFFL))
 
     /**
-     * Domain-targeted counterpart to [dashboardRules]'s app-targeted rules (`targetType ==
-     * "website"` entries, see lockprofile_service.py's `_build_list_item` for that field) -- same
+     * Domain-targeted counterpart to [dashboardRules]'s app-targeted rules (a rule's
+     * `targetWebsites` entries, see lockprofile_service.py's `_build_rule` for that field) -- same
      * "dashboard wizard always sets a schedule" design as [dashboardRules], so this only ever
      * needs the windowed-rule shape, not the full [HabitRule] entity a website has no meaningful
      * equivalent for (no package to suspend). Never persisted, parsed fresh on every call, same
      * as [dashboardRules]'s own synthetic rules -- the list realistically only has a handful of
      * entries, so re-parsing the JSON on every DNS query (see [isWebsiteCurrentlyBlocked]) is
-     * cheap enough not to need caching.
+     * cheap enough not to need caching. One JSON rule with N domains in `targetWebsites` expands
+     * to N [WebsiteHabitRule]s here, all sharing that rule's schedule/habit condition -- mirroring
+     * [dashboardRules] collapsing a rule's `targetApps` onto one [HabitRule.targetPackages]
+     * instead, since [HabitRule] already models multi-target but this simpler struct doesn't.
      */
     private data class WebsiteHabitRule(
         val domain: String,
@@ -162,8 +174,10 @@ class HabitRuleManager(private val context: Context) {
         val result = mutableListOf<WebsiteHabitRule>()
         for (i in 0 until entries.length()) {
             val entry = entries.optJSONObject(i) ?: continue
-            if (entry.optString("targetType", "app") != "website") continue
-            val domain = entry.optString("websiteDomain").takeIf { it.isNotBlank() } ?: continue
+            val domains = entry.optJSONArray("targetWebsites")?.let { sites ->
+                (0 until sites.length()).mapNotNull { sites.optJSONObject(it)?.optString("domain")?.takeIf(String::isNotBlank) }
+            }.orEmpty()
+            if (domains.isEmpty()) continue
             val schedule = entry.optJSONObject("schedule") ?: continue
             val start = parseTimeToMinuteOfDay(schedule.optString("startTime")) ?: continue
             val end = parseTimeToMinuteOfDay(schedule.optString("endTime")) ?: continue
@@ -177,7 +191,9 @@ class HabitRuleManager(private val context: Context) {
                 (0 until days.length()).mapNotNull { jsDayOfWeekToJava(days.optInt(it, -1)) }.toSet()
             }?.takeIf { it.isNotEmpty() } ?: DayOfWeek.entries.toSet()
 
-            result += WebsiteHabitRule(domain.lowercase(), habitNames, start, end, daysOfWeek)
+            domains.forEach { domain ->
+                result += WebsiteHabitRule(domain.lowercase(), habitNames, start, end, daysOfWeek)
+            }
         }
         return result
     }
