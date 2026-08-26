@@ -10,13 +10,19 @@ carries a hostname, never a path, and a domain gets resolved once but reused for
 page loads afterward -- this can only ever judge "is this domain's own content bad," never "is
 this specific page bad."
 
-Per query: check the shared adult-domain blocklist (domain_blocklist.py, same source as
-mitm_nsfw_addon.py) -- NXDOMAIN immediately if matched, no network call. Otherwise check a local
-allow/deny cache (24h, separate from mitm_nsfw_addon.py's own cache -- different container,
-different process, not shared; a known, accepted v1 simplification). Otherwise fetch the domain's
-homepage and run it through the shared AI classifier (ai_classifier.py), all within one bounded
-budget -- on any failure or budget overrun, fail open (forward the query normally) and don't
-cache, so it's retried fresh on a future lookup rather than stuck on a transient failure.
+Per query: first check whether the querying device currently has an active, habit-gated website
+rule against this domain (_WebsiteRuleBlocks, polling lockprofile_service.py's
+/internal/dns-website-blocks) -- this is the macOS-side enforcement of the same dashboard
+"Habit Rule Wizard" website rules the Android app enforces locally via VpnFilterService, and it
+runs before every other check below since a habit-gated domain (e.g. youtube.com) is often
+content none of the other checks would ever flag. Then check the shared adult-domain blocklist
+(domain_blocklist.py, same source as mitm_nsfw_addon.py) -- NXDOMAIN immediately if matched, no
+network call. Otherwise check a local allow/deny cache (24h, separate from mitm_nsfw_addon.py's
+own cache -- different container, different process, not shared; a known, accepted v1
+simplification). Otherwise fetch the domain's homepage and run it through the shared AI classifier
+(ai_classifier.py), all within one bounded budget -- on any failure or budget overrun, fail open
+(forward the query normally) and don't cache, so it's retried fresh on a future lookup rather than
+stuck on a transient failure.
 
 Pure stdlib asyncio -- no dnspython/third-party dependency, matching this project's existing
 preference for stdlib-only scripts (see port8080_mux.py). Hand-parsing a DNS question is simple
@@ -40,6 +46,7 @@ import asyncio
 import concurrent.futures
 import http.client
 import ipaddress
+import json
 import logging
 import os
 import signal
@@ -55,6 +62,14 @@ LISTEN_HOST = os.environ.get("DNS_MUX_LISTEN_HOST", "0.0.0.0")
 LISTEN_PORT = int(os.environ.get("DNS_MUX_LISTEN_PORT", "53"))
 UPSTREAM_DNS_HOST = os.environ.get("UPSTREAM_DNS_HOST", "adguardhome")
 UPSTREAM_DNS_PORT = int(os.environ.get("UPSTREAM_DNS_PORT", "53"))
+
+# lockprofile_service.py's internal endpoint for habit-gated website rules (see
+# _WebsiteRuleBlocks below) -- reached over the compose network by service name, same as
+# UPSTREAM_DNS_HOST/adguardhome above.
+LOCKPROFILE_HOST = os.environ.get("LOCKPROFILE_HOST", "lockprofile")
+LOCKPROFILE_PORT = int(os.environ.get("LOCKPROFILE_PORT", "8091"))
+LOCKPROFILE_TOKEN = os.environ.get("LOCKPROFILE_TOKEN", "")
+WEBSITE_RULE_POLL_SECONDS = 10
 
 # Durable record of every domain this deployment's AI classifier has ever judged BLOCKED --
 # volume-mounted read-write here and read-only into the `updates` (Caddy) container, which serves
@@ -152,6 +167,86 @@ class _ClassifyCache:
 
     def set(self, domain: str, verdict: bool):
         self._entries[domain] = (verdict, time.time() + CLASSIFY_CACHE_TTL_SECONDS)
+
+
+class _WebsiteRuleBlocks:
+    """Polls lockprofile_service.py's /internal/dns-website-blocks on its own short cadence and
+    caches the result in memory, so a habit-gated website rule (e.g. "block youtube.com unless 2
+    habits are done") lifts within one poll interval of the habit being marked done --mirroring
+    HabitRuleManager.kt's isWebsiteCurrentlyBlocked, which re-evaluates fresh on every DNS query
+    on the Android side. Polling instead of a per-query HTTP round-trip keeps every OTHER DNS
+    query (the overwhelming majority, which no rule applies to at all) free of network-hop
+    latency -- same "own slower cadence, cheap is_stale() check on the hot path" shape as
+    domain_blocklist.py's DomainList, which this deliberately mirrors.
+
+    Keyed by whatever source identifier lockprofile_service.py's _dns_website_blocks_by_source_key
+    used -- a LAN IP, a DEVICE_ID_ALIASES hostname, or a raw device_id -- matched here against the
+    literal UDP source IP, so this only ever recognizes devices already covered by that mapping
+    (see DEVICE_ID_ALIASES's own doc comment; a Mac queried from an unaliased IP -- e.g. off the
+    home LAN -- simply has no rule applied here, an accepted v1 gap)."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._by_source_key: dict[str, set[str]] = {}
+        self._last_poll = 0.0
+        self._polling = threading.Lock()
+
+    def is_stale(self) -> bool:
+        with self._lock:
+            return (time.time() - self._last_poll) >= WEBSITE_RULE_POLL_SECONDS
+
+    def refresh_if_stale(self):
+        if not self.is_stale():
+            return
+        if not self._polling.acquire(blocking=False):
+            return
+        try:
+            if not LOCKPROFILE_TOKEN:
+                return
+            conn = http.client.HTTPConnection(LOCKPROFILE_HOST, LOCKPROFILE_PORT, timeout=5)
+            try:
+                conn.request(
+                    "GET",
+                    "/internal/dns-website-blocks",
+                    headers={"Authorization": f"Bearer {LOCKPROFILE_TOKEN}"},
+                )
+                resp = conn.getresponse()
+                body = resp.read()
+                if resp.status != 200:
+                    log.warning("website-rule poll got HTTP %s", resp.status)
+                    return
+            finally:
+                conn.close()
+            blocks = json.loads(body.decode("utf-8")).get("blocks") or {}
+            parsed = {
+                key: set(domains) for key, domains in blocks.items() if isinstance(domains, list)
+            }
+            with self._lock:
+                self._by_source_key = parsed
+                self._last_poll = time.time()
+        except Exception as error:
+            # Fail open (keep whatever was last cached, or empty on first-ever failure) --
+            # a transient lockprofile outage must not either wedge every DNS query behind a
+            # blocking retry or start blocking domains based on stale-forever data with no way
+            # to tell staleness apart from "no rule configured."
+            log.warning("website-rule poll failed: %s", error)
+        finally:
+            self._polling.release()
+
+    def blocked_domain_for(self, source_ip: str, host: str) -> bool:
+        with self._lock:
+            domains = self._by_source_key.get(source_ip)
+        if not domains:
+            return False
+        candidate = host
+        while candidate:
+            if candidate in domains:
+                return True
+            dot = candidate.find(".")
+            if dot == -1:
+                break
+            candidate = candidate[dot + 1 :]
+        return False
 
 
 class _PersistedBadDomains:
@@ -346,10 +441,17 @@ async def _query_upstream(loop: asyncio.AbstractEventLoop, data: bytes) -> bytes
 
 
 class _DnsMuxProtocol(asyncio.DatagramProtocol):
-    def __init__(self, domains: domain_blocklist.DomainList, cache: _ClassifyCache, persisted: _PersistedBadDomains):
+    def __init__(
+        self,
+        domains: domain_blocklist.DomainList,
+        cache: _ClassifyCache,
+        persisted: _PersistedBadDomains,
+        website_rules: _WebsiteRuleBlocks,
+    ):
         self.domains = domains
         self.cache = cache
         self.persisted = persisted
+        self.website_rules = website_rules
         self.transport: asyncio.DatagramTransport | None = None
         # De-dupes concurrent classification requests for the same not-yet-cached domain --
         # without this, N simultaneous queries for a brand-new domain (e.g. several analytics/CDN
@@ -381,11 +483,21 @@ class _DnsMuxProtocol(asyncio.DatagramProtocol):
         # many queries land at once right as the cache goes stale.
         if self.domains.is_stale():
             await loop.run_in_executor(None, self.domains.refresh_if_stale)
+        if self.website_rules.is_stale():
+            await loop.run_in_executor(None, self.website_rules.refresh_if_stale)
         domain = parse_query_domain(data)
         if not domain:
             await self._forward(data, addr)
             return
         domain = domain.lower().rstrip(".")
+
+        # Checked first, ahead of the static/persisted/AI-classified paths below: a
+        # habit-gated domain (e.g. youtube.com) is often perfectly legitimate content that the
+        # AI classifier/adult blocklist would never flag, and its own cached "allowed" verdict
+        # must never suppress this dynamic, per-device, time-windowed check.
+        if self.website_rules.blocked_domain_for(addr[0], domain):
+            self.transport.sendto(build_blocked_response(data), addr)
+            return
 
         if self.domains.matches(domain):
             self.transport.sendto(build_blocked_response(data), addr)
@@ -467,10 +579,12 @@ async def main():
     domains.refresh_if_stale()
     cache = _ClassifyCache()
     persisted = _PersistedBadDomains(CLASSIFIED_BAD_DOMAINS_PATH)
+    website_rules = _WebsiteRuleBlocks()
+    website_rules.refresh_if_stale()
 
     loop = asyncio.get_running_loop()
     transport, _protocol = await loop.create_datagram_endpoint(
-        lambda: _DnsMuxProtocol(domains, cache, persisted),
+        lambda: _DnsMuxProtocol(domains, cache, persisted, website_rules),
         local_addr=(LISTEN_HOST, LISTEN_PORT),
     )
     log.info(

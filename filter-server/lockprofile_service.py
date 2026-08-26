@@ -1307,6 +1307,93 @@ def _habits_with_completion_status() -> list:
     return result
 
 
+def _parse_time_to_minute_of_day(text: str) -> int | None:
+    """"HH:MM" -> minutes since midnight, or None if malformed -- mirrors
+    HabitRuleManager.kt's own parseTimeToMinuteOfDay exactly."""
+    try:
+        hour_str, minute_str = (text or "").split(":", 1)
+        return int(hour_str) * 60 + int(minute_str)
+    except (ValueError, AttributeError):
+        return None
+
+
+def _is_within_window(minute_of_day: int, start: int, end: int) -> bool:
+    """Mirrors HabitRuleManager.kt's isWithinWindow exactly, including the overnight
+    (e.g. 21:00-06:00) wraparound case."""
+    return (start <= minute_of_day < end) if start <= end else (minute_of_day >= start or minute_of_day < end)
+
+
+def _currently_blocked_website_domains() -> dict:
+    """device_id -> set of domains currently blocked by that device's website-targeted habit
+    rules (targetType "website"), evaluated fresh against the live schedule window and habit
+    completion state -- the server-side equivalent of HabitRuleManager.kt's
+    isWebsiteCurrentlyBlocked/isWithinWindow/isWebsiteRuleSatisfied (Android's own reference
+    implementation, which the phone's VpnFilterService consults on every DNS query). Compares
+    requiredHabitIds directly against doneToday rather than Android's fuzzy name-matching, since
+    the server already has exact habit ids on both sides. An empty requiredHabitIds list is never
+    "satisfied" -- same as Android -- so it blocks unconditionally for the whole window, matching
+    isWebsiteRuleSatisfied's documented semantics.
+
+    Consulted by GET /internal/dns-website-blocks, which dns_classify_mux.py polls on its own
+    short cadence (see that file) so this Mac's DNS-query-time enforcement of website habit rules
+    lifts within one poll interval of a habit being marked done, without adding a network
+    round-trip to every DNS query for every device.
+    """
+    settings = _load_settings()
+    habits_by_id = {h["id"]: h for h in _habits_with_completion_status()}
+    now = time.localtime()
+    now_minute_of_day = now.tm_hour * 60 + now.tm_min
+    # tm_wday is Monday=0..Sunday=6; the dashboard's schedule.daysOfWeek uses JS's
+    # Date.getDay() convention (Sunday=0..Saturday=6), same conversion HabitRuleManager.kt/
+    # RuleBlockEnforcer.swift both already do for their own local weekday.
+    now_js_weekday = (now.tm_wday + 1) % 7
+
+    result: dict = {}
+    for device_id, record in settings.items():
+        for rule in record.get("rules") or []:
+            if rule.get("targetType") != "website":
+                continue
+            domain = (rule.get("websiteDomain") or "").strip().lower()
+            if not domain:
+                continue
+            schedule = rule.get("schedule") or {}
+            start = _parse_time_to_minute_of_day(schedule.get("startTime", ""))
+            end = _parse_time_to_minute_of_day(schedule.get("endTime", ""))
+            if start is None or end is None:
+                continue
+            days_of_week = schedule.get("daysOfWeek") or []
+            if days_of_week and now_js_weekday not in days_of_week:
+                continue
+            if not _is_within_window(now_minute_of_day, start, end):
+                continue
+            required_ids = rule.get("requiredHabitIds") or []
+            satisfied = bool(required_ids) and all(
+                habits_by_id.get(habit_id, {}).get("doneToday") for habit_id in required_ids
+            )
+            if satisfied:
+                continue
+            result.setdefault(device_id, set()).add(domain)
+    return result
+
+
+def _dns_website_blocks_by_source_key() -> dict:
+    """Same data as _currently_blocked_website_domains, but re-keyed onto every identifier a DNS
+    query's source IP might actually show up as -- the canonical device_id itself (for a device,
+    like a bare home-LAN IP, that's never been assigned a UUID) PLUS every DEVICE_ID_ALIASES entry
+    that resolves to it (a Mac's LAN IP, hostname, etc.) -- since dns_classify_mux.py only ever
+    sees a raw source IP/hostname on its side, never the canonical id. See DEVICE_ID_ALIASES's own
+    doc comment for why a single physical device can have several aliases."""
+    blocked_by_device = _currently_blocked_website_domains()
+    result: dict = {}
+    for device_id, domains in blocked_by_device.items():
+        result.setdefault(device_id, set()).update(domains)
+    for alias_key, canonical_id in DEVICE_ID_ALIASES.items():
+        domains = blocked_by_device.get(canonical_id)
+        if domains:
+            result.setdefault(alias_key, set()).update(domains)
+    return {key: sorted(domains) for key, domains in result.items()}
+
+
 def _default_device_settings(device_id: str = "") -> dict:
     # Default name by detected platform rather than leaving it blank -- a guardian can still
     # rename via the dashboard's Device Name field at any time, this is just so a never-configured
@@ -2787,6 +2874,13 @@ class Handler(BaseHTTPRequestHandler):
 
         if not self._authorized():
             return self._send_json(401, {"error": "unauthorized"})
+
+        if parsed.path == "/internal/dns-website-blocks":
+            # Polled by dns_classify_mux.py (a separate container/process with no direct access
+            # to device_settings.json or the habit library) so it can enforce website-targeted
+            # habit rules at DNS-query time for Mac clients -- see
+            # _dns_website_blocks_by_source_key's doc comment.
+            return self._send_json(200, {"blocks": _dns_website_blocks_by_source_key()})
 
         if parsed.path == "/report-config":
             # Lets the phone's own AlertReporter (Android-origin types never touch this server --
