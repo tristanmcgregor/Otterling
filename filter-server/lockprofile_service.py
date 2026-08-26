@@ -47,7 +47,12 @@ AI assistant: `POST /ai-assistant/translate` (see `AIAssistantClient.swift`) tur
 request ("install wget") into candidate shell command(s) via the same host-level reviewer's
 `/translate` route -- pure translation, no safety reasoning. Every returned command is then run
 through `/sudo-review/check` individually before anything executes, exactly like a manually-typed
-command -- this is a convenience layer over the broker, never a way around it.
+command -- this is a convenience layer over the broker, never a way around it. The macOS client
+(`XPCService.runAssistantAgentLoop`) now calls this route in a loop -- one request's worth of
+commands run through the broker, then their real stdout/stderr/exit codes get folded into the next
+call's `request` text so the assistant can adapt, up to a hard round/step cap on the client side.
+This endpoint itself is unchanged and stateless per call: it has no idea it's mid-loop, it just
+translates whatever text it's given this time, same as always.
 
 Sudo-elevation review: `POST /sudo-review/check` (see `SudoBroker.swift` / `sudo_review_server.py`)
 is the tier-3 fallback for the Mac's privilege-elevation broker -- a command its own local

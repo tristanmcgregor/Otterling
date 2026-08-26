@@ -31,8 +31,9 @@ final class FocusLockViewModel: NSObject, ObservableObject, UNUserNotificationCe
     // button, with no other visible change while a command was in flight.
     @Published var pendingTerminalCommand: String?
 
-    // MARK: AI Assistant chat box (see AIAssistantClient.swift) -- translates natural language into
-    // command(s), each of which still goes through the SAME broker as the terminal above.
+    // MARK: AI Assistant chat box (see AIAssistantClient.swift) -- works each request as a
+    // multi-round agent loop server-side, but every command it proposes in every round still goes
+    // through the SAME broker as the terminal above.
     @Published var assistantRequestText: String = ""
     @Published var assistantLog: [AssistantEntry] = []
     @Published var assistantRunning = false

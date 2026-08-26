@@ -275,7 +275,7 @@ struct ContentView: View {
         case .filter: return "System-wide NSFW DNS filtering"
         case .updates: return "Signed, verified in-app updates"
         case .terminal: return "Every command goes through the denylist → allowlist → AI-review broker -- inert until this account is Standard"
-        case .assistant: return "Describe what you need in plain language -- the AI translates it, then every resulting command still goes through the same broker"
+        case .assistant: return "Describe what you need -- the AI works it multi-step, but every command it proposes, every round, still goes through the same broker"
         case .multiUser: return "Push the trigger-word scanner into a different local account's session"
         }
     }
@@ -596,7 +596,7 @@ struct ContentView: View {
     private var assistantScreen: some View {
         Card {
             SectionLabel(text: "AI Assistant")
-            Text("Describe what you need in plain language. The assistant only translates it into shell command(s) -- it never executes anything itself. Each resulting command is then run through the exact same broker as the terminal above, one at a time.")
+            Text("Describe what you need. The assistant works it as a multi-step agent -- proposing a command, seeing the real result, and deciding what (if anything) to try next -- but it only ever translates; it never executes anything itself. Every command it proposes, in every round, is run through the exact same broker as the terminal above, one at a time.")
                 .font(.system(size: 11)).foregroundStyle(Otter.onSurfaceVariant)
 
             ScrollView {
@@ -633,13 +633,21 @@ struct ContentView: View {
     private func assistantEntryView(_ entry: FocusLockViewModel.AssistantEntry) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("> \(entry.request)").font(.system(size: 12, design: .monospaced)).foregroundStyle(.white)
-            Text(entry.result.translationExplanation)
-                .font(.system(size: 11)).foregroundStyle(.white.opacity(0.6))
             if entry.result.steps.isEmpty {
+                Text(entry.result.translationExplanation)
+                    .font(.system(size: 11)).foregroundStyle(.white.opacity(0.6))
                 Text("(no commands to run)").font(.system(size: 11, design: .monospaced)).foregroundStyle(.orange)
             }
+            // Each step's `roundExplanation` is only populated on the first command of a new
+            // round (see AssistantStep's doc comment), so this naturally renders as "reasoning,
+            // then the command(s) it led to" once per round of the agent loop, not once per line.
             ForEach(Array(entry.result.steps.enumerated()), id: \.offset) { _, step in
                 VStack(alignment: .leading, spacing: 2) {
+                    if let roundExplanation = step.roundExplanation, !roundExplanation.isEmpty {
+                        Text(roundExplanation)
+                            .font(.system(size: 11)).foregroundStyle(.white.opacity(0.6))
+                            .padding(.top, 2)
+                    }
                     Text("$ \(step.command)").font(.system(size: 12, design: .monospaced)).foregroundStyle(.white)
                     Text("\(step.result.approved ? "APPROVED" : "DENIED") (\(step.result.source)): \(step.result.explanation)")
                         .font(.system(size: 11, design: .monospaced))
@@ -650,19 +658,39 @@ struct ContentView: View {
                 }
                 .padding(.leading, 12)
             }
+            if let stopNote = assistantStopNote(entry.result.stopReason) {
+                Text(stopNote).font(.system(size: 10, design: .monospaced)).foregroundStyle(.white.opacity(0.4))
+            }
         }
         .padding(.bottom, 4)
     }
 
-    /// Same "show it's actually working" fix as `pendingEntryView` above -- the translate call
-    /// alone is a network round-trip, before any of its resulting commands even reach the broker.
+    /// `stopReason` values other than these mean the agent loop ran to a normal conclusion (the
+    /// translator said nothing more was needed, or the very first round produced nothing) -- see
+    /// `AssistantActionResult.stopReason`'s doc comment. Only the cap-hit cases need calling out,
+    /// since they mean the request may be incomplete.
+    private func assistantStopNote(_ stopReason: String) -> String? {
+        switch stopReason {
+        case "max_rounds", "max_steps":
+            return "(stopped: reached this request's step limit -- send it again to continue)"
+        case "error":
+            return "(stopped: malformed request)"
+        default:
+            return nil
+        }
+    }
+
+    /// Same "show it's actually working" fix as `pendingEntryView` above -- this can now be
+    /// several translate/broker round-trips (see `XPCService.runAssistantAgentLoop`), not just
+    /// the one network call the old label implied, so the whole reply is a single blocking wait
+    /// with no partial/live progress to show.
     private func pendingAssistantEntryView(request: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             Text("> \(request)")
                 .font(.system(size: 12, design: .monospaced))
                 .foregroundStyle(.white)
             ProgressView().controlSize(.small).tint(.white)
-            Text("translating…")
+            Text("working…")
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundStyle(.white.opacity(0.7))
         }

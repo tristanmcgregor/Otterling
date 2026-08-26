@@ -13,6 +13,20 @@ import FocusLockShared
 /// execution -- see the design discussion this followed: an agent trusted to both interpret intent
 /// and decide safety is the same single point of failure the broker exists to avoid, just wearing a
 /// friendlier interface.
+///
+/// `XPCService.requestAssistantAction` calls `translate()` in a loop -- after each round's commands
+/// run, their real stdout/stderr/exit codes are folded into the next `translate()` call so the
+/// assistant can adapt (retry a narrower command, chain a follow-up step, notice a denial and stop)
+/// instead of guessing everything up front from a single sentence. This makes the *front end* feel
+/// like an agent working a multi-step task. It changes nothing about the invariant above: each
+/// round is still pure translation with no execution authority, and every command from every round
+/// still goes through the exact same `SudoBroker.handle()` a manually-typed command does. The loop
+/// itself is capped (`XPCService`'s `maxAssistantRounds`/`maxAssistantSteps`) independent of
+/// anything the translator says, since nothing else stops a propose-execute-observe cycle from
+/// looping forever -- e.g. re-proposing a command the broker just denied, hoping a differently
+/// worded round talks its way past the same denylist entry. It can't: the denylist/allowlist/
+/// AI-review decision is re-evaluated fresh every time, with no memory of "the assistant already
+/// decided this was fine."
 enum AIAssistantClient {
     private static let timeout: TimeInterval = 25
 

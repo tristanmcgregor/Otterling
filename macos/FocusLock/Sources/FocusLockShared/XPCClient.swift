@@ -216,9 +216,9 @@ public final class FocusLockXPCClient {
             proxy(errorHandler: onError).requestAssistantAction(payload) { data in
                 resume(
                     FocusLockCodec.decode(AssistantActionResult.self, from: data)
-                        ?? AssistantActionResult(translationExplanation: "Malformed reply", steps: [])
+                        ?? AssistantActionResult(translationExplanation: "Malformed reply", steps: [], stopReason: "error")
                 )
             }
-        }, onError: AssistantActionResult(translationExplanation: "Could not reach FocusLockHelperd", steps: []))
+        }, onError: AssistantActionResult(translationExplanation: "Could not reach FocusLockHelperd", steps: [], stopReason: "error"))
     }
 }

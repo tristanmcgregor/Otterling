@@ -433,23 +433,94 @@ final class XPCService: NSObject, FocusLockXPCProtocol {
         }
     }
 
+    /// Hard ceilings on the agent loop in `requestAssistantAction` below -- enforced here,
+    /// independent of anything the translator returns. See `AIAssistantClient.swift`'s doc comment
+    /// for why: nothing else stops a propose-execute-observe cycle from looping forever.
+    private static let maxAssistantRounds = 6
+    private static let maxAssistantSteps = 20
+    /// Keeps each round's follow-up prompt bounded -- this is user-controlled command
+    /// output being folded back into a network request, not something to let grow unbounded.
+    private static let maxAssistantTranscriptChars = 2000
+
     func requestAssistantAction(_ requestJSON: Data, reply: @escaping (Data) -> Void) {
         guard let request = FocusLockCodec.decode(AssistantRequest.self, from: requestJSON) else {
-            reply(FocusLockCodec.encode(AssistantActionResult(translationExplanation: "Malformed request", steps: [])))
+            reply(FocusLockCodec.encode(AssistantActionResult(translationExplanation: "Malformed request", steps: [], stopReason: "error")))
             return
         }
         DispatchQueue.global().async {
-            let (commands, explanation) = AIAssistantClient.translate(request: request.request)
-            // Each command goes through the SAME broker pipeline a manually-typed command does --
-            // see AIAssistantClient.swift's doc comment for why there's no shortcut here.
-            let steps = commands.map { command in
-                AssistantStep(
-                    command: command,
-                    result: SudoBroker.handle(command: command, reason: "AI Assistant: \"\(request.request)\"")
-                )
-            }
-            reply(FocusLockCodec.encode(AssistantActionResult(translationExplanation: explanation, steps: steps)))
+            reply(FocusLockCodec.encode(Self.runAssistantAgentLoop(originalRequest: request.request)))
         }
+    }
+
+    /// Translate -> run each command through `SudoBroker` (exactly like a manually-typed command)
+    /// -> fold the real result back into the next `translate()` call -> repeat, until the
+    /// translator says nothing more is needed or a cap above is hit. See `AIAssistantClient.swift`'s
+    /// doc comment for the full design note this implements.
+    private static func runAssistantAgentLoop(originalRequest: String) -> AssistantActionResult {
+        var steps: [AssistantStep] = []
+        var transcript = ""
+        var firstExplanation = ""
+        var stopReason = "done"
+
+        roundLoop: for round in 0..<maxAssistantRounds {
+            let prompt = round == 0
+                ? originalRequest
+                : followUpPrompt(originalRequest: originalRequest, transcript: transcript)
+            let (commands, explanation) = AIAssistantClient.translate(request: prompt)
+            if round == 0 { firstExplanation = explanation }
+
+            guard !commands.isEmpty else {
+                // Round 0 producing nothing is a translation failure/ambiguity (see `explanation`).
+                // A later round producing nothing is the normal happy path: the translator was
+                // shown everything run so far and decided the original request is satisfied.
+                stopReason = round == 0 ? "no_commands" : "done"
+                break
+            }
+
+            for (index, command) in commands.enumerated() {
+                guard steps.count < maxAssistantSteps else {
+                    stopReason = "max_steps"
+                    break roundLoop
+                }
+                // Each command goes through the SAME broker pipeline a manually-typed command
+                // does -- see AIAssistantClient.swift's doc comment for why there's no shortcut
+                // here, even inside a multi-round agent loop.
+                let result = SudoBroker.handle(command: command, reason: "AI Assistant: \"\(originalRequest)\"")
+                steps.append(AssistantStep(
+                    command: command,
+                    result: result,
+                    roundExplanation: index == 0 ? explanation : nil
+                ))
+                transcript += "$ \(command)\n\(result.approved ? "approved" : "denied") (\(result.source)): \(result.explanation)\n"
+                if let stdout = result.stdout, !stdout.isEmpty {
+                    transcript += "stdout: \(truncateForTranscript(stdout))\n"
+                }
+                if let stderr = result.stderr, !stderr.isEmpty {
+                    transcript += "stderr: \(truncateForTranscript(stderr))\n"
+                }
+            }
+
+            if round == maxAssistantRounds - 1 { stopReason = "max_rounds" }
+        }
+
+        return AssistantActionResult(translationExplanation: firstExplanation, steps: steps, stopReason: stopReason)
+    }
+
+    private static func followUpPrompt(originalRequest: String, transcript: String) -> String {
+        """
+        Continuing an in-progress admin task. The original request was: "\(originalRequest)"
+
+        Command(s) run so far and their real outcomes:
+        \(transcript)
+        If that fully accomplishes the original request, or a denial/failure means it cannot go \
+        further, respond with no commands. Otherwise return only the next command(s) still needed.
+        """
+    }
+
+    private static func truncateForTranscript(_ text: String) -> String {
+        text.count > maxAssistantTranscriptChars
+            ? String(text.prefix(maxAssistantTranscriptChars)) + "…(truncated)"
+            : text
     }
 
     func killSwitch(reply: @escaping (Data) -> Void) {

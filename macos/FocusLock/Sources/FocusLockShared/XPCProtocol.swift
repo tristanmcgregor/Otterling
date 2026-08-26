@@ -97,9 +97,12 @@ import Foundation
     func protectUser(username: String, reply: @escaping (Data) -> Void)
 
     /// The GUI "AI Assistant" chat box -- see `AIAssistantClient.swift`'s doc comment. Translates
-    /// `requestJSON` (an encoded `AssistantRequest`) into candidate command(s), then runs EACH one
+    /// `requestJSON` (an encoded `AssistantRequest`) into candidate command(s), runs EACH one
     /// through the exact same `SudoBroker` pipeline `requestElevatedCommand` uses -- never a
-    /// separate, ungated execution path. Reply is an encoded `AssistantActionResult`.
+    /// separate, ungated execution path -- then feeds the real result back for another round of
+    /// translation, multi-turn, until the assistant says nothing more is needed or
+    /// `XPCService`'s round/step caps are hit. Reply is an encoded `AssistantActionResult` covering
+    /// every round.
     func requestAssistantAction(_ requestJSON: Data, reply: @escaping (Data) -> Void)
 
     /// Emergency stop for the WHOLE app, not just content filtering: clears DNS/proxy/pf, persists
