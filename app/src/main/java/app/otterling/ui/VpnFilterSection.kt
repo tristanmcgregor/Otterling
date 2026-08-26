@@ -2,10 +2,17 @@ package app.otterling.ui
 
 import android.content.Context
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.VpnLock
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
@@ -13,6 +20,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -57,6 +65,7 @@ fun VpnFilterSection(context: Context) {
     var autoExemptCount by remember { mutableIntStateOf(0) }
     var installedApps by remember { mutableStateOf<List<InstalledAppInfo>>(emptyList()) }
     var showExemptPicker by remember { mutableStateOf(false) }
+    var showExemptManageDialog by remember { mutableStateOf(false) }
     var cloudHost by remember { mutableStateOf("") }
     var cloudPort by remember { mutableStateOf("") }
     var cloudEnabled by remember { mutableStateOf(false) }
@@ -105,6 +114,29 @@ fun VpnFilterSection(context: Context) {
                 if (enabled) VpnFilterService.reestablish(context)
                 showExemptPicker = false
             },
+        )
+    }
+
+    if (showExemptManageDialog) {
+        ExemptAppsDialog(
+            exemptPackages = exemptPackages,
+            dashboardManaged = exemptManager.dashboardExemptPackages(),
+            autoExemptCount = autoExemptCount,
+            appLabel = ::appLabel,
+            onAdd = {
+                coroutineScope.launch {
+                    if (installedApps.isEmpty()) {
+                        installedApps = withContext(Dispatchers.IO) { loadInstalledApps(context) }
+                    }
+                    showExemptPicker = true
+                }
+            },
+            onRemove = { pkg ->
+                exemptManager.remove(pkg)
+                exemptPackages = exemptManager.exemptPackages()
+                if (enabled) VpnFilterService.reestablish(context)
+            },
+            onDismiss = { showExemptManageDialog = false },
         )
     }
 
@@ -369,23 +401,12 @@ fun VpnFilterSection(context: Context) {
                 "browsing through it.",
             style = MaterialTheme.typography.bodySmall,
         )
-        Button(
-            enabled = !busy,
-            onClick = {
-                coroutineScope.launch {
-                    if (installedApps.isEmpty()) {
-                        installedApps = withContext(Dispatchers.IO) { loadInstalledApps(context) }
-                    }
-                    showExemptPicker = true
-                }
-            },
+        OutlinedButton(
+            onClick = { showExemptManageDialog = true },
+            modifier = Modifier.fillMaxWidth(),
         ) {
-            Text("Add exempt app")
+            Text("Manage exempt apps (${exemptPackages.size}, $autoExemptCount automatic)")
         }
-        Text(
-            "Automatic exemptions used: $autoExemptCount -- no cap, a newly pinned app is always auto-added",
-            style = MaterialTheme.typography.bodySmall,
-        )
         OutlinedButton(
             enabled = !logUploadBusy,
             onClick = {
@@ -406,33 +427,69 @@ fun VpnFilterSection(context: Context) {
         if (logUploadStatusMessage.isNotEmpty()) {
             Text(logUploadStatusMessage, style = MaterialTheme.typography.bodySmall)
         }
-        if (exemptPackages.isEmpty()) {
-            Text("No apps exempted.", style = MaterialTheme.typography.bodySmall)
-        } else {
-            // Dashboard-sourced entries can't be removed from here -- see
-            // MitmExemptManager.dashboardExemptPackages's doc comment: remove() only ever touches
-            // local storage, so offering a working-looking Remove button for one of these would
-            // silently do nothing (it'd just reappear on the next exemptPackages() merge).
-            val dashboardManaged = exemptManager.dashboardExemptPackages()
-            exemptPackages.forEach { pkg ->
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
-                    Text(appLabel(pkg), modifier = Modifier.weight(1f))
-                    if (pkg in dashboardManaged) {
-                        Text("Managed by dashboard", style = MaterialTheme.typography.bodySmall)
-                    } else {
-                        OutlinedButton(onClick = {
-                            exemptManager.remove(pkg)
-                            exemptPackages = exemptManager.exemptPackages()
-                            if (enabled) VpnFilterService.reestablish(context)
-                        }) {
-                            Text("Remove")
+    }
+}
+
+/**
+ * Exempt-apps list moved behind this dialog (opened from the "Manage exempt apps" button) instead
+ * of being inlined in the section -- with the default YouTube/banking exemptions plus whatever a
+ * pinning failure auto-adds, the flat list could run to a dozen+ rows and push everything below it
+ * (diagnostics, etc.) far down the Settings screen.
+ */
+@Composable
+private fun ExemptAppsDialog(
+    exemptPackages: Set<String>,
+    dashboardManaged: Set<String>,
+    autoExemptCount: Int,
+    appLabel: (String) -> String,
+    onAdd: () -> Unit,
+    onRemove: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Apps exempt from HTTPS filtering") },
+        text = {
+            Column {
+                Text(
+                    "Automatic exemptions used: $autoExemptCount -- no cap, a newly pinned app is always auto-added",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Spacer(Modifier.height(8.dp))
+                if (exemptPackages.isEmpty()) {
+                    Text("No apps exempted.", style = MaterialTheme.typography.bodySmall)
+                } else {
+                    LazyColumn(modifier = Modifier.heightIn(max = 350.dp)) {
+                        items(exemptPackages.toList(), key = { it }) { pkg ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text(appLabel(pkg), modifier = Modifier.weight(1f))
+                                if (pkg in dashboardManaged) {
+                                    // Dashboard-sourced entries can't be removed from here -- see
+                                    // MitmExemptManager.dashboardExemptPackages's doc comment:
+                                    // remove() only ever touches local storage, so offering a
+                                    // working-looking Remove button for one of these would silently
+                                    // do nothing (it'd just reappear on the next merge).
+                                    Text("Managed by dashboard", style = MaterialTheme.typography.bodySmall)
+                                } else {
+                                    OutlinedButton(onClick = { onRemove(pkg) }) {
+                                        Text("Remove")
+                                    }
+                                }
+                            }
                         }
                     }
                 }
             }
-        }
-    }
+        },
+        confirmButton = {
+            TextButton(onClick = onAdd) { Text("Add exempt app") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Close") }
+        },
+    )
 }
