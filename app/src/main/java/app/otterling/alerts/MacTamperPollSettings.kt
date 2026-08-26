@@ -34,9 +34,8 @@ class MacTamperPollSettings(context: Context) {
      *  extractable by anyone with the binary -- originally an accepted trade since `/alerts/tamper`
      *  is append-only ingestion, so the worst a leaked token bought was posting spurious alerts or
      *  reading the alert feed, not disabling any protection. That premise no longer holds on the
-     *  Mac side: once `DashboardConfigSync`/`PendingActionScheduler` shipped there, possession of
-     *  this same token is also sufficient to schedule (not instantly apply -- still bounded by the
-     *  Mac's `cooldownHours`) a Mac protection removal. See `FocusLockConstants
+     *  Mac side: once `DashboardConfigSync` shipped there, possession of this same token is also
+     *  sufficient to immediately apply a Mac protection removal. See `FocusLockConstants
      *  .defaultLockProfileToken`'s comment for the full picture. The settings field still lets a
      *  different value override this (e.g. pointing at a rotated token or a different family's
      *  server). */

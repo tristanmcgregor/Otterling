@@ -84,16 +84,6 @@ public enum FocusLockConstants {
     /// `Scripts/setup_mac_proxy.command`. Absent by default -> proxy enforcement stays inert.
     public static let proxyPasswordPath = "\(stateDirectory)/proxy_password"
 
-    /// How long an authorized protection-reducing action waits before `EnforcementLoop` applies it.
-    /// 24h is chosen to outlast an impulse rather than to be merely annoying -- the cooldown is the
-    /// part of the design that still works when the person it's slowing down holds admin, so it has
-    /// to be long enough that "wait it out" isn't a comfortable alternative to not doing it.
-    public static let defaultCooldownHours: Double = 24
-
-    /// Ceiling on `cooldownHours`, so a fat-fingered "10000" can't wedge the install into a state
-    /// where nothing can ever be removed through the supported path.
-    public static let maximumCooldownHours: Double = 24 * 30
-
     /// PayloadIdentifier of the lock profile `Scripts/install_lock_profile.py` installs (matches
     /// `PROFILE_IDENTIFIER` in `filter-server/lockprofile_service.py`). A tamper *tripwire*, not a
     /// removal lock -- see GUARDIAN_SETUP.md §6. `LockProfileGuard` polls for this identifier's
@@ -116,12 +106,11 @@ public enum FocusLockConstants {
     /// ingestion, so the worst a leaked token bought was posting spurious alerts or reading the
     /// alert feed -- **not turning off any protection**. That premise changed once
     /// `DashboardConfigSync` shipped: possession of this same token is now also sufficient to
-    /// schedule a Mac protection removal (blocked-app unblock, DNS enforcement off) through
-    /// `PendingActionScheduler`'s dashboard-authorized path -- deliberately, per this project's
-    /// plan doc, since requiring local confirmation for every remote removal would defeat the
-    /// point of a remote dashboard. The blast radius stays bounded by `cooldownHours` (a leaked
-    /// token can schedule a removal, not apply one instantly), but a leaked/extracted token is no
-    /// longer harmless-by-design the way this comment used to claim. Rotate it by regenerating
+    /// apply a Mac protection removal (blocked-app unblock, DNS enforcement off) immediately
+    /// through `DashboardConfigSync.reconcile`'s dashboard-authorized path -- deliberately, per
+    /// this project's plan doc, since requiring local confirmation for every remote removal would
+    /// defeat the point of a remote dashboard, but a leaked/extracted token is no longer
+    /// harmless-by-design the way this comment used to claim. Rotate it by regenerating
     /// `LOCKPROFILE_TOKEN` server-side and updating this constant.
     public static let defaultLockProfileHost = defaultCloudFilterHost
     public static let defaultLockProfileToken = "22ff3ed0a6b843633a6499911abb7378239e6e9e6cbd97d56e465b39d0dbdc9b"

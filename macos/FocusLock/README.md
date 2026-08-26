@@ -14,17 +14,16 @@ Mac. Otterling supports two ways of dealing with that, and you can use either:
    password, your day-to-day account is a Standard user, and the daemon checks the real uid of
    whoever calls it before honoring anything that removes a block. See
    [`GUARDIAN_SETUP.md`](GUARDIAN_SETUP.md) for that setup and its honest limits.
-2. **Passcode + cooldown** (no second account needed): you stay the only admin, and the daemon
-   gates removals on a **Guardian passcode** you don't hold — plus a **cooldown** (default 24h)
-   between authorising a change and it taking effect. Set it up with `focuslockctl set-passcode`.
+2. **Passcode** (no second account needed): you stay the only admin, and the daemon gates removals
+   on a **Guardian passcode** you don't hold. Set it up with `focuslockctl set-passcode`.
 
 Option 2 exists because on a single-admin machine the uid check in option 1 grants everything to
 the very person it's meant to slow down. Be clear-eyed about what it buys: a local admin can always
-`launchctl bootout` the daemon or delete the app, and neither gate stops that. What the passcode and
-cooldown remove is the ability to drop a block **quietly** (the watchdog re-bootstraps the daemon and
-`TamperReporter` files the event) or **impulsively** (the change lands tomorrow, not now) — which is
-the failure mode self-imposed filtering actually runs into. If nobody is on the other end of the
-tamper reports, this is a speed bump you've agreed to respect, not a lock.
+`launchctl bootout` the daemon or delete the app, and the passcode doesn't stop that. What it
+removes is the ability to drop a block **quietly** (the watchdog re-bootstraps the daemon and
+`TamperReporter` files the event) — which is the failure mode self-imposed filtering actually runs
+into. If nobody is on the other end of the tamper reports, this is a speed bump you've agreed to
+respect, not a lock.
 
 **Naming note**: the product is Otterling (matching the Android app's pivot to the same name). The
 bundle / Mach-service / LaunchDaemon / profile identifiers are all under `app.otterling*` (e.g.
@@ -66,15 +65,10 @@ assuming otherwise.
   root-only, `0600`).
 - Everything you (or anyone) can do goes through the daemon's XPC interface. The daemon itself
   decides whether to honor a call: adding a block (or turning content filtering *on*) is always
-  allowed and immediate. *Removing* one, or turning content filtering *off*, has to clear two gates:
-  the **Guardian passcode** if one is set (otherwise it falls back to the `admin`-group check, so
-  existing installs behave exactly as before until they opt in), and then the **cooldown** — a
-  correct passcode *schedules* the change rather than performing it. `EnforcementLoop` applies it
-  once due; until then it's listed in `focuslockctl status` and **anyone can cancel it without the
-  passcode**, since cancelling restores protection.
-- **Cooldown durability**: a pending change carries an absolute timestamp in the root-owned
-  `state.json`, so rebooting, restarting the daemon, or `launchctl bootout`-ing it mid-cooldown
-  neither loses the change nor makes it land early.
+  allowed and immediate. *Removing* one, or turning content filtering *off*, has to clear the
+  **Guardian passcode** if one is set (otherwise it falls back to the `admin`-group check, so
+  existing installs behave exactly as before until they opt in) -- a correct passcode applies the
+  change immediately.
 - **Content filtering (NSFW), two layers**:
   1. **Local, always-on**: a downloaded adult-domain hosts list (`AdultBlocklistManager`, same two
      sources as the Android app -- StevenBlack porn-only + The Blocklist Project's porn list),
@@ -97,10 +91,8 @@ assuming otherwise.
   touch it even with `sudo`, since it has no admin password to give `sudo` in the first place --
   and relaunches the app within one enforcement tick if it's not running.
 - There's no session or expiry: whatever's on the blocklist/protected list stays that way until a
-  removal is authorised *and* its cooldown elapses, and DNS enforcement defaults to **on** for a
-  fresh install (an existing install upgrading from an older build keeps whatever it already had).
-  Upgrading also lands on the default 24h cooldown rather than zero — a missing `cooldownHours` key
-  decodes to the default, never to "apply instantly".
+  removal is authorised, and DNS enforcement defaults to **on** for a fresh install (an existing
+  install upgrading from an older build keeps whatever it already had).
 - **App updates**: `UpdateManager` checks an update manifest hourly (and on demand via the GUI or
   `focuslockctl check-update`/`install-update`) and, on a newer version, verifies SHA-256 + a
   pinned code-signing Team Identifier before installing -- same trust chain as the Android app's
@@ -108,15 +100,14 @@ assuming otherwise.
   step for now -- no macOS build agent in the existing CI pipeline).
 - **Dashboard-driven configuration**: `DashboardConfigSync` (in `FocusLockHelperd`) polls the
   guardian dashboard's `/dashboard-api/devices/<id>/settings` every ~60s and reconciles blocked
-  apps, protected apps, DNS/proxy/cloud-filter enforcement, the cloud filter host, and the
-  removal cooldown against it -- the same web console the Android app already reads its own
-  config from (see `filter-server/dashboard/`). Same asymmetry as everything else above:
-  additions/enables from the dashboard apply immediately, removals/disables go through the same
-  passcode-free-but-cooldown-gated queue local removals use (authorized by possession of the
-  server's bearer token instead of the local passcode -- see `PendingActionScheduler.swift`'s
-  doc comment for why). The Guardian passcode itself is never dashboard-settable. A local-only
-  change made via this GUI/CLI (never touched from the dashboard) is left alone by dashboard
-  sync -- it only ever removes something it added itself.
+  apps, protected apps, DNS/proxy/cloud-filter enforcement, and the cloud filter host against it --
+  the same web console the Android app already reads its own config from (see
+  `filter-server/dashboard/`). Both additions/enables and removals/disables from the dashboard
+  apply immediately -- removals are authorized by possession of the server's bearer token instead
+  of the local passcode (see `DashboardConfigSync.reconcile`'s doc comment for why). The Guardian
+  passcode itself is never dashboard-settable. A local-only change made via this GUI/CLI (never
+  touched from the dashboard) is left alone by dashboard sync -- it only ever removes something it
+  added itself.
 
 ## Requirements
 
@@ -160,12 +151,9 @@ ps aux | grep FocusLockHelperd
 - `focuslockctl status` gives the same view from the terminal.
 - Adding to the blocklist is always allowed from any account and takes effect immediately and
   permanently; removing an entry requires the Guardian passcode (or, if none is set, the Guardian
-  admin account — see `GUARDIAN_SETUP.md`) and then waits out the cooldown.
+  admin account — see `GUARDIAN_SETUP.md`) and applies immediately once authorised.
 - Set up the passcode gate with `focuslockctl set-passcode` (prompts; never takes the passcode as
-  an argument, since `ps` can expose another process's argv). Adjust the wait with
-  `focuslockctl set-cooldown <hours>` — raising it is instant and ungated, lowering it costs the
-  passcode *and* waits out the current cooldown first. `focuslockctl cancel <id>` drops a pending
-  change, no passcode needed.
+  an argument, since `ps` can expose another process's argv).
 - After completing `GUARDIAN_SETUP.md` steps 1-4, run `Scripts/install_lock_profile.command` once
   (while logged in as the Guardian) to set up the lock-profile tripwire -- see `GUARDIAN_SETUP.md`
   §6 for exactly what it does and doesn't protect against before relying on it.
@@ -187,11 +175,9 @@ focuslockctl status
 
 # Close the single-admin hole: gate removals on a secret rather than on being admin.
 focuslockctl set-passcode          # prompts for the new passcode twice
-focuslockctl set-cooldown 24       # raising is instant; lowering is gated + waits
 
-# Removals now schedule instead of applying. `status` lists what's pending and its id.
-focuslockctl remove-domain reddit.com   # prompts for the passcode, then: "takes effect <date>"
-focuslockctl cancel <pendingActionId>   # no passcode required
+# Removals now require the passcode and apply immediately once authorised.
+focuslockctl remove-domain reddit.com   # prompts for the passcode
 ```
 
 For a protected app, `executableName` is the actual binary inside `Contents/MacOS/` (usually,
@@ -204,11 +190,11 @@ button fills both in for you from a file picker.
 ```
 Package.swift
 Sources/
-  FocusLockShared/    Models (incl. PendingAction), XPC protocol, constants, admin-group check,
-                       PasscodeHash (PBKDF2-SHA256), XPC client, cloud filter reachability probe,
+  FocusLockShared/    Models, XPC protocol, constants, admin-group check, PasscodeHash
+                       (PBKDF2-SHA256), XPC client, cloud filter reachability probe,
                        TamperReporter (shared by the daemon and the watchdog)
-  FocusLockHelperd/   The daemon: state store, XPC listener (both gates live in XPCService),
-                       PendingActionApplier, enforcement loop, DNS/pf/hosts enforcers, adult
+  FocusLockHelperd/   The daemon: state store, XPC listener (the gate lives in XPCService),
+                       ImmediateActionApplier, enforcement loop, DNS/pf/hosts enforcers, adult
                        blocklist manager, LockProfileGuard, UpdateManager, UpdateCheckLoop
 Tests/
   FocusLockSharedTests/  Passcode verification + the encode/decode split that keeps the digest on
@@ -231,7 +217,7 @@ RELEASE.md             Publishing an update -- signing identity, manifest, the C
   not a removal lock -- an admin account can always remove the profile (with their own password,
   not the `RemovalPasscode`) or unload both LaunchDaemons with `sudo launchctl bootout`. They make
   that get reported instead of silent; they don't and can't prevent it. See `GUARDIAN_SETUP.md` §6.
-- **The passcode + cooldown gate is enforced by the daemon, not by the OS.** It stops removals
+- **The passcode gate is enforced by the daemon, not by the OS.** It stops removals
   through the app, the CLI, and the XPC surface generally -- it does nothing about an admin with a
   terminal, who can unload both LaunchDaemons, delete `/Applications/Otterling.app`, or edit
   `/etc/hosts` directly, none of which goes through XPC at all. Combined with the watchdog and

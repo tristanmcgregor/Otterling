@@ -2,8 +2,8 @@ import XCTest
 @testable import FocusLockShared
 
 /// These cover the failure modes that wouldn't show up as a crash or a visibly broken app: a
-/// passcode digest leaking to unprivileged callers, a passcode silently vanishing across a save,
-/// or an upgrade quietly landing on a zero-length cooldown.
+/// passcode digest leaking to unprivileged callers, or a passcode silently vanishing across a
+/// save.
 final class PasscodeAndStateTests: XCTestCase {
 
     // Every `make` uses a fresh random salt, so the cheap iteration count here is only about
@@ -91,26 +91,11 @@ final class PasscodeAndStateTests: XCTestCase {
         XCTAssertTrue(PasscodeHash.verify(passcode: "hunter2hunter2", against: decoded!.guardianPasscode!))
     }
 
-    func testPendingActionsRoundTrip() {
-        let action = PendingAction(
-            kind: .removeBlockedDomain,
-            target: "reddit.com",
-            requestedAt: Date(timeIntervalSince1970: 1_700_000_000),
-            effectiveAt: Date(timeIntervalSince1970: 1_700_086_400)
-        )
-        let state = FocusLockState(pendingActions: [action])
-        let decoded = FocusLockCodec.decode(FocusLockState.self, from: FocusLockCodec.encode(state))
-
-        XCTAssertEqual(decoded?.pendingActions.count, 1)
-        XCTAssertEqual(decoded?.pendingActions.first?.id, action.id)
-        XCTAssertEqual(decoded?.pendingActions.first?.kind, .removeBlockedDomain)
-        XCTAssertEqual(decoded?.pendingActions.first?.target, "reddit.com")
-    }
-
-    /// A state.json written by a build that predates all of this must not decode into "no cooldown"
-    /// -- that would hand every upgrading install instant removals, the exact thing the field exists
-    /// to prevent.
-    func testLegacyStateDecodesWithDefaultCooldownAndNoPasscode() {
+    /// A state.json written by a build that predates the passcode/pendingActions/cooldown fields
+    /// (all now removed, but an existing install's on-disk file may still carry their old JSON
+    /// keys) must still decode cleanly and keep existing blocks -- Codable ignores keys with no
+    /// matching property rather than failing the whole decode.
+    func testLegacyStateDecodesCleanlyWithNoPasscode() {
         let legacy = """
         {
           "blockedApps": [],
@@ -119,39 +104,15 @@ final class PasscodeAndStateTests: XCTestCase {
           "dnsEnforcementEnabled": true,
           "cloudFilterHost": "vpn.bartholomew.help",
           "cloudFilterEnabled": true,
-          "lockProfileInstalled": false
+          "lockProfileInstalled": false,
+          "cooldownHours": 24,
+          "pendingActions": []
         }
         """.data(using: .utf8)!
 
         let decoded = FocusLockCodec.decode(FocusLockState.self, from: legacy)
-        XCTAssertEqual(decoded?.cooldownHours, FocusLockConstants.defaultCooldownHours)
         XCTAssertNil(decoded?.guardianPasscode)
         XCTAssertFalse(decoded?.passcodeConfigured ?? true)
-        XCTAssertEqual(decoded?.pendingActions.count, 0)
         XCTAssertEqual(decoded?.blockedDomains, ["example.com"], "existing blocks must survive the upgrade")
-    }
-
-    // MARK: - Cooldown maturity
-
-    func testIsMatureOnlyAfterEffectiveAt() {
-        let now = Date()
-        let action = PendingAction(
-            kind: .disableDNSEnforcement,
-            target: "",
-            requestedAt: now,
-            effectiveAt: now.addingTimeInterval(3600)
-        )
-        XCTAssertFalse(action.isMature(asOf: now))
-        XCTAssertFalse(action.isMature(asOf: now.addingTimeInterval(3599)))
-        XCTAssertTrue(action.isMature(asOf: now.addingTimeInterval(3601)))
-    }
-
-    func testDescribedFullyOmitsEmptyTarget() {
-        let now = Date()
-        let noTarget = PendingAction(kind: .disableDNSEnforcement, target: "", requestedAt: now, effectiveAt: now)
-        let withTarget = PendingAction(kind: .removeBlockedDomain, target: "reddit.com", requestedAt: now, effectiveAt: now)
-
-        XCTAssertEqual(noTarget.describedFully, "Turn off DNS enforcement")
-        XCTAssertEqual(withTarget.describedFully, "Unblock site reddit.com")
     }
 }

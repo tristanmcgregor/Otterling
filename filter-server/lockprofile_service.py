@@ -996,15 +996,15 @@ REPORT_TYPE_ITEM_RE = re.compile(r"^/dashboard-api/report-types/([A-Za-z0-9_]+)$
 # settings at all -- see GUARDIAN_PIN_PATH / the global /dashboard-api/pin route, and
 # HABITS_PATH / /dashboard-api/habits, below.
 #
-# cooldownHours/proxyFilter/cloudFilterHost/cloudFilterEnabled are macos-only (see
-# DashboardConfigSync.swift's reconcile) -- meaningless for Android, same as protections is
-# meaningless for macOS. Deliberately default to None/absent in _default_device_settings rather
-# than a concrete value: DashboardConfigSync only reconciles a field when it's non-null, which
-# keeps "the guardian genuinely wants this value" distinct from "this device record's updatedAt
-# happened to be set by an unrelated edit" -- see that file's reconcile() doc comment.
+# proxyFilter/cloudFilterHost/cloudFilterEnabled are macos-only (see DashboardConfigSync.swift's
+# reconcile) -- meaningless for Android, same as protections is meaningless for macOS. Deliberately
+# default to None/absent in _default_device_settings rather than a concrete value:
+# DashboardConfigSync only reconciles a field when it's non-null, which keeps "the guardian
+# genuinely wants this value" distinct from "this device record's updatedAt happened to be set by
+# an unrelated edit" -- see that file's reconcile() doc comment.
 SETTINGS_PATCH_ALLOWED_KEYS = {
     "device_name", "protections", "vpnFilter", "frictionDelay",
-    "cooldownHours", "proxyFilter", "cloudFilterHost", "cloudFilterEnabled",
+    "proxyFilter", "cloudFilterHost", "cloudFilterEnabled",
 }
 
 
@@ -1355,9 +1355,8 @@ def _default_device_settings(device_id: str = "") -> dict:
         # macos-only, deliberately None ("no opinion") rather than a concrete value that would
         # only coincidentally match a fresh Mac install's own defaults -- see
         # SETTINGS_PATCH_ALLOWED_KEYS's comment for why. A guardian must explicitly interact with
-        # the dashboard's Proxy/Cloud Filter Host/Cooldown controls at least once before
-        # DashboardConfigSync reconciles any of these against the Mac.
-        "cooldownHours": None,
+        # the dashboard's Proxy/Cloud Filter Host controls at least once before DashboardConfigSync
+        # reconciles any of these against the Mac.
         "proxyFilter": None,
         "cloudFilterHost": None,
         "cloudFilterEnabled": None,

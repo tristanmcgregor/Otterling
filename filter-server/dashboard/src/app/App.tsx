@@ -797,16 +797,14 @@ function SettingsScreen({
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [removing, setRemoving] = useState(false);
   const [nameDraft, setNameDraft] = useState("");
-  const [cooldownDraft, setCooldownDraft] = useState("");
   const [cloudFilterHostDraft, setCloudFilterHostDraft] = useState("");
   const [pollingDevice, setPollingDevice] = useState(false);
   const [pollDeviceResult, setPollDeviceResult] = useState<string | null>(null);
 
   useEffect(() => {
     setNameDraft(settings?.device_name ?? "");
-    setCooldownDraft(settings?.cooldownHours != null ? String(settings.cooldownHours) : "");
     setCloudFilterHostDraft(settings?.cloudFilterHost ?? "");
-  }, [settings?.device_name, settings?.cooldownHours, settings?.cloudFilterHost]);
+  }, [settings?.device_name, settings?.cloudFilterHost]);
 
   if (!settings) {
     return <div className="p-7 text-sm text-on-surface-variant">Loading…</div>;
@@ -877,44 +875,13 @@ function SettingsScreen({
               </h3>
               <p className="text-xs text-on-surface-variant leading-relaxed">
                 Sudo-elevation gating and trigger-word reporting run locally and aren't
-                configurable here. Turning something on (blocking an app, protecting an app,
-                enabling filtering) applies immediately. Turning something off — unblocking an
-                app, removing protection, disabling filtering, lowering the cooldown, repointing
-                the filter host — is delayed by this Mac's own cooldown period before it actually
-                takes effect; check the Activity Log for status. Website blocking, app time
+                configurable here. Every change here — blocking or unblocking an app, protecting
+                or unprotecting an app, enabling or disabling filtering, repointing the filter
+                host — applies immediately, gated by this Mac's own Guardian passcode for anything
+                protection-reducing; check the Activity Log for status. Website blocking, app time
                 budgets, and habits & rules are phone-only features and stay hidden for this
                 device.
               </p>
-            </Card>
-          </div>
-
-          {/* Removal cooldown */}
-          <div className="space-y-3">
-            <SectionLabel>Removal Cooldown</SectionLabel>
-            <Card className="rounded-2xl">
-              <p className="text-xs text-on-surface-variant mb-2">
-                How long a protection-reducing change waits before it actually takes effect.
-                Raising it applies immediately; lowering it is itself delayed by the current
-                cooldown.
-              </p>
-              <div className="flex items-center gap-3">
-                <input
-                  type="number"
-                  min={0}
-                  max={720}
-                  value={cooldownDraft}
-                  onChange={(e) => setCooldownDraft(e.target.value)}
-                  className="w-24 h-9 px-3 rounded-xl border border-outline bg-surface text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-                />
-                <span className="text-xs text-on-surface-variant">hours</span>
-                <Button
-                  variant="tonal"
-                  size="sm"
-                  onClick={() => api.patchSettings(deviceId, { cooldownHours: Number(cooldownDraft) || 0 }).then(onChanged)}
-                >
-                  Save
-                </Button>
-              </div>
             </Card>
           </div>
 
@@ -965,7 +932,7 @@ function SettingsScreen({
                   </Button>
                 </div>
                 <p className="text-xs text-on-surface-variant">
-                  Repointing the host is always delayed by the cooldown, even to "fix" it.
+                  Repointing the host always requires the Guardian passcode, even to "fix" it.
                 </p>
               </div>
             </Card>
@@ -1112,8 +1079,8 @@ function SettingsScreen({
                 <>
                   Fully blocks an app, all the time. Use the exact process/executable name as it
                   appears in Activity Monitor (e.g. <code>Safari</code>) — not the app's display
-                  name or bundle identifier. Removing a block here takes effect after this Mac's
-                  own cooldown period, not instantly — check the Activity Log for status.
+                  name or bundle identifier. Removing a block here applies immediately once this
+                  Mac's Guardian passcode authorizes it — check the Activity Log for status.
                 </>
               ) : (
                 <>

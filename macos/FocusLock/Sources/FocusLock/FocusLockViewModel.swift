@@ -22,7 +22,6 @@ final class FocusLockViewModel: ObservableObject {
     @Published var newPasscodeText: String = ""
     @Published var confirmPasscodeText: String = ""
     @Published var passcodeStatusText: String?
-    @Published var cooldownHoursText: String = ""
 
     // MARK: Sudo broker terminal (see SudoBroker.swift) -- inert until the account is converted to
     // Standard, but the UI works the same either way since it's just a front-end for the XPC call.
@@ -63,7 +62,6 @@ final class FocusLockViewModel: ObservableObject {
     }
 
     private var pendingUpdateManifest: UpdateManifest?
-    private var didSeedCooldownText = false
 
     private let client = FocusLockXPCClient()
     private var pollTask: Task<Void, Never>?
@@ -87,12 +85,6 @@ final class FocusLockViewModel: ObservableObject {
             if !didSeedHostText {
                 cloudFilterHostText = status.cloudFilterHost
                 didSeedHostText = true
-            }
-            // Same one-shot seeding as the host field, and for the same reason: the 1s poll would
-            // otherwise overwrite an in-progress edit.
-            if !didSeedCooldownText {
-                cooldownHoursText = String(Int(status.cooldownHours))
-                didSeedCooldownText = true
             }
         }
     }
@@ -144,10 +136,6 @@ final class FocusLockViewModel: ObservableObject {
     func setCloudFilterEnabled(_ enabled: Bool) {
         // Turning it on is ungated; only the off direction needs the passcode.
         Task { await handleGated(await client.setCloudFilterEnabled(enabled, passcode: passcodeText)) }
-    }
-
-    func cancelPendingAction(_ id: String) {
-        Task { await handle(await client.cancelPendingAction(id: id)) }
     }
 
     func runTerminalCommand() {
@@ -210,14 +198,6 @@ final class FocusLockViewModel: ObservableObject {
         }
     }
 
-    func saveCooldownHours() {
-        guard let hours = Double(cooldownHoursText.trimmingCharacters(in: .whitespaces)) else {
-            errorMessage = "Cooldown must be a number of hours."
-            return
-        }
-        Task { await handleGated(await client.setCooldownHours(hours, passcode: passcodeText)) }
-    }
-
     func testCloudFilterReachability() {
         let host = cloudFilterHostText.trimmingCharacters(in: .whitespaces)
         guard !host.isEmpty else {
@@ -278,9 +258,8 @@ final class FocusLockViewModel: ObservableObject {
         await refreshOnce()
     }
 
-    /// For passcode-gated calls. Surfaces the success message too (unlike `handle`), because a
-    /// scheduled action's reply is where the user finds out *when* it lands and how to cancel it --
-    /// silently succeeding would make a 24h-delayed change look like a no-op.
+    /// For passcode-gated calls. Surfaces the success message too (unlike `handle`), since a
+    /// denial (wrong passcode, lockout) is the interesting case here.
     private func handleGated(_ result: FocusLockResult) async {
         errorMessage = result.message
         // Never leave the passcode sitting in a bound field after it's been spent.

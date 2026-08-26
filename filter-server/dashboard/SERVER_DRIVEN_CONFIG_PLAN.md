@@ -10,13 +10,14 @@ today. As of 2026-08-22:
   `GuardianAlertSettings`) reads from it. Phases 0-7 below are all done; only Phase 8 (deciding
   whether to remove the on-device Settings UI for migrated items) remains open.
 - macOS: `DashboardConfigSync.swift` (macos/FocusLock/Sources/FocusLockHelperd/) does the Mac
-  equivalent -- blocked/protected apps, DNS/proxy/cloud-filter enforcement, the cloud filter
-  host, and the removal cooldown are all dashboard-driven there too, following the same
-  additions-immediate/removals-cooldown-gated shape as the Mac's own local XPC handlers already
-  used. This was never part of the original plan below (Android-only) -- see
-  `/home/admin/.claude/plans/inherited-beaming-church.md` for that design's own decisions
-  (notably: `guardianPasscode` is deliberately NOT dashboard-settable, and per-device website
-  blocking was dropped as dead code on the Mac in favor of a future shared/global blocklist).
+  equivalent -- blocked/protected apps, DNS/proxy/cloud-filter enforcement, and the cloud filter
+  host are all dashboard-driven there too. Both additions and removals apply immediately, the
+  same shape as the Mac's own local XPC handlers use. This was never part of the original plan
+  below (Android-only) -- see `/home/admin/.claude/plans/inherited-beaming-church.md` for that
+  design's own decisions (notably: `guardianPasscode` is deliberately NOT dashboard-settable, and
+  per-device website blocking was dropped as dead code on the Mac in favor of a future
+  shared/global blocklist). The Mac's removal-delay ("cooldown") gate was removed entirely as of
+  2026-08-26 -- see `/home/admin/.claude/plans/mutable-bubbling-wren.md`.
 
 ## Goal
 

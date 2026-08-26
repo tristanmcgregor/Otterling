@@ -67,13 +67,12 @@ side against your real uid, not anything the client claims. Blocking itself is u
 permanent once added: there's no timer to wait out, only removal by the Guardian lifts it.
 
 **One more removal path, added since this doc was first written**: the guardian dashboard
-(`filter-server/dashboard/`) can also schedule a removal remotely, via `DashboardConfigSync`
+(`filter-server/dashboard/`) can also apply a removal remotely, via `DashboardConfigSync`
 (README.md's "Dashboard-driven configuration"). That path is authorized by possession of the
 server's `LOCKPROFILE_TOKEN` bearer, not the local admin-group check or passcode above -- a
 deliberate tradeoff (see `/home/admin/.claude/plans/inherited-beaming-church.md`) accepted
 because that token was already extractable from the shipped binary and posting spurious alerts.
-It's still bounded by the same cooldown as every other removal, and still fully audited via
-`TamperReporter`.
+It's still fully audited via `TamperReporter`.
 
 **Does not protect against**, because no software running under an admin-controlled OS can:
 

@@ -47,7 +47,7 @@ final class EnforcementLoop {
     // The pf force-through only runs while this is true, so a down proxy can't take web access offline.
     private var proxyActive = false
     // One-shot reconcile: if a previous run left the system proxy set but enforcement is now off,
-    // clear it once at startup (the normal disable path goes through PendingActionApplier instead).
+    // clear it once at startup (the normal disable path goes through ImmediateActionApplier instead).
     private var didReconcileProxyDisabled = false
 
     // Debounces relaunch attempts per app so a slow-starting process (which won't show up in a
@@ -126,19 +126,6 @@ final class EnforcementLoop {
         queue.async { [weak self] in
             guard let self, let stateStore = self.stateStore else { return }
 
-            // Before reading state for this tick: apply anything whose cooldown has elapsed, so
-            // the rest of the tick enforces the post-change state rather than lagging by up to 3s.
-            // Runs off the timer rather than a scheduled wake-up on purpose -- a `PendingAction`
-            // matures based on the timestamp persisted in state.json, so a reboot, a daemon
-            // restart, or a `launchctl bootout` in the middle of a cooldown neither loses the
-            // action nor lets it land early.
-            let applied = PendingActionApplier.applyMatured(stateStore: stateStore)
-            for action in applied {
-                FileHandle.standardError.write(
-                    "[cooldown] applied: \(action.describedFully)\n".data(using: .utf8)!
-                )
-            }
-
             let state = stateStore.snapshot()
 
             // Kill-switch state: `protectionEnabled` is only ever set false by
@@ -207,9 +194,9 @@ final class EnforcementLoop {
             // SERVER_DRIVEN_CONFIG_PLAN.md-style dashboard control for the Mac -- see
             // DashboardConfigSync.swift's header doc comment for the full picture. Two
             // independent fetches on the same cadence: this device's own settings (reconciled
-            // against blockedApps/protectedApps/DNS/proxy/cloud-filter/cooldown), and the
-            // fleet-wide habit library + completion state (read by RuleBlockEnforcer below, not
-            // reconciled here at all).
+            // against blockedApps/protectedApps/DNS/proxy/cloud-filter), and the fleet-wide habit
+            // library + completion state (read by RuleBlockEnforcer below, not reconciled here at
+            // all).
             let dashboardSyncNow = Date()
             if self.lastDashboardSyncAt == nil || dashboardSyncNow.timeIntervalSince(self.lastDashboardSyncAt!) >= self.dashboardSyncInterval {
                 DashboardConfigSync.fetch(stateStore: stateStore)

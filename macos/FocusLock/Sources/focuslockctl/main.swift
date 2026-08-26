@@ -11,34 +11,32 @@ func printUsage() {
     focuslockctl -- Otterling command-line control
 
     Blocking is unconditional and permanent: anything added below is enforced 24/7 until removed.
-    Adding is always allowed and immediate. Removing needs the Guardian passcode AND waits out a
-    cooldown before it takes effect -- see `set-passcode` / `set-cooldown` below.
+    Adding is always allowed and immediate. Removing needs the Guardian passcode -- see
+    `set-passcode` below -- and takes effect immediately once authorized.
 
     Usage:
       focuslockctl status
       focuslockctl add-domain <domain>
-      focuslockctl remove-domain <domain>                 (passcode + cooldown)
+      focuslockctl remove-domain <domain>                 (passcode)
       focuslockctl add-app <displayName> <executableName>
-      focuslockctl remove-app <executableName>            (passcode + cooldown)
+      focuslockctl remove-app <executableName>            (passcode)
 
       focuslockctl add-protected-app <displayName> <executableName> <bundlePath>
-      focuslockctl remove-protected-app <executableName>  (passcode + cooldown)
+      focuslockctl remove-protected-app <executableName>  (passcode)
 
       focuslockctl enable-dns
-      focuslockctl disable-dns                            (passcode + cooldown)
-      focuslockctl set-filter-host <host>                 (passcode + cooldown)
+      focuslockctl disable-dns                            (passcode)
+      focuslockctl set-filter-host <host>                 (passcode)
 
       focuslockctl enable-proxy [--force]                 (route web through mitmproxy; --force also
                                                            firewall-blocks direct :80/:443)
-      focuslockctl disable-proxy                          (passcode + cooldown)
+      focuslockctl disable-proxy                          (passcode)
 
       focuslockctl set-passcode                           (prompts; no passcode set = no prompt)
-      focuslockctl clear-passcode                         (passcode + cooldown)
-      focuslockctl set-cooldown <hours>                   (raising is free; lowering is gated)
-      focuslockctl cancel <pendingActionId>               (always allowed, no passcode)
+      focuslockctl clear-passcode                         (passcode)
 
       focuslockctl check-update
-      focuslockctl install-update                         (passcode, no cooldown)
+      focuslockctl install-update                         (passcode)
 
       focuslockctl killswitch                              (emergency stop for the WHOLE app: clears
                                                             DNS/proxy/pf, stops the trigger-word
@@ -79,22 +77,19 @@ func printUsage() {
                                                             who knows it. Inert until the account is
                                                             actually converted to Standard.)
 
-    The two gates, and why they're shaped this way:
+    The gate, and why it's shaped this way:
 
       Passcode -- once set, it replaces the `admin`-group check entirely. That check assumed the
       Guardian-account split (your daily account Standard, a separate account admin); on a machine
       where you are the only admin it grants you everything, which is the hole this closes. Give
       the passcode to someone else, or store it somewhere you can't reach on impulse. Passcodes are
-      read from a prompt, never argv -- `ps` can expose another process's arguments.
+      read from a prompt, never argv -- `ps` can expose another process's arguments. A correct
+      passcode applies the change immediately and is reported to the filter server the moment it's
+      requested.
 
-      Cooldown -- a correct passcode SCHEDULES the change rather than making it. It lands
-      `cooldownHours` later (default 24h) and is reported to the filter server the moment it's
-      requested. Anyone can cancel a scheduled change without the passcode, because cancelling
-      restores protection.
-
-    Neither gate stops a local admin with a terminal: you can always unload the daemon. The
+    The gate doesn't stop a local admin with a terminal: you can always unload the daemon. The
     watchdog re-bootstraps it and the tamper report is filed either way, so what you cannot do is
-    remove protection QUIETLY or IMPULSIVELY. That is the whole claim -- see GUARDIAN_SETUP.md.
+    remove protection QUIETLY. See GUARDIAN_SETUP.md.
 
     Protected apps (e.g. an accountability app) can't be quit -- the daemon relaunches them
     within seconds -- or deleted -- their bundle is locked with the filesystem-level immutable
@@ -130,12 +125,6 @@ func passcodeIfConfigured(_ state: FocusLockState?) -> String {
     return prompt("Guardian passcode: ")
 }
 
-func formatHours(_ hours: Double) -> String {
-    if hours <= 0 { return "none (changes apply immediately)" }
-    if hours < 1 { return "\(Int((hours * 60).rounded()))m" }
-    return hours == hours.rounded() ? "\(Int(hours))h" : String(format: "%.1fh", hours)
-}
-
 func formatState(_ state: FocusLockState) -> String {
     var lines: [String] = []
     if !state.protectionEnabled {
@@ -168,21 +157,6 @@ func formatState(_ state: FocusLockState) -> String {
         lines.append("⚠️  Guardian passcode: NOT set -- removals fall back to the admin-group check, " +
                       "which grants everything to any admin account (including this one). " +
                       "Run `focuslockctl set-passcode`.")
-    }
-    lines.append("Removal cooldown: \(formatHours(state.cooldownHours))")
-
-    if !state.pendingActions.isEmpty {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .short
-        lines.append("Pending changes (\(state.pendingActions.count)) -- cancel with `focuslockctl cancel <id>`:")
-        for action in state.pendingActions.sorted(by: { $0.effectiveAt < $1.effectiveAt }) {
-            let when = action.isMature()
-                ? "due now"
-                : "takes effect \(formatter.string(from: action.effectiveAt))"
-            lines.append("  - \(action.describedFully) -- \(when)")
-            lines.append("      id: \(action.id)")
-        }
     }
     if state.lockProfileInstalled {
         lines.append("Lock profile: installed")
@@ -353,22 +327,11 @@ Task {
         printResult(await client.setGuardianPasscode(newPasscode: new, currentPasscode: current))
 
     case "clear-passcode":
-        // Empty newPasscode is the daemon's signal to queue removal of the passcode entirely.
+        // Empty newPasscode is the daemon's signal to remove the passcode entirely.
         printResult(await client.setGuardianPasscode(
             newPasscode: "",
             currentPasscode: passcodeIfConfigured(await client.getStatus())
         ))
-
-    case "set-cooldown":
-        guard arguments.count >= 3, let hours = Double(arguments[2]) else { printUsage(); finished = true; exit(1) }
-        let state = await client.getStatus()
-        // Raising the cooldown is ungated, so don't ask for a passcode we don't need.
-        let needsPasscode = hours < (state?.cooldownHours ?? 0)
-        printResult(await client.setCooldownHours(hours, passcode: needsPasscode ? passcodeIfConfigured(state) : ""))
-
-    case "cancel":
-        guard arguments.count >= 3 else { printUsage(); finished = true; exit(1) }
-        printResult(await client.cancelPendingAction(id: arguments[2]))
 
     case "check-update":
         switch await client.checkForUpdate() {

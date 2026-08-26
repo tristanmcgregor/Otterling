@@ -1,20 +1,19 @@
 import Foundation
 import FocusLockShared
 
-/// Implements the daemon side of FocusLockXPCProtocol, and is where both gates live.
+/// Implements the daemon side of FocusLockXPCProtocol, and is where the gate lives.
 ///
 /// Every protection-reducing call (removing a block, disabling DNS enforcement, clearing a
 /// protection) requires the caller to be in the admin (Guardian) group -- this is unconditional and
 /// never bypassed. When a Guardian passcode is also set, it is required *in addition* to admin-group
-/// membership (and then the cooldown before the change lands). The two layers cover different
-/// deployments: with the classic Guardian-account split (daily account Standard, separate admin
-/// account) the admin-group check alone already gates removals; on a machine where the daily user is
-/// the only admin, that check is satisfied automatically, so the partner-held passcode is what
-/// actually gates a removal. Either way a Standard account can never remove or disable protections,
-/// while adding blocks / enabling filtering stays open to any caller.
+/// membership. The two layers cover different deployments: with the classic Guardian-account split
+/// (daily account Standard, separate admin account) the admin-group check alone already gates
+/// removals; on a machine where the daily user is the only admin, that check is satisfied
+/// automatically, so the partner-held passcode is what actually gates a removal. Either way a
+/// Standard account can never remove or disable protections, while adding blocks / enabling
+/// filtering stays open to any caller.
 ///
-/// Clearing the gate doesn't perform the change -- `schedule` queues it for `cooldownHours` and
-/// `EnforcementLoop` applies it later. See `PendingActionApplier`.
+/// Clearing the gate applies the change immediately via `ImmediateActionApplier`.
 final class XPCService: NSObject, FocusLockXPCProtocol {
     private let stateStore: StateStore
     private let onStateChanged: () -> Void
@@ -57,7 +56,7 @@ final class XPCService: NSObject, FocusLockXPCProtocol {
         }
 
         // Passcode configured: admin-group AND a correct passcode are both required (defence in
-        // depth), then the cooldown before the change actually lands.
+        // depth).
         if let until = currentLockout(), until > Date() {
             let seconds = Int(until.timeIntervalSinceNow.rounded(.up))
             return "Too many incorrect passcode attempts. Try again in \(seconds)s."
@@ -96,15 +95,10 @@ final class XPCService: NSObject, FocusLockXPCProtocol {
         lockedOutUntil = nil
     }
 
-    /// Queues an authorized protection-reducing action for the cooldown, or applies it inline when
-    /// the cooldown is zero. Reports the request immediately either way -- the point of the paper
-    /// trail is that it exists at *request* time, well before the change lands. Delegates to
-    /// `PendingActionScheduler` (shared with `DashboardConfigSync`'s dashboard-authorized removal
-    /// path) -- see that file's doc comment.
-    private func schedule(_ kind: PendingActionKind, target: String = "") -> FocusLockResult {
-        PendingActionScheduler.schedule(
-            kind, target: target, source: "local_admin", stateStore: stateStore, onScheduled: onStateChanged
-        )
+    /// Audit trail for an authorized, immediately-applied protection-reducing change -- see
+    /// `TamperReporter`.
+    private func reportRemoval(_ description: String) {
+        TamperReporter.report(type: "protection_removed", details: "\(description) (source: local_admin)")
     }
 
     func getStatus(reply: @escaping (Data?) -> Void) {
@@ -158,7 +152,10 @@ final class XPCService: NSObject, FocusLockXPCProtocol {
             reply(FocusLockCodec.encode(FocusLockResult.denied("No blocked app named \(executableName).")))
             return
         }
-        reply(FocusLockCodec.encode(schedule(.removeBlockedApp, target: executableName)))
+        ImmediateActionApplier.removeBlockedApp(executableName, stateStore: stateStore)
+        reportRemoval("Unblock app \(executableName)")
+        onStateChanged()
+        reply(FocusLockCodec.encode(FocusLockResult.ok))
     }
 
     func removeBlockedDomain(_ domain: String, passcode: String, reply: @escaping (Data) -> Void) {
@@ -171,7 +168,10 @@ final class XPCService: NSObject, FocusLockXPCProtocol {
             reply(FocusLockCodec.encode(FocusLockResult.denied("\(normalized) is not on the manual block list.")))
             return
         }
-        reply(FocusLockCodec.encode(schedule(.removeBlockedDomain, target: normalized)))
+        ImmediateActionApplier.removeBlockedDomain(normalized, stateStore: stateStore)
+        reportRemoval("Unblock site \(normalized)")
+        onStateChanged()
+        reply(FocusLockCodec.encode(FocusLockResult.ok))
     }
 
     func addProtectedApp(_ appJSON: Data, reply: @escaping (Data) -> Void) {
@@ -196,9 +196,10 @@ final class XPCService: NSObject, FocusLockXPCProtocol {
             reply(FocusLockCodec.encode(FocusLockResult.denied("No protected app named \(executableName).")))
             return
         }
-        // The bundle stays `schg`-locked and kept-alive for the whole cooldown -- unlocking happens
-        // in PendingActionApplier when the action matures, not here.
-        reply(FocusLockCodec.encode(schedule(.removeProtectedApp, target: executableName)))
+        ImmediateActionApplier.removeProtectedApp(executableName, stateStore: stateStore)
+        reportRemoval("Stop protecting app \(executableName)")
+        onStateChanged()
+        reply(FocusLockCodec.encode(FocusLockResult.ok))
     }
 
     func enableDNSEnforcement(reply: @escaping (Data) -> Void) {
@@ -216,7 +217,10 @@ final class XPCService: NSObject, FocusLockXPCProtocol {
             reply(FocusLockCodec.encode(FocusLockResult.denied("DNS enforcement is already off.")))
             return
         }
-        reply(FocusLockCodec.encode(schedule(.disableDNSEnforcement)))
+        ImmediateActionApplier.disableDNSEnforcement(stateStore: stateStore)
+        reportRemoval("Turn off DNS enforcement")
+        onStateChanged()
+        reply(FocusLockCodec.encode(FocusLockResult.ok))
     }
 
     func enableProxyEnforcement(forceViaFirewall: Bool, reply: @escaping (Data) -> Void) {
@@ -255,7 +259,10 @@ final class XPCService: NSObject, FocusLockXPCProtocol {
             reply(FocusLockCodec.encode(FocusLockResult.denied("Proxy enforcement is already off.")))
             return
         }
-        reply(FocusLockCodec.encode(schedule(.disableProxyEnforcement)))
+        ImmediateActionApplier.disableProxyEnforcement(stateStore: stateStore)
+        reportRemoval("Turn off proxy enforcement")
+        onStateChanged()
+        reply(FocusLockCodec.encode(FocusLockResult.ok))
     }
 
     func setCloudFilterHost(_ host: String, passcode: String, reply: @escaping (Data) -> Void) {
@@ -277,11 +284,14 @@ final class XPCService: NSObject, FocusLockXPCProtocol {
             reply(FocusLockCodec.encode(FocusLockResult.denied("Invalid host")))
             return
         }
-        reply(FocusLockCodec.encode(schedule(.setCloudFilterHost, target: normalized)))
+        ImmediateActionApplier.setCloudFilterHost(normalized, stateStore: stateStore)
+        reportRemoval("Repoint cloud filter to \(normalized)")
+        onStateChanged()
+        reply(FocusLockCodec.encode(FocusLockResult.ok))
     }
 
     func setCloudFilterEnabled(_ enabled: Bool, passcode: String, reply: @escaping (Data) -> Void) {
-        // Turning it ON is protection-increasing: immediate, no gate, no cooldown.
+        // Turning it ON is protection-increasing: immediate, no gate.
         if enabled {
             ImmediateActionApplier.enableCloudFilter(stateStore: stateStore)
             onStateChanged()
@@ -297,14 +307,17 @@ final class XPCService: NSObject, FocusLockXPCProtocol {
             reply(FocusLockCodec.encode(FocusLockResult.denied("The cloud filter is already off.")))
             return
         }
-        reply(FocusLockCodec.encode(schedule(.disableCloudFilter)))
+        ImmediateActionApplier.disableCloudFilter(stateStore: stateStore)
+        reportRemoval("Turn off the cloud filter")
+        onStateChanged()
+        reply(FocusLockCodec.encode(FocusLockResult.ok))
     }
 
     func setGuardianPasscode(newPasscode: String, currentPasscode: String, reply: @escaping (Data) -> Void) {
         let existing = stateStore.snapshot().guardianPasscode
 
-        // Requesting removal of the passcode: protection-reducing, so it needs the current passcode
-        // and then waits out the cooldown like any other removal.
+        // Requesting removal of the passcode: protection-reducing, so it needs the current
+        // passcode, same as any other removal.
         guard !newPasscode.isEmpty else {
             guard existing != nil else {
                 reply(FocusLockCodec.encode(FocusLockResult.denied("No Guardian passcode is set.")))
@@ -314,7 +327,10 @@ final class XPCService: NSObject, FocusLockXPCProtocol {
                 reply(FocusLockCodec.encode(FocusLockResult.denied(denial)))
                 return
             }
-            reply(FocusLockCodec.encode(schedule(.clearPasscode)))
+            ImmediateActionApplier.clearPasscode(stateStore: stateStore)
+            reportRemoval("Remove the Guardian passcode")
+            onStateChanged()
+            reply(FocusLockCodec.encode(FocusLockResult.ok))
             return
         }
 
@@ -324,8 +340,8 @@ final class XPCService: NSObject, FocusLockXPCProtocol {
         }
 
         // Setting the first passcode only ever adds a gate, so it's ungated -- but it is a
-        // one-way door in practice (removing it costs the passcode plus a full cooldown), which is
-        // the point. Rotating an existing one requires the current passcode.
+        // one-way door in practice (removing it costs the current passcode), which is the point.
+        // Rotating an existing one requires the current passcode.
         if existing != nil {
             if let denial = authorize(passcode: currentPasscode, action: "change the Guardian passcode") {
                 reply(FocusLockCodec.encode(FocusLockResult.denied(denial)))
@@ -349,50 +365,9 @@ final class XPCService: NSObject, FocusLockXPCProtocol {
         reply(FocusLockCodec.encode(FocusLockResult(
             success: true,
             message: existing == nil
-                ? "Guardian passcode set. Removals now require it, plus a \(Int(stateStore.snapshot().cooldownHours))h cooldown."
+                ? "Guardian passcode set. Removals now require it."
                 : "Guardian passcode changed."
         )))
-    }
-
-    func setCooldownHours(_ hours: Double, passcode: String, reply: @escaping (Data) -> Void) {
-        guard hours >= 0 else {
-            reply(FocusLockCodec.encode(FocusLockResult.denied("Cooldown can't be negative.")))
-            return
-        }
-        let clamped = min(hours, FocusLockConstants.maximumCooldownHours)
-        let current = stateStore.snapshot().cooldownHours
-
-        // Raising it (or leaving it alone) is protection-increasing: immediate, ungated.
-        if clamped >= current {
-            stateStore.mutate { state in
-                state.cooldownHours = clamped
-            }
-            onStateChanged()
-            reply(FocusLockCodec.encode(FocusLockResult.ok))
-            return
-        }
-
-        if let denial = authorize(passcode: passcode, action: "lower the cooldown") {
-            reply(FocusLockCodec.encode(FocusLockResult.denied(denial)))
-            return
-        }
-        // Queued at the *current* cooldown, so shortening the wait is itself subject to the full
-        // existing wait -- otherwise "set cooldown to 0" would be a one-step bypass of everything.
-        reply(FocusLockCodec.encode(schedule(.lowerCooldownHours, target: String(clamped))))
-    }
-
-    func cancelPendingAction(id: String, reply: @escaping (Data) -> Void) {
-        let existing = stateStore.snapshot().pendingActions.first { $0.id == id }
-        guard let existing else {
-            reply(FocusLockCodec.encode(FocusLockResult.denied("No pending action with that ID.")))
-            return
-        }
-        stateStore.mutate { state in
-            state.pendingActions.removeAll { $0.id == id }
-        }
-        TamperReporter.report(type: "pending_action_cancelled", details: existing.describedFully)
-        onStateChanged()
-        reply(FocusLockCodec.encode(FocusLockResult(success: true, message: "Cancelled: \(existing.describedFully)")))
     }
 
     func checkForUpdate(reply: @escaping (Data) -> Void) {
@@ -408,8 +383,6 @@ final class XPCService: NSObject, FocusLockXPCProtocol {
     func installAvailableUpdate(passcode: String, reply: @escaping (Data) -> Void) {
         // Installing (as opposed to just checking) restarts the daemon/watchdog and swaps the
         // running app bundle -- gated the same as the other state-changing "remove/disable" calls.
-        // Not cooldown-queued, though: see the protocol's doc comment for why an update is the one
-        // gated action that shouldn't wait.
         if let denial = authorize(passcode: passcode, action: "install an update") {
             reply(FocusLockCodec.encode(UpdateInstallResult.rejected(denial)))
             return

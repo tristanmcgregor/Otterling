@@ -22,7 +22,7 @@ struct ContentView: View {
             case .sites: return "Blocked Sites"
             case .protectedApps: return "Protected Apps"
             case .filter: return "Content Filter"
-            case .security: return "Guardian & Cooldown"
+            case .security: return "Guardian"
             case .updates: return "App Updates"
             case .terminal: return "Sudo Terminal"
             case .assistant: return "AI Assistant"
@@ -92,19 +92,11 @@ struct ContentView: View {
         return ("Protected", .success)
     }
 
-    private var cooldownDescription: String {
-        let hours = viewModel.state.cooldownHours
-        if hours <= 0 { return "no time (cooldown off)" }
-        return hours == hours.rounded() ? "\(Int(hours))h" : String(format: "%.1fh", hours)
-    }
-
     /// Doesn't claim "only the Guardian can undo this" when no passcode is set -- on a single-admin
     /// machine that would overstate the protection.
     private var undoDescription: String {
         guard viewModel.state.passcodeConfigured else { return "not gated yet — no passcode set" }
-        return viewModel.state.cooldownHours > 0
-            ? "undoing needs the passcode + \(cooldownDescription)"
-            : "undoing needs the passcode"
+        return "undoing needs the passcode"
     }
 
     // MARK: - Sidebar
@@ -257,7 +249,7 @@ struct ContentView: View {
         case .sites: return "Domains redirected to nowhere via /etc/hosts"
         case .protectedApps: return "Apps kept alive and undeletable"
         case .filter: return "System-wide NSFW DNS filtering"
-        case .security: return "The secret and the wait that gate every removal"
+        case .security: return "The secret that gates every removal"
         case .updates: return "Signed, verified in-app updates"
         case .terminal: return "Every command goes through the denylist → allowlist → AI-review broker -- inert until this account is Standard"
         case .assistant: return "Describe what you need in plain language -- the AI translates it, then every resulting command still goes through the same broker"
@@ -298,54 +290,19 @@ struct ContentView: View {
                          label: "Apps Protected", sub: "Kept alive", hue: .success)
                 StatTile(systemImage: viewModel.state.passcodeConfigured ? "key.fill" : "key.slash",
                          value: viewModel.state.passcodeConfigured ? "Set" : "None",
-                         label: "Passcode", sub: viewModel.state.passcodeConfigured ? "Cooldown \(cooldownDescription)" : "Not gated",
+                         label: "Passcode", sub: viewModel.state.passcodeConfigured ? "Gates removals" : "Not gated",
                          hue: viewModel.state.passcodeConfigured ? .success : .warning)
             }
 
             // Confirms the dashboard-driven config (blocked/protected apps, DNS/proxy/cloud
-            // filter, cooldown -- see DashboardConfigSync.swift) is actually reaching this Mac,
-            // not just configured server-side.
+            // filter -- see DashboardConfigSync.swift) is actually reaching this Mac, not just
+            // configured server-side.
             if let lastSynced = viewModel.state.dashboardConfigLastFetchedAt {
                 Text("Dashboard sync: last synced \(lastSynced.formatted(.relative(presentation: .named)))")
                     .font(.system(size: 11)).foregroundStyle(Otter.onSurfaceVariant)
             } else {
                 Text("Dashboard sync: never synced yet")
                     .font(.system(size: 11)).foregroundStyle(Otter.onSurfaceVariant)
-            }
-
-            if !viewModel.state.pendingActions.isEmpty {
-                pendingActionsCard
-            }
-        }
-    }
-
-    /// Scheduled-but-not-yet-applied changes. Cancelling needs no passcode, so it's the easiest
-    /// thing to reach.
-    private var pendingActionsCard: some View {
-        Card {
-            HStack {
-                SectionLabel(text: "Pending Changes")
-                Spacer()
-                Pill(text: "\(viewModel.state.pendingActions.count) scheduled", variant: .warning)
-            }
-            Text("Authorised, waiting out the cooldown. Cancel needs no passcode.")
-                .font(.system(size: 11)).foregroundStyle(Otter.onSurfaceVariant)
-            ForEach(viewModel.state.pendingActions.sorted { $0.effectiveAt < $1.effectiveAt }) { action in
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(action.describedFully).font(.system(size: 13, weight: .medium))
-                        Text(action.isMature()
-                             ? "Due now — applies within seconds"
-                             : "Takes effect \(action.effectiveAt.formatted(date: .abbreviated, time: .shortened))")
-                            .font(.system(size: 11)).foregroundStyle(Otter.onSurfaceVariant)
-                    }
-                    Spacer()
-                    Button("Cancel") { viewModel.cancelPendingAction(action.id) }
-                        .buttonStyle(OtterTonal(variant: .warning))
-                }
-                .padding(10)
-                .background(Otter.tertiaryContainer.opacity(0.35))
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             }
         }
     }
@@ -494,7 +451,7 @@ struct ContentView: View {
         }
     }
 
-    // MARK: Security (passcode + cooldown)
+    // MARK: Security (passcode)
 
     private var securityScreen: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -506,7 +463,7 @@ struct ContentView: View {
                          variant: viewModel.state.passcodeConfigured ? .success : .warning)
                 }
                 if viewModel.state.passcodeConfigured {
-                    Text("Removals need the passcode, then wait out the \(cooldownDescription) cooldown.")
+                    Text("Removals need the passcode and apply immediately once authorised.")
                         .font(.system(size: 12)).foregroundStyle(Otter.onSurfaceVariant)
                 } else {
                     Text("No passcode set. Removals fall back to the admin-group check, which this account passes — nothing is actually gated. Set one and give it to someone else, or store it where you can't reach it on impulse.")
@@ -542,23 +499,6 @@ struct ContentView: View {
                         Text(status).font(.system(size: 11)).foregroundStyle(Otter.onSurfaceVariant)
                     }
                 }
-            }
-
-            Card {
-                SectionLabel(text: "Removal Cooldown")
-                HStack(spacing: 8) {
-                    Text("Hours").font(.system(size: 12)).foregroundStyle(Otter.onSurfaceVariant)
-                    TextField("24", text: $viewModel.cooldownHoursText)
-                        .textFieldStyle(.plain)
-                        .frame(width: 70)
-                        .padding(.horizontal, 12).padding(.vertical, 8)
-                        .background(Otter.surfaceVariant.opacity(0.5))
-                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    Button("Save") { viewModel.saveCooldownHours() }.buttonStyle(OtterOutlined())
-                    Spacer()
-                }
-                Text("Raising the cooldown is instant. Lowering it needs the passcode and waits out the current cooldown first.")
-                    .font(.system(size: 11)).foregroundStyle(Otter.onSurfaceVariant)
             }
         }
     }

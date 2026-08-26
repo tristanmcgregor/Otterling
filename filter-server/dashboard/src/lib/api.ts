@@ -128,8 +128,8 @@ export interface ProtectedApp {
 // not stored, not client-settable. protections/vpnBypassApps/blockedWebsites/rules/habits/
 // appBudgets/triggerWords are Android-only (consumed exclusively by the Android app's
 // DashboardConfigStore); vpnFilter/blockedApps are shared with platform-dependent meaning (see
-// their own doc comments); protectedApps/cooldownHours/proxyFilter/cloudFilterHost/
-// cloudFilterEnabled are macos-only (consumed by DashboardConfigSync.swift). The dashboard UI
+// their own doc comments); protectedApps/proxyFilter/cloudFilterHost/cloudFilterEnabled are
+// macos-only (consumed by DashboardConfigSync.swift). The dashboard UI
 // uses this field to show/hide each section per selected device.
 export type DevicePlatform = "macos" | "android";
 
@@ -152,7 +152,6 @@ export interface DeviceSettings {
   // platform === "macos"; a null value there just means the guardian hasn't touched that
   // control yet.
   protectedApps: ProtectedApp[];
-  cooldownHours: number | null;
   proxyFilter: { enabled: boolean; forceViaFirewall: boolean } | null;
   cloudFilterHost: string | null;
   cloudFilterEnabled: boolean | null;
@@ -356,8 +355,8 @@ export const api = {
       { method: "DELETE" }
     ),
 
-  // macos-only. Removal is delayed by the Mac's own cooldown, unlike removeBlockedApp above --
-  // see PendingActionScheduler.swift.
+  // macos-only. Removal requires the Mac's own Guardian passcode, same gate as any other
+  // protection-reducing change -- see DashboardConfigSync.swift.
   addProtectedApp: (deviceId: string, app: Omit<ProtectedApp, "addedAt">) =>
     request<{ protectedApps: ProtectedApp[] }>(`/devices/${enc(deviceId)}/protected-apps`, {
       method: "POST",

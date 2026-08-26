@@ -158,22 +158,6 @@ public final class FocusLockXPCClient {
         }, onError: .denied("Could not reach FocusLockHelperd"))
     }
 
-    public func setCooldownHours(_ hours: Double, passcode: String) async -> FocusLockResult {
-        await withXPCContinuation({ resume, onError in
-            proxy(errorHandler: onError).setCooldownHours(hours, passcode: passcode) { data in
-                resume(FocusLockCodec.decode(FocusLockResult.self, from: data) ?? .denied("Malformed reply"))
-            }
-        }, onError: .denied("Could not reach FocusLockHelperd"))
-    }
-
-    public func cancelPendingAction(id: String) async -> FocusLockResult {
-        await withXPCContinuation({ resume, onError in
-            proxy(errorHandler: onError).cancelPendingAction(id: id) { data in
-                resume(FocusLockCodec.decode(FocusLockResult.self, from: data) ?? .denied("Malformed reply"))
-            }
-        }, onError: .denied("Could not reach FocusLockHelperd"))
-    }
-
     public func checkForUpdate() async -> UpdateCheckStatus? {
         await withXPCContinuation({ resume, onError in
             proxy(errorHandler: onError).checkForUpdate { data in

@@ -106,7 +106,6 @@ public struct DashboardDeviceSettingsCache: Codable, Sendable {
     /// macos-only fields below -- all nil ("no opinion yet") unless the server explicitly has a
     /// value (see `_default_device_settings`'s comment on why these default to `None`/null
     /// server-side rather than a concrete value).
-    public let cooldownHours: Double?
     public let proxyFilterEnabled: Bool?
     public let proxyFilterForceViaFirewall: Bool?
     public let cloudFilterHost: String?
@@ -123,7 +122,6 @@ public struct DashboardDeviceSettingsCache: Codable, Sendable {
         contentFilterEnabled: Bool?,
         blockedApps: [String],
         protectedApps: [ProtectedApp],
-        cooldownHours: Double?,
         proxyFilterEnabled: Bool?,
         proxyFilterForceViaFirewall: Bool?,
         cloudFilterHost: String?,
@@ -135,84 +133,11 @@ public struct DashboardDeviceSettingsCache: Codable, Sendable {
         self.contentFilterEnabled = contentFilterEnabled
         self.blockedApps = blockedApps
         self.protectedApps = protectedApps
-        self.cooldownHours = cooldownHours
         self.proxyFilterEnabled = proxyFilterEnabled
         self.proxyFilterForceViaFirewall = proxyFilterForceViaFirewall
         self.cloudFilterHost = cloudFilterHost
         self.cloudFilterEnabled = cloudFilterEnabled
         self.rules = rules
-    }
-}
-
-/// The protection-reducing operations that can't be applied immediately. Everything here either
-/// takes a block off the list or weakens the filter; the protection-*increasing* mirror of each
-/// (adding a block, enabling DNS enforcement, raising the cooldown) stays immediate and ungated,
-/// which is the same asymmetry the admin-group model had -- only the thing being asked for has
-/// changed from "who are you" to "what can you produce, and can you still want this in N hours".
-public enum PendingActionKind: String, Codable, Sendable {
-    case removeBlockedApp
-    case removeBlockedDomain
-    case removeProtectedApp
-    case disableDNSEnforcement
-    case disableProxyEnforcement
-    case setCloudFilterHost
-    case disableCloudFilter
-    case lowerCooldownHours
-    case clearPasscode
-
-    /// Human-readable for the GUI/CLI pending list. `target` supplies the specifics.
-    public var describedAction: String {
-        switch self {
-        case .removeBlockedApp: return "Unblock app"
-        case .removeBlockedDomain: return "Unblock site"
-        case .removeProtectedApp: return "Stop protecting app"
-        case .disableDNSEnforcement: return "Turn off DNS enforcement"
-        case .disableProxyEnforcement: return "Turn off proxy enforcement"
-        case .setCloudFilterHost: return "Repoint cloud filter to"
-        case .disableCloudFilter: return "Turn off the cloud filter"
-        case .lowerCooldownHours: return "Lower the cooldown to (hours)"
-        case .clearPasscode: return "Remove the Guardian passcode"
-        }
-    }
-}
-
-/// A protection-reducing action that has been authorized with the passcode but hasn't matured yet.
-/// `EnforcementLoop` applies it once `effectiveAt` passes; until then it sits in state where the
-/// GUI/CLI can show it, and anyone -- no passcode needed -- can cancel it.
-///
-/// The cooldown is the half of this design that survives the user being their own admin: a local
-/// admin can always `launchctl bootout` the daemon, but they can't do that *quietly* (the watchdog
-/// re-bootstraps it and `TamperReporter` files the event), and they can't do it *impulsively* --
-/// which is the failure mode that actually matters for self-imposed accountability software.
-public struct PendingAction: Codable, Hashable, Identifiable, Sendable {
-    public let id: String
-    public let kind: PendingActionKind
-    /// Executable name, domain, host, or numeric literal depending on `kind`; empty where the
-    /// action needs no argument (e.g. `disableDNSEnforcement`).
-    public let target: String
-    public let requestedAt: Date
-    public let effectiveAt: Date
-
-    public init(
-        id: String = UUID().uuidString,
-        kind: PendingActionKind,
-        target: String,
-        requestedAt: Date,
-        effectiveAt: Date
-    ) {
-        self.id = id
-        self.kind = kind
-        self.target = target
-        self.requestedAt = requestedAt
-        self.effectiveAt = effectiveAt
-    }
-
-    public func isMature(asOf now: Date = Date()) -> Bool {
-        now >= effectiveAt
-    }
-
-    public var describedFully: String {
-        target.isEmpty ? kind.describedAction : "\(kind.describedAction) \(target)"
     }
 }
 
@@ -238,7 +163,7 @@ public struct FocusLockState: Codable, Sendable {
     /// When on, the daemon points every network service's system HTTP/HTTPS proxy at the
     /// filter-server's mitmproxy (`proxyHost:proxyPort`) and re-asserts it every tick, so the Mac's
     /// browser traffic is content-filtered the same way the phone's is. Protection-increasing to
-    /// turn on (immediate); turning off is passcode+cooldown gated (`disableProxyEnforcement`).
+    /// turn on (immediate); turning off is passcode-gated (`disableProxyEnforcement`).
     /// Fail-open: `ProxyEnforcer` only sets the proxy when it's reachable AND the proxy password is
     /// provisioned -- otherwise it removes the proxy so browsing never breaks. Off by default.
     public var proxyEnforcementEnabled: Bool
@@ -270,14 +195,6 @@ public struct FocusLockState: Codable, Sendable {
     /// Transport-only mirror of `guardianPasscode != nil`, overlaid by `getStatus` the same way
     /// `lockProfileInstalled` is. Not meaningful in the persisted file.
     public var passcodeConfigured: Bool
-
-    /// How long an authorized protection-reducing action waits before it actually applies. Raising
-    /// it is immediate and ungated; lowering it is itself a pending action, or the cooldown would
-    /// be trivially self-defeating (set it to zero, then remove everything instantly).
-    public var cooldownHours: Double
-
-    /// Authorized-but-not-yet-matured actions, applied by `EnforcementLoop` once due.
-    public var pendingActions: [PendingAction]
 
     /// Master switch for the ENTIRE app, not just content filtering -- `EnforcementLoop` skips
     /// everything (DNS, proxy, pf, blocked/protected apps, even lock-profile/VPN/integrity
@@ -340,8 +257,6 @@ public struct FocusLockState: Codable, Sendable {
         vpnActive: Bool = false,
         guardianPasscode: PasscodeRecord? = nil,
         passcodeConfigured: Bool = false,
-        cooldownHours: Double = FocusLockConstants.defaultCooldownHours,
-        pendingActions: [PendingAction] = [],
         protectionEnabled: Bool = true,
         dashboardConfigCache: DashboardDeviceSettingsCache? = nil,
         dashboardConfigLastFetchedAt: Date? = nil,
@@ -363,8 +278,6 @@ public struct FocusLockState: Codable, Sendable {
         self.vpnActive = vpnActive
         self.guardianPasscode = guardianPasscode
         self.passcodeConfigured = passcodeConfigured
-        self.cooldownHours = cooldownHours
-        self.pendingActions = pendingActions
         self.protectionEnabled = protectionEnabled
         self.dashboardConfigCache = dashboardConfigCache
         self.dashboardConfigLastFetchedAt = dashboardConfigLastFetchedAt
@@ -403,11 +316,6 @@ public struct FocusLockState: Codable, Sendable {
         // deriving it is exactly right. `StateStore` re-derives it after loading from disk regardless,
         // so a hand-edited file can't make the daemon report a passcode it doesn't have.
         passcodeConfigured = try container.decodeIfPresent(Bool.self, forKey: .passcodeConfigured) ?? (guardianPasscode != nil)
-        // An install that predates the cooldown gets the default rather than 0 -- decoding a
-        // missing key as "no cooldown" would silently hand every existing user instant removals,
-        // which is the exact behaviour this field exists to prevent.
-        cooldownHours = try container.decodeIfPresent(Double.self, forKey: .cooldownHours) ?? FocusLockConstants.defaultCooldownHours
-        pendingActions = try container.decodeIfPresent([PendingAction].self, forKey: .pendingActions) ?? []
         // Missing key defaults to true (protection ON) -- both for a state.json written before
         // this field existed (must not retroactively look kill-switched) and for the ordinary
         // case of a fresh install. The ONLY way this is ever actually false is `killSwitch`
@@ -432,7 +340,7 @@ public struct FocusLockState: Codable, Sendable {
         case blockedApps, blockedDomains, protectedApps, dnsEnforcementEnabled
         case cloudFilterHost, cloudFilterEnabled, lockProfileInstalled, vpnActive
         case proxyEnforcementEnabled, forceProxyViaFirewall, proxyHost, proxyPort
-        case guardianPasscode, passcodeConfigured, cooldownHours, pendingActions
+        case guardianPasscode, passcodeConfigured
         case protectionEnabled, dashboardConfigCache, dashboardConfigLastFetchedAt
         case dashboardManagedBlockedApps, dashboardManagedProtectedApps, globalHabitsCache
     }

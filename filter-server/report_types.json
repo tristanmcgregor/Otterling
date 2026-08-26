@@ -114,20 +114,10 @@
       "source": "mac",
       "description": "The Guardian passcode was changed."
     },
-    "pending_action_requested": {
+    "protection_removed": {
       "enabled": true,
       "source": "mac",
-      "description": "A cooldown-gated removal/disable action was requested on the Mac."
-    },
-    "pending_action_applied": {
-      "enabled": true,
-      "source": "mac",
-      "description": "A cooldown-gated action finished waiting and was applied."
-    },
-    "pending_action_cancelled": {
-      "enabled": true,
-      "source": "mac",
-      "description": "A pending cooldown action was cancelled before it applied."
+      "description": "A protection-reducing removal/disable action was authorized and applied on the Mac."
     },
     "kill_switch_activated": {
       "enabled": true,

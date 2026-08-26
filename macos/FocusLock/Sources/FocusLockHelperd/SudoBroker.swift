@@ -2,7 +2,7 @@ import Foundation
 import FocusLockShared
 
 /// Privilege-elevation broker for the point at which the Guardian's own macOS account becomes
-/// Standard (no direct sudo) -- see project notes on why: a passcode/cooldown gate on an admin
+/// Standard (no direct sudo) -- see project notes on why: a passcode gate on an admin
 /// account is a same-privilege-level watcher the account can always outrank, since it holds root
 /// either way. Actually changing the account's privilege level creates a real boundary instead --
 /// the Guardian's shell genuinely cannot run `sudo` anymore, and every privileged command instead

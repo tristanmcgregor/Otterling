@@ -70,9 +70,9 @@ On the user's Mac, the partner (not the user) sets and remembers:
 ```bash
 focuslockctl set-passcode
 ```
-This makes every protection-reducing action require **admin group AND this passcode AND a 24h
-cooldown**. On the user's single-admin Mac, the admin check passes automatically, so this passcode is
-the real gate — which is why the user must not know it.
+This makes every protection-reducing action require **admin group AND this passcode**, applied
+immediately once authorized. On the user's single-admin Mac, the admin check passes automatically,
+so this passcode is the real gate — which is why the user must not know it.
 
 ## E. User — finish provisioning on the Mac
 

@@ -7,8 +7,8 @@ import FocusLockShared
 /// record (including this device's own `rules`) and caches it; `fetchGlobalHabits` separately
 /// pulls the fleet-wide habit library + live completion state from `GET /dashboard-api/habits`.
 /// `reconcile` (below) applies the per-device settings against local state: blockedApps,
-/// protectedApps, DNS/proxy/cloud-filter enforcement, the cloud filter host, and the removal
-/// cooldown are all dashboard-driven. `rules` + the global habits cache are read separately by
+/// protectedApps, DNS/proxy/cloud-filter enforcement, and the cloud filter host are all
+/// dashboard-driven. `rules` + the global habits cache are read separately by
 /// `RuleBlockEnforcer` (a live, ephemeral, never-persisted enforcement layer -- see that file's
 /// doc comment for why it's deliberately NOT part of `reconcile`/`blockedApps` at all). Not yet
 /// wired: appBudgets/triggerWords (no Mac-side mechanism exists for these) and `guardianPasscode`
@@ -68,7 +68,6 @@ enum DashboardConfigSync {
                 protectedApps: (raw.protectedApps ?? []).map {
                     ProtectedApp(displayName: $0.displayName, executableName: $0.executableName, bundlePath: $0.bundlePath)
                 },
-                cooldownHours: raw.cooldownHours,
                 proxyFilterEnabled: raw.proxyFilter?.enabled,
                 proxyFilterForceViaFirewall: raw.proxyFilter?.forceViaFirewall,
                 cloudFilterHost: raw.cloudFilterHost,
@@ -207,24 +206,20 @@ enum DashboardConfigSync {
         )
     }
 
-    /// Applies the fetched config against local state. Additions (a blockedApps/protectedApps
-    /// entry the dashboard has that the Mac doesn't yet, or a toggle going from off to on) apply
-    /// immediately via `ImmediateActionApplier` -- exactly mirroring what the local, ungated
-    /// `XPCService` add/enable handlers already let ANY local caller do. Removals/disables
-    /// (something local the dashboard no longer lists or has turned off) are scheduled via
-    /// `PendingActionScheduler` with `source: "dashboard"` -- same `PendingAction` +
-    /// `cooldownHours` queue local removals use, but authorized by "this came from a
-    /// bearer-authenticated GET of this Mac's own device_id settings" rather than a local
-    /// passcode/admin-UID (see `PendingActionScheduler`'s doc comment for the full reasoning, and
-    /// this project's plan doc for why that specific tradeoff was chosen over requiring local
-    /// confirmation first).
+    /// Applies the fetched config against local state. Both additions (a blockedApps/protectedApps
+    /// entry the dashboard has that the Mac doesn't yet, or a toggle going from off to on) and
+    /// removals/disables (something local the dashboard no longer lists or has turned off) apply
+    /// immediately via `ImmediateActionApplier` -- additions mirror what the local, ungated
+    /// `XPCService` add/enable handlers already let ANY local caller do; removals are authorized by
+    /// "this came from a bearer-authenticated GET of this Mac's own device_id settings" rather than
+    /// a local passcode/admin-UID (see this project's plan doc for why that specific tradeoff was
+    /// chosen over requiring local confirmation first).
     ///
-    /// Scalar/boolean fields (`cooldownHours`, `proxyFilter`, `cloudFilterHost`,
-    /// `cloudFilterEnabled`) are `nil` server-side until a guardian has explicitly interacted
-    /// with that specific dashboard control at least once (see `_default_device_settings`'s
-    /// comment) -- reconcile only ever acts on a non-nil value, so an untouched control can never
-    /// coincidentally collide with the Mac's own local default and force a change nobody asked
-    /// for.
+    /// Scalar/boolean fields (`proxyFilter`, `cloudFilterHost`, `cloudFilterEnabled`) are `nil`
+    /// server-side until a guardian has explicitly interacted with that specific dashboard control
+    /// at least once (see `_default_device_settings`'s comment) -- reconcile only ever acts on a
+    /// non-nil value, so an untouched control can never coincidentally collide with the Mac's own
+    /// local default and force a change nobody asked for.
     ///
     /// List fields (`blockedApps`, `protectedApps`) can't carry that same nil-by-default
     /// distinction (an empty list is indistinguishable from "guardian explicitly cleared this").
@@ -268,13 +263,10 @@ enum DashboardConfigSync {
         }
         // Only remove a name this sync itself previously added -- never a local-only entry.
         for name in localBlockedNames.subtracting(desiredBlockedNames).intersection(state.dashboardManagedBlockedApps) {
-            let result = PendingActionScheduler.schedule(
-                .removeBlockedApp, target: name, source: "dashboard", stateStore: stateStore, onScheduled: {}
-            )
-            if result.success {
-                stateStore.mutate { $0.dashboardManagedBlockedApps.remove(name) }
-                changed = true
-            }
+            ImmediateActionApplier.removeBlockedApp(name, stateStore: stateStore)
+            reportRemoval("Unblock app \(name)")
+            stateStore.mutate { $0.dashboardManagedBlockedApps.remove(name) }
+            changed = true
         }
 
         // Protected apps.
@@ -295,13 +287,10 @@ enum DashboardConfigSync {
             }
         }
         for name in localProtectedNames.subtracting(Set(desiredProtected.keys)).intersection(state.dashboardManagedProtectedApps) {
-            let result = PendingActionScheduler.schedule(
-                .removeProtectedApp, target: name, source: "dashboard", stateStore: stateStore, onScheduled: {}
-            )
-            if result.success {
-                stateStore.mutate { $0.dashboardManagedProtectedApps.remove(name) }
-                changed = true
-            }
+            ImmediateActionApplier.removeProtectedApp(name, stateStore: stateStore)
+            reportRemoval("Stop protecting app \(name)")
+            stateStore.mutate { $0.dashboardManagedProtectedApps.remove(name) }
+            changed = true
         }
 
         // Content filter on/off maps only to dnsEnforcementEnabled -- see
@@ -311,26 +300,10 @@ enum DashboardConfigSync {
             if desired {
                 ImmediateActionApplier.enableDNSEnforcement(stateStore: stateStore)
             } else {
-                _ = PendingActionScheduler.schedule(
-                    .disableDNSEnforcement, source: "dashboard", stateStore: stateStore, onScheduled: {}
-                )
+                ImmediateActionApplier.disableDNSEnforcement(stateStore: stateStore)
+                reportRemoval("Turn off DNS enforcement")
             }
             changed = true
-        }
-
-        // Cooldown hours: raising is protection-increasing (immediate, matches
-        // XPCService.setCooldownHours' own ungated branch); lowering is itself gated, queued at
-        // the CURRENT (higher) cooldown so shortening the wait can't be used to bypass itself.
-        if let desired = cache.cooldownHours, desired != state.cooldownHours {
-            if desired > state.cooldownHours {
-                ImmediateActionApplier.raiseCooldownHours(desired, stateStore: stateStore)
-                changed = true
-            } else {
-                let result = PendingActionScheduler.schedule(
-                    .lowerCooldownHours, target: String(desired), source: "dashboard", stateStore: stateStore, onScheduled: {}
-                )
-                if result.success { changed = true }
-            }
         }
 
         // Proxy enforcement: `forceViaFirewall` has no independent gate locally either (see
@@ -345,10 +318,9 @@ enum DashboardConfigSync {
                     changed = true
                 }
             } else if state.proxyEnforcementEnabled {
-                let result = PendingActionScheduler.schedule(
-                    .disableProxyEnforcement, source: "dashboard", stateStore: stateStore, onScheduled: {}
-                )
-                if result.success { changed = true }
+                ImmediateActionApplier.disableProxyEnforcement(stateStore: stateStore)
+                reportRemoval("Turn off proxy enforcement")
+                changed = true
             }
         }
 
@@ -358,25 +330,20 @@ enum DashboardConfigSync {
             if desired {
                 ImmediateActionApplier.enableCloudFilter(stateStore: stateStore)
             } else {
-                _ = PendingActionScheduler.schedule(
-                    .disableCloudFilter, source: "dashboard", stateStore: stateStore, onScheduled: {}
-                )
+                ImmediateActionApplier.disableCloudFilter(stateStore: stateStore)
+                reportRemoval("Turn off the cloud filter")
             }
             changed = true
         }
 
-        // Cloud filter host: unlike everything else above, XPCService.setCloudFilterHost is
-        // ALWAYS gated regardless of direction (repointing is equivalent to defeating the filter
-        // -- see that method's doc comment), so this never applies immediately even for what
-        // looks like a "correction." Re-validated here rather than trusted from the server
-        // payload's shape, same as every other value this daemon writes into DNS/pf config.
+        // Cloud filter host: re-validated here rather than trusted from the server payload's
+        // shape, same as every other value this daemon writes into DNS/pf config.
         if let desiredHost = cache.cloudFilterHost, !desiredHost.isEmpty, desiredHost != state.cloudFilterHost {
             let normalized = desiredHost.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             if HostnameValidator.isValidHostname(normalized) {
-                let result = PendingActionScheduler.schedule(
-                    .setCloudFilterHost, target: normalized, source: "dashboard", stateStore: stateStore, onScheduled: {}
-                )
-                if result.success { changed = true }
+                ImmediateActionApplier.setCloudFilterHost(normalized, stateStore: stateStore)
+                reportRemoval("Repoint cloud filter to \(normalized)")
+                changed = true
             } else {
                 FileHandle.standardError.write(
                     "[dashboard-sync] refused invalid cloud filter host '\(desiredHost)'\n".data(using: .utf8)!
@@ -404,7 +371,6 @@ enum DashboardConfigSync {
         let vpnFilter: VPNFilter?
         let blockedApps: [BlockedAppItem]?
         let protectedApps: [ProtectedAppItem]?
-        let cooldownHours: Double?
         let proxyFilter: ProxyFilter?
         let cloudFilterHost: String?
         let cloudFilterEnabled: Bool?
@@ -425,6 +391,12 @@ enum DashboardConfigSync {
                 let daysOfWeek: [Int]?
             }
         }
+    }
+
+    /// Audit trail for a dashboard-authorized, immediately-applied protection-reducing change --
+    /// see `TamperReporter`.
+    private static func reportRemoval(_ description: String) {
+        TamperReporter.report(type: "protection_removed", details: "\(description) (source: dashboard)")
     }
 
     private static func readTrimmed(_ path: String) -> String? {
