@@ -18,8 +18,8 @@ type Screen =
   | "BlockedSites"
   | "ProtectedApps"
   | "ContentFilter"
-  | "AppUpdates"
   | "Settings"
+  | "Habits"
   | "GlobalSettings"
   | "Wizard";
 
@@ -30,7 +30,7 @@ interface NavDef {
 }
 
 // Mirrors the macOS app's own sidebar taxonomy (ContentView.swift's "Protect" group: Overview,
-// Blocked Apps, Blocked Sites, Protected Apps, Content Filter, App Updates) instead of cramming
+// Blocked Apps, Blocked Sites, Protected Apps, Content Filter) instead of cramming
 // everything into one long Settings page -- each of these is now its own focused nav item/screen.
 // Blocked Sites (Android-only, DNS/VPN-filter blocklist) and Protected Apps (macOS-only,
 // filesystem-locked apps) are hidden for a platform that has no such concept, same as those
@@ -45,17 +45,19 @@ function deviceNav(platform: DevicePlatform | undefined): NavDef[] {
   if (platform !== "macos") items.push({ id: "BlockedSites", label: "Blocked Sites", icon: Globe });
   if (platform === "macos") items.push({ id: "ProtectedApps", label: "Protected Apps", icon: ShieldCheck });
   items.push({ id: "ContentFilter", label: "Content Filter", icon: Wifi });
-  items.push({ id: "AppUpdates", label: "App Updates", icon: RefreshCw });
   items.push({ id: "Settings", label: "Settings", icon: SettingsIcon });
   return items;
 }
 
 // Fleet-wide, not scoped to whichever device is selected in the switcher above -- Guardian PIN,
-// the habit library, habit rules, HabitShare account, and the dashboard/review login passwords all
-// live here instead of inside per-device Settings, where they used to be mixed in despite already
-// being global data (see GlobalSettingsScreen's doc comment). Its own nav section so it doesn't
-// read as "a setting of whichever device happens to be selected right now".
+// habit rules, HabitShare account, and the dashboard/review login passwords all live here instead
+// of inside per-device Settings, where they used to be mixed in despite already being global data
+// (see GlobalSettingsScreen's doc comment). The habit library itself has its own top-level "Habits"
+// nav entry (see HabitsScreen) since it's a thing guardians check on its own, not just a setting.
+// Its own nav section so it doesn't read as "a setting of whichever device happens to be selected
+// right now".
 const FLEET_NAV: NavDef[] = [
+  { id: "Habits", label: "Habits", icon: CheckCircle },
   { id: "GlobalSettings", label: "Global Settings", icon: Globe },
 ];
 
@@ -169,17 +171,7 @@ export default function App() {
     // itself, see HabitRuleWizard's Devices step) instead of being tied to whichever device
     // happened to be selected in the sidebar when "Add Rule" was clicked.
     if (screen === "GlobalSettings") {
-      return (
-        <GlobalSettingsScreen
-          habits={habits}
-          onHabitsChanged={reloadHabits}
-          rules={rules}
-          devices={devices}
-          onRulesChanged={reload}
-          onAddRule={startNewRule}
-          onEditRule={startEditRule}
-        />
-      );
+      return <GlobalSettingsScreen />;
     }
     if (screen === "Wizard") {
       return (
@@ -190,6 +182,19 @@ export default function App() {
           editingRule={editingRule}
           onNavigate={navigate}
           onSaved={reload}
+        />
+      );
+    }
+    if (screen === "Habits") {
+      return (
+        <HabitsScreen
+          habits={habits}
+          onHabitsChanged={reloadHabits}
+          rules={rules}
+          devices={devices}
+          onRulesChanged={reload}
+          onAddRule={startNewRule}
+          onEditRule={startEditRule}
         />
       );
     }
@@ -215,8 +220,6 @@ export default function App() {
         return <ProtectedAppsScreen deviceId={deviceId} settings={settings} onChanged={reload} onNavigate={navigate} />;
       case "ContentFilter":
         return <ContentFilterScreen deviceId={deviceId} settings={settings} onChanged={reload} />;
-      case "AppUpdates":
-        return <AppUpdatesScreen deviceId={deviceId} settings={settings} />;
       case "Settings":
         return (
           <SettingsScreen
@@ -1042,75 +1045,6 @@ function ContentFilterScreen({
   );
 }
 
-function AppUpdatesScreen({ deviceId, settings }: { deviceId: string; settings: DeviceSettings | null }) {
-  const [pollingDevice, setPollingDevice] = useState(false);
-  const [pollDeviceResult, setPollDeviceResult] = useState<string | null>(null);
-
-  if (!settings) return <div className="p-7 text-sm text-on-surface-variant">Loading…</div>;
-
-  return (
-    <div className="p-7 max-w-[700px] space-y-3">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">App Updates</h1>
-        <p className="text-sm text-on-surface-variant mt-0.5">Current version and manual sync.</p>
-      </div>
-      <Card className="rounded-2xl">
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <p className="text-sm font-medium">App version</p>
-            <p className="text-xs text-on-surface-variant">
-              {settings.appVersion.versionName
-                ? `v${settings.appVersion.versionName} (build ${settings.appVersion.versionCode})`
-                : settings.platform === "android"
-                ? "Not reported yet -- reports on this device's next sync"
-                : "Not tracked for macOS devices"}
-            </p>
-          </div>
-          {settings.appVersion.reportedAt && (
-            <p className="shrink-0 text-[11px] text-on-surface-variant">
-              as of {new Date(settings.appVersion.reportedAt * 1000).toLocaleString()}
-            </p>
-          )}
-        </div>
-      </Card>
-      <Card className="rounded-2xl">
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <p className="text-sm font-medium">Poll this device now</p>
-            <p className="text-xs text-on-surface-variant">
-              Wakes just this phone via push instead of waiting out its normal poll cycle --
-              useful when checking whether a settings change landed.
-            </p>
-          </div>
-          <button
-            onClick={() => {
-              setPollingDevice(true);
-              setPollDeviceResult(null);
-              api.pollDeviceNow(deviceId)
-                .then((res) => {
-                  setPollDeviceResult(res.notified === 0 ? "Not registered for push" : `Sent to ${res.notified} device${res.notified === 1 ? "" : "s"}`);
-                })
-                .catch((err) => setPollDeviceResult(err instanceof ApiError ? err.message : "Couldn't reach the server"))
-                .finally(() => {
-                  setPollingDevice(false);
-                  window.setTimeout(() => setPollDeviceResult(null), 5000);
-                });
-            }}
-            disabled={pollingDevice}
-            className="shrink-0 flex items-center gap-2 h-9 px-4 rounded-xl border border-outline-variant/50 bg-surface-variant/40 text-sm font-medium text-on-surface hover:bg-surface-variant transition-colors disabled:opacity-60"
-          >
-            <RefreshCw className={cn("w-3.5 h-3.5", pollingDevice && "animate-spin")} />
-            {pollingDevice ? "Polling…" : "Poll now"}
-          </button>
-        </div>
-        {pollDeviceResult && (
-          <p className="text-[11px] text-on-surface-variant mt-2 text-right">{pollDeviceResult}</p>
-        )}
-      </Card>
-    </div>
-  );
-}
-
 function SettingsScreen({
   deviceId, settings, onNavigate, onChanged, onDeviceRemoved,
 }: {
@@ -1150,7 +1084,7 @@ function SettingsScreen({
         <h1 className="text-2xl font-bold tracking-tight">Settings</h1>
         <p className="text-sm text-on-surface-variant mt-0.5">
           Everything else for {settings.device_name || deviceId} -- see Blocked Apps, Blocked
-          Sites, Protected Apps, Content Filter, and App Updates in the sidebar for the rest.
+          Sites, Protected Apps, and Content Filter in the sidebar for the rest.
         </p>
       </div>
 
@@ -1366,12 +1300,12 @@ function SettingsScreen({
   );
 }
 
-// ─── Global Settings ───────────────────────────────────────────────────────────
-// Fleet-wide config, not scoped to whichever device happens to be selected in the sidebar's
-// device switcher -- Guardian PIN and the habit library were already global data (one PIN, one
-// habit library shared across every device) but used to live inside per-device SettingsScreen,
-// which read as "a setting of this device" when it wasn't. HabitShare account is new here.
-function GlobalSettingsScreen({
+// ─── Habits ────────────────────────────────────────────────────────────────────
+// Fleet-wide (see api.ts's Habit doc comment), so this is its own top-level nav entry rather than
+// nested inside per-device Settings or Global Settings -- guardians check "what habits exist,
+// which are done today, which rules gate on them" often enough that it earns its own page instead
+// of being one section among many on Global Settings.
+function HabitsScreen({
   habits, onHabitsChanged, rules, devices, onRulesChanged, onAddRule, onEditRule,
 }: {
   habits: Habit[];
@@ -1382,6 +1316,55 @@ function GlobalSettingsScreen({
   onAddRule: () => void;
   onEditRule: (rule: Rule) => void;
 }) {
+  return (
+    <div className="p-7 max-w-[900px] space-y-6">
+      <div>
+        <h1 className="text-xl font-bold">Habits</h1>
+        <p className="text-sm text-on-surface-variant mt-0.5">
+          Which habits exist, which are done today, and which rules gate on them --
+          shared across every device on this account.
+        </p>
+      </div>
+
+      <div className="space-y-3">
+        <SectionLabel>Habit Library</SectionLabel>
+        <Card className="rounded-2xl">
+          <p className="text-xs text-on-surface-variant mb-2">
+            Shared across every device on this account — not per-device. A habit checked off
+            (and verified) on the phone can satisfy a rule on the Mac. Turn on "Requires proof"
+            for a habit and the server will reject a completion report with no photo attached —
+            without it, the device's own app-embedded token alone is enough to fake any habit
+            done and unlock whatever it gates, fleet-wide.
+          </p>
+          <HabitLibraryList habits={habits} rules={rules} onChanged={onHabitsChanged} />
+        </Card>
+      </div>
+
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <SectionLabel>Habit Rules</SectionLabel>
+          <Button size="sm" className="gap-1.5" onClick={onAddRule}>
+            <Plus className="w-3.5 h-3.5" /> Add Rule
+          </Button>
+        </div>
+        <p className="text-xs text-on-surface-variant -mt-1">
+          Gates an app and/or a website behind required habits, on whichever device(s) you choose
+          below — a single rule can target both an app and a website at once, and apply to one
+          device, several, or "All devices".
+        </p>
+        <GlobalRulesList rules={rules} habits={habits} devices={devices} onChanged={onRulesChanged} onEdit={onEditRule} onAdd={onAddRule} />
+      </div>
+    </div>
+  );
+}
+
+// ─── Global Settings ───────────────────────────────────────────────────────────
+// Fleet-wide config, not scoped to whichever device happens to be selected in the sidebar's
+// device switcher -- Guardian PIN was already global data (one PIN shared across every device)
+// but used to live inside per-device SettingsScreen, which read as "a setting of this device"
+// when it wasn't. HabitShare account is new here. The habit library and habit rules live in their
+// own top-level Habits screen (see HabitsScreen) rather than here.
+function GlobalSettingsScreen() {
   const [pinModalOpen, setPinModalOpen] = useState(false);
   const [pinStatus, setPinStatus] = useState<{ pin: string | null; updatedAt: number | null } | null>(null);
   const reloadPinStatus = () => api.getPin().then(setPinStatus).catch(() => setPinStatus(null));
@@ -1417,35 +1400,6 @@ function GlobalSettingsScreen({
             <Button variant="outlined" size="sm" onClick={() => setPinModalOpen(true)}>Change PIN</Button>
           </div>
         </Card>
-      </div>
-
-      <div className="space-y-3">
-        <SectionLabel>Habit Library</SectionLabel>
-        <Card className="rounded-2xl">
-          <p className="text-xs text-on-surface-variant mb-2">
-            Shared across every device on this account — not per-device. A habit checked off
-            (and verified) on the phone can satisfy a rule on the Mac. Turn on "Requires proof"
-            for a habit and the server will reject a completion report with no photo attached —
-            without it, the device's own app-embedded token alone is enough to fake any habit
-            done and unlock whatever it gates, fleet-wide.
-          </p>
-          <HabitLibraryList habits={habits} onChanged={onHabitsChanged} />
-        </Card>
-      </div>
-
-      <div className="space-y-3">
-        <div className="flex items-center justify-between">
-          <SectionLabel>Habit Rules</SectionLabel>
-          <Button size="sm" className="gap-1.5" onClick={onAddRule}>
-            <Plus className="w-3.5 h-3.5" /> Add Rule
-          </Button>
-        </div>
-        <p className="text-xs text-on-surface-variant -mt-1">
-          Gates an app and/or a website behind required habits, on whichever device(s) you choose
-          below — a single rule can target both an app and a website at once, and apply to one
-          device, several, or "All devices".
-        </p>
-        <GlobalRulesList rules={rules} habits={habits} devices={devices} onChanged={onRulesChanged} onEdit={onEditRule} onAdd={onAddRule} />
       </div>
 
       <div className="space-y-3">
@@ -2059,7 +2013,7 @@ function TagList({
   );
 }
 
-function HabitLibraryList({ habits, onChanged }: { habits: Habit[]; onChanged: () => void }) {
+function HabitLibraryList({ habits, rules, onChanged }: { habits: Habit[]; rules: Rule[]; onChanged: () => void }) {
   const [draft, setDraft] = useState("");
   const [draftRequiresProof, setDraftRequiresProof] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -2113,48 +2067,58 @@ function HabitLibraryList({ habits, onChanged }: { habits: Habit[]; onChanged: (
       </div>
       {habits.length > 0 && (
         <div className="space-y-1.5">
-          {habits.map((h) => (
-            <div
-              key={h.id}
-              className="flex items-center gap-2 pl-3 pr-1.5 py-1.5 rounded-xl bg-surface-variant text-sm"
-            >
-              <span className="flex-1 min-w-0 truncate">
-                {h.name}
-                {h.doneToday && <span className="text-secondary ml-1">✓</span>}
-              </span>
-              {h.doneToday && h.hasProof && (
-                <button
-                  onClick={() => setViewingProofId(h.id)}
-                  className="text-[11px] font-medium text-primary hover:underline shrink-0"
-                >
-                  View proof
-                </button>
-              )}
-              {h.doneToday && (
-                <button
-                  onClick={() => api.revokeHabitCompletion(h.id).then(onChanged)}
-                  title="Revoke today's completion"
-                  className="text-[11px] font-medium text-error hover:underline shrink-0"
-                >
-                  Revoke
-                </button>
-              )}
-              <label className="flex items-center gap-1 text-[11px] text-on-surface-variant shrink-0">
-                <input
-                  type="checkbox"
-                  checked={h.requiresProof}
-                  onChange={(e) => api.setHabitRequiresProof(h.id, e.target.checked).then(onChanged)}
-                />
-                Requires proof
-              </label>
-              <button
-                onClick={() => api.removeHabit(h.id).then(onChanged)}
-                className="w-5 h-5 rounded-full flex items-center justify-center hover:bg-error-container hover:text-error transition-colors shrink-0"
+          {habits.map((h) => {
+            const usedInRules = rules.filter((r) => r.requiredHabitIds.includes(h.id));
+            return (
+              <div
+                key={h.id}
+                className="flex flex-col gap-0.5 pl-3 pr-1.5 py-1.5 rounded-xl bg-surface-variant text-sm"
               >
-                <X className="w-3 h-3" />
-              </button>
-            </div>
-          ))}
+                <div className="flex items-center gap-2">
+                  <span className="flex-1 min-w-0 truncate">
+                    {h.name}
+                    {h.doneToday && <span className="text-secondary ml-1">✓</span>}
+                  </span>
+                  {h.doneToday && h.hasProof && (
+                    <button
+                      onClick={() => setViewingProofId(h.id)}
+                      className="text-[11px] font-medium text-primary hover:underline shrink-0"
+                    >
+                      View proof
+                    </button>
+                  )}
+                  {h.doneToday && (
+                    <button
+                      onClick={() => api.revokeHabitCompletion(h.id).then(onChanged)}
+                      title="Revoke today's completion"
+                      className="text-[11px] font-medium text-error hover:underline shrink-0"
+                    >
+                      Revoke
+                    </button>
+                  )}
+                  <label className="flex items-center gap-1 text-[11px] text-on-surface-variant shrink-0">
+                    <input
+                      type="checkbox"
+                      checked={h.requiresProof}
+                      onChange={(e) => api.setHabitRequiresProof(h.id, e.target.checked).then(onChanged)}
+                    />
+                    Requires proof
+                  </label>
+                  <button
+                    onClick={() => api.removeHabit(h.id).then(onChanged)}
+                    className="w-5 h-5 rounded-full flex items-center justify-center hover:bg-error-container hover:text-error transition-colors shrink-0"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </div>
+                <p className="text-[11px] text-on-surface-variant truncate">
+                  {usedInRules.length > 0
+                    ? `Used in: ${usedInRules.map((r) => ruleTargetLabel(r)).join(", ")}`
+                    : "Not used in any rule"}
+                </p>
+              </div>
+            );
+          })}
         </div>
       )}
       <div className="flex items-center gap-2">
