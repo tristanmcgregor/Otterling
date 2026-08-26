@@ -169,16 +169,20 @@ class NsfwFilter:
         host = flow.request.pretty_host.lower().rstrip(".")
         return f"{host}{flow.request.path or ''}"
 
-    def _respond_blocked(self, flow: http.HTTPFlow, reason: str, scan_text: str = ""):
+    def _respond_blocked(self, flow: http.HTTPFlow, reason: str):
         """Builds the block response only -- does NOT touch the deny cache; callers cache with
         whatever key/scope is appropriate for the reason (see `request`/`response`) before or
         instead of calling this, so a single helper can't accidentally cache at the wrong scope.
 
         Also fires an accountability alert to the Guardian's phone, but ONLY when an actual trigger
-        word (trigger_words.TRIGGER_WORDS, the phone's list) appears in `scan_text` -- a bare
-        domain-list/AI block with no trigger word in the visible text/URL is silent, per the
-        "don't report a blocked page unless a trigger word is detected" rule. Reporting is
-        best-effort and never affects the block itself (see block_reporter)."""
+        word (trigger_words.TRIGGER_WORDS, the phone's list) appears in the request's own host+path
+        -- never the page's title/body text, even for the title-keyword/ai-classifier reasons below,
+        which only ever get decided from fetched page content. Scanning that content for a report
+        would flag words the person visiting had no way to know would be there (they typed/clicked a
+        URL, not the page's eventual text) -- exactly the same reasoning as the "don't report a
+        merely-blocked page at all" rule this already applies (a bare domain-list/AI block with no
+        trigger word in the URL itself is silent). Reporting is best-effort and never affects the
+        block itself (see block_reporter)."""
         flow.response = http.Response.make(
             403,
             BLOCK_PAGE.encode("utf-8"),
@@ -186,9 +190,10 @@ class NsfwFilter:
         )
         flow.metadata["otterling_blocked_reason"] = reason
 
-        word = trigger_words.find_trigger(scan_text)
+        host = flow.request.pretty_host.lower().rstrip(".")
+        url_scan_text = f"{host} {flow.request.path or ''}"
+        word = trigger_words.find_trigger(url_scan_text)
         if word:
-            host = flow.request.pretty_host.lower().rstrip(".")
             peer = getattr(flow.client_conn, "peername", None)
             client_ip = peer[0] if peer else "lan-client"
             block_reporter.report(device_id=client_ip, word=word, host=host, reason=reason)
@@ -207,17 +212,14 @@ class NsfwFilter:
         # only the path key would miss a whole-host ban and checking only the host would ignore
         # path-scoped ones entirely.
         path_and_query = flow.request.path or ""
-        # Only the host + URL path is visible at request time (no body yet), so that's what a
-        # trigger-word report can scan for these three cases.
-        request_scan_text = f"{host} {path_and_query}"
 
         if self.deny_cache.is_denied(host) or self.deny_cache.is_denied(path_key):
-            self._respond_blocked(flow, "deny-cache", request_scan_text)
+            self._respond_blocked(flow, "deny-cache")
             return
 
         if self.domains.matches(host):
             self.deny_cache.deny(host)
-            self._respond_blocked(flow, "domain-list", request_scan_text)
+            self._respond_blocked(flow, "domain-list")
             return
 
         for pattern in NSFW_PATH_PATTERNS:
@@ -225,7 +227,7 @@ class NsfwFilter:
                 # Path-scoped, not whole-host: a single flagged URL shouldn't take down the rest
                 # of an otherwise-fine site for the rest of the day.
                 self.deny_cache.deny(path_key)
-                self._respond_blocked(flow, f"path-pattern:{pattern.pattern}", request_scan_text)
+                self._respond_blocked(flow, f"path-pattern:{pattern.pattern}")
                 return
 
     async def response(self, flow: http.HTTPFlow):
@@ -257,7 +259,7 @@ class NsfwFilter:
                 # Path-scoped, same reasoning as the path-pattern case in request() -- one flagged
                 # page's title/description shouldn't ban the rest of the site for the day.
                 self.deny_cache.deny(self._path_key(flow))
-                self._respond_blocked(flow, f"title-keyword:{keyword}", haystack)
+                self._respond_blocked(flow, f"title-keyword:{keyword}")
                 return
 
         # Third tier: nothing above matched, but the page might still be worth a real judgment
@@ -277,7 +279,7 @@ class NsfwFilter:
         )
         if verdict is True:
             self.deny_cache.deny(path_key)
-            self._respond_blocked(flow, "ai-classifier", haystack)
+            self._respond_blocked(flow, "ai-classifier")
             ctx.log.info(f"AI classifier: BLOCKED {flow.request.pretty_url}")
         elif verdict is False:
             self.allow_cache.allow(path_key)

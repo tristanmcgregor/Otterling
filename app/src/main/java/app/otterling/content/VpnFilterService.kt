@@ -12,6 +12,7 @@ import android.system.OsConstants
 import android.util.Log
 import app.otterling.alerts.AlertReporter
 import app.otterling.alerts.AlertSeverity
+import app.otterling.alerts.GuardianAlertSettings
 import app.otterling.focus.HabitRuleManager
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -21,6 +22,7 @@ import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.util.Collections
+import java.util.Locale
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineExceptionHandler
@@ -156,6 +158,7 @@ class VpnFilterService : VpnService() {
         val classifiedDomains = ServerClassifiedDomainsManager(applicationContext)
         val habitRuleManager = HabitRuleManager(applicationContext)
         val cloudFilterSettings = CloudFilterSettings(applicationContext)
+        val alertSettings = GuardianAlertSettings(applicationContext)
         val builder = Builder()
             .setSession("Otterling Filter")
             .setMtu(MTU)
@@ -198,7 +201,7 @@ class VpnFilterService : VpnService() {
         )
         connectionScope = generationScope
         workerJob = scope.launch {
-            runCatching { runPacketLoop(tun, blocklist, classifiedDomains, habitRuleManager, cloudFilterSettings, generationScope) }
+            runCatching { runPacketLoop(tun, blocklist, classifiedDomains, habitRuleManager, cloudFilterSettings, alertSettings, generationScope) }
                 .onFailure { Log.e(TAG, "Packet loop crashed", it) }
             // The packet loop returned. If this coroutine is still active and the service is still
             // meant to be running, the loop exited unexpectedly (transient tun read IOException/EOF
@@ -262,6 +265,7 @@ class VpnFilterService : VpnService() {
         classifiedDomains: ServerClassifiedDomainsManager,
         habitRuleManager: HabitRuleManager,
         cloudFilterSettings: CloudFilterSettings,
+        alertSettings: GuardianAlertSettings,
         relayScope: CoroutineScope,
     ) {
         val input = FileInputStream(tun.fileDescriptor)
@@ -423,6 +427,7 @@ class VpnFilterService : VpnService() {
                                 classifiedDomains,
                                 habitRuleManager,
                                 cloudFilterSettings,
+                                alertSettings,
                                 ownerUidResolver,
                                 mitmExemptUids,
                                 isProxyUnavailable = { !proxyEnabled || proxyOutageTracker.isLikelyDown() },
@@ -452,6 +457,7 @@ class VpnFilterService : VpnService() {
         classifiedDomains: ServerClassifiedDomainsManager,
         habitRuleManager: HabitRuleManager,
         cloudFilterSettings: CloudFilterSettings,
+        alertSettings: GuardianAlertSettings,
         ownerUidResolver: AppUidResolver,
         mitmExemptUids: Set<Int>,
         isProxyUnavailable: () -> Boolean,
@@ -498,16 +504,28 @@ class VpnFilterService : VpnService() {
         val fallbackBlocked = (isMitmExempt || isProxyUnavailable()) &&
             (blocklist.isPublicListBlocked(query.questionName) || classifiedDomains.isBlocked(query.questionName))
         val blocked = customBlocked || fallbackBlocked
+        // Merely visiting a blocked site (a rule-gated domain like a habit-locked website, or a
+        // domain-list/AI-classified filtering hit) is never reported on its own -- only when the
+        // domain itself contains an actual trigger word, mirroring mitm_nsfw_addon.py's
+        // "don't report a bare block" rule on the proxy side. DNS only ever gives us the hostname,
+        // never a full URL/page, so that's the only text there is to check here.
         if (blocked) {
-            scope.launch {
-                runCatching {
-                    AlertReporter(applicationContext).report(
-                        type = "VPN_BLOCK",
-                        details = "Blocked ${query.questionName}",
-                        severity = AlertSeverity.WARNING,
-                        debounceKey = "VPN_BLOCK|${query.questionName}",
-                    )
-                }.onFailure { Log.w(TAG, "VPN block alert failed", it) }
+            val questionName = query.questionName.lowercase(Locale.US)
+            val words = alertSettings.triggerWords()
+            val hit = words.firstOrNull { word ->
+                Regex("\\b${Regex.escape(word.lowercase(Locale.US))}\\b").containsMatchIn(questionName)
+            }
+            if (hit != null) {
+                scope.launch {
+                    runCatching {
+                        AlertReporter(applicationContext).report(
+                            type = "VPN_BLOCK",
+                            details = "\"$hit\" seen in blocked ${query.questionName}",
+                            severity = AlertSeverity.WARNING,
+                            debounceKey = "VPN_BLOCK|${query.questionName}",
+                        )
+                    }.onFailure { Log.w(TAG, "VPN block alert failed", it) }
+                }
             }
         }
         // Without the MITM safety net, "less restrictive at the domain level" would just mean

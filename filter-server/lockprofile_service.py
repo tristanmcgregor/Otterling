@@ -286,6 +286,7 @@ NTFY_EVENT_STYLE = {
 
 PROFILE_IDENTIFIER = "app.otterling.lockprofile"
 DNS_PAYLOAD_IDENTIFIER = f"{PROFILE_IDENTIFIER}.dns"
+CHROME_DNS_PAYLOAD_IDENTIFIER = f"{PROFILE_IDENTIFIER}.chrome-dns"
 FAMILY_DOH_URL = "https://family.cloudflare-dns.com/dns-query"
 
 MAX_BODY_BYTES = 16 * 1024
@@ -540,8 +541,15 @@ def _device_record(device_id: str) -> dict:
                 "passcode": secrets.token_urlsafe(16),
                 "profile_uuid": str(uuid.uuid4()).upper(),
                 "dns_payload_uuid": str(uuid.uuid4()).upper(),
+                "chrome_dns_payload_uuid": str(uuid.uuid4()).upper(),
                 "created_at": time.time(),
             }
+            state[device_id] = record
+            _save_state(state)
+        elif "chrome_dns_payload_uuid" not in record:
+            # Backfill for a record provisioned before the Chrome DoH-bypass payload existed --
+            # see build_mobileconfig's chrome_dns_payload comment for why this got added.
+            record["chrome_dns_payload_uuid"] = str(uuid.uuid4()).upper()
             state[device_id] = record
             _save_state(state)
         return record
@@ -562,8 +570,28 @@ def build_mobileconfig(device_id: str) -> bytes:
         },
     }
 
+    # Chrome (and other Chromium browsers) auto-upgrade to their own DNS-over-HTTPS the moment the
+    # system resolver looks like a known DoH-capable provider -- which the DNS floor above (and
+    # DNSEnforcer.swift's own Cloudflare Family fallback) both deliberately are, by design. Once
+    # Chrome does that, every lookup it makes goes straight to Cloudflare over HTTPS: never touches
+    # dns_classify_mux.py, so neither a habit-gated website rule nor the adult-domain blocklist ever
+    # sees it -- confirmed live via mitmproxy's own connection log showing Chrome's DoH traffic to
+    # family.cloudflare-dns.com sailing straight through while a habit rule was blocking youtube.com
+    # for every other path. PFBlocker.swift's pf rules can't close this without also breaking the
+    # DNS floor's own legitimate use of the same host/port, so this is closed here instead, the same
+    # way an enterprise MDM would: an explicit Chrome policy turning its built-in secure DNS off,
+    # forcing it back onto plain system DNS (which DNSEnforcer/PFBlocker already handle correctly).
+    chrome_dns_payload = {
+        "PayloadType": "com.google.Chrome",
+        "PayloadIdentifier": CHROME_DNS_PAYLOAD_IDENTIFIER,
+        "PayloadUUID": record["chrome_dns_payload_uuid"],
+        "PayloadVersion": 1,
+        "PayloadDisplayName": "Otterling Chrome DNS Policy",
+        "DnsOverHttpsMode": "off",
+    }
+
     profile = {
-        "PayloadContent": [dns_payload],
+        "PayloadContent": [dns_payload, chrome_dns_payload],
         "PayloadDisplayName": "Otterling Lock",
         "PayloadDescription": (
             "Marks this Mac as protected by Otterling and sets an encrypted-DNS floor "
