@@ -1202,6 +1202,48 @@ function SettingsScreen({
 
         {!isMac && (
         <div className="space-y-3">
+          <SectionLabel>Visual Filtering</SectionLabel>
+          <Card className="rounded-2xl space-y-0 divide-y divide-outline-variant/30">
+            <SettingsRow
+              title="Screenshot NSFW filtering"
+              sub="Periodically uploads a screenshot of the foreground app to the server for classification; a positive match blocks that app for 15 minutes and alerts you"
+              checked={settings.visualFilterEnabled}
+              onChange={(v) => api.patchSettings(deviceId, { visualFilterEnabled: v }).then(onChanged)}
+            />
+            {settings.visualFilterEnabled && (
+              <div className="py-3 px-1 flex items-center gap-3">
+                <label className="text-sm text-on-surface-variant">Min. interval</label>
+                <input
+                  type="number"
+                  min={15}
+                  max={3600}
+                  defaultValue={settings.visualFilterIntervalSeconds}
+                  onBlur={(e) =>
+                    api
+                      .patchSettings(deviceId, { visualFilterIntervalSeconds: Number(e.target.value) || 60 })
+                      .then(onChanged)
+                  }
+                  className="w-20 h-9 px-3 rounded-xl border border-outline bg-surface text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                />
+                <span className="text-xs text-on-surface-variant">seconds</span>
+              </div>
+            )}
+            <div className="py-3 px-1">
+              <a
+                href="/screenshot-review/list"
+                target="_blank"
+                rel="noreferrer"
+                className="text-xs text-primary underline"
+              >
+                View flagged screenshots
+              </a>
+            </div>
+          </Card>
+        </div>
+        )}
+
+        {!isMac && (
+        <div className="space-y-3">
           <SectionLabel>Friction Delay</SectionLabel>
           <Card className="rounded-2xl space-y-0 divide-y divide-outline-variant/30">
             <SettingsRow
@@ -2433,6 +2475,16 @@ function HabitRuleWizard({
   const [endTime, setEndTime] = useState(editingRule?.schedule.endTime ?? "21:00");
   const [days, setDays] = useState<number[]>(editingRule?.schedule.daysOfWeek ?? [1, 2, 3, 4, 5]);
   const [budget, setBudget] = useState<string>(editingRule?.dailyBudgetMinutes != null ? String(editingRule.dailyBudgetMinutes) : "");
+  // A rule with an empty requiredHabitIds list blocks unconditionally for its whole scheduled
+  // window (see lockprofile_service.py's _currently_blocked_website_domains) -- exactly what a
+  // curfew-style rule wants, but it means this step's own defaults (00:00-21:00, Mon-Fri) would
+  // ALSO impose an all-day block on top of a pure daily-budget rule if left untouched, defeating
+  // the point of "just cap it at N minutes, any time." This toggle lets a guardian opt out of the
+  // schedule condition entirely -- checked, `save` sends an empty schedule, which
+  // _currently_blocked_website_domains' `start is None or end is None` check already skips, so
+  // only the habit/budget condition(s) apply. Defaults to whatever the rule being edited already
+  // has (no stored startTime means a prior save already used this).
+  const [noSchedule, setNoSchedule] = useState(editingRule ? !editingRule.schedule.startTime : false);
   const [saving, setSaving] = useState(false);
 
   const steps = [
@@ -2503,7 +2555,7 @@ function HabitRuleWizard({
       targetWebsites,
       deviceIds: allDevices ? ["all"] : selectedDeviceIds,
       requiredHabitIds: selectedHabitIds,
-      schedule: { startTime, endTime, daysOfWeek: days },
+      schedule: noSchedule ? {} : { startTime, endTime, daysOfWeek: days },
       dailyBudgetMinutes: budget.trim() ? Number(budget) : null,
     };
     try {
@@ -2784,7 +2836,22 @@ function HabitRuleWizard({
                 <p className="text-sm text-on-surface-variant mt-0.5">Set the time window and days for this rule.</p>
               </div>
               <Card className="rounded-2xl space-y-5">
-                <div>
+                <label className="flex items-start gap-2.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={noSchedule}
+                    onChange={(e) => setNoSchedule(e.target.checked)}
+                    className="mt-0.5 w-4 h-4 rounded border-outline accent-primary"
+                  />
+                  <span>
+                    <span className="text-sm font-semibold block">No schedule restriction</span>
+                    <span className="text-xs text-on-surface-variant">
+                      Applies at any time, any day -- use this for a pure daily time budget with no time-of-day window.
+                      {selectedHabitIds.length === 0 && " Without a required habit, leaving this unchecked blocks the target for the entire window below, every time it's in effect."}
+                    </span>
+                  </span>
+                </label>
+                <div className={cn(noSchedule && "opacity-40 pointer-events-none")}>
                   <label className="text-sm font-semibold block mb-2">Active time window</label>
                   <div className="flex items-center gap-3">
                     <input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} className="flex-1 h-10 px-3 rounded-xl border border-outline bg-surface text-sm focus:outline-none focus:ring-2 focus:ring-primary" />
@@ -2792,7 +2859,7 @@ function HabitRuleWizard({
                     <input type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} className="flex-1 h-10 px-3 rounded-xl border border-outline bg-surface text-sm focus:outline-none focus:ring-2 focus:ring-primary" />
                   </div>
                 </div>
-                <div>
+                <div className={cn(noSchedule && "opacity-40 pointer-events-none")}>
                   <label className="text-sm font-semibold block mb-2.5">Days of week</label>
                   <div className="flex gap-2">
                     {["S", "M", "T", "W", "T", "F", "S"].map((d, i) => (

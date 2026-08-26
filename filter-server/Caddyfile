@@ -54,6 +54,14 @@
 	handle /alerts/* {
 		reverse_proxy 127.0.0.1:8091
 	}
+	# Server-to-server routes lockprofile_service.py itself Bearer-gates (see its _authorized())
+	# -- reached over the PUBLIC URL by mitm_nsfw_addon.py, which can't resolve the internal
+	# `lockprofile` service name (its container's DNS is overridden to public resolvers, see
+	# docker-compose.yml's mitmproxy `dns:` block). dns_classify_mux.py reaches the same data
+	# directly over the compose network instead, so this route exists for mitmproxy's benefit.
+	handle /internal/* {
+		reverse_proxy 127.0.0.1:8091
+	}
 	# Phone-uploaded diagnostic logs (see lockprofile_service.py's module doc, DeviceLogUploader.kt).
 	# The phone authenticates itself with its own LOCKPROFILE_TOKEN bearer, same as /alerts/*
 	# above -- unrelated to the guardian-browser-session gate in front of /device-logs/view/*
@@ -98,6 +106,14 @@
 	# way to supply, so Caddy injects it here rather than exposing LOCKPROFILE_TOKEN to the
 	# dashboard's static JS.
 	handle /device-logs/view/* {
+		reverse_proxy 127.0.0.1:8091 {
+			header_up Authorization "Bearer {$LOCKPROFILE_TOKEN}"
+		}
+	}
+	# Guardian evidence viewer for NSFW-flagged screenshots (POST /screenshot-classify on the
+	# phone side) -- bearer-gated like /device-logs/view/* above, deliberately NOT following
+	# /review-data/*'s unauthenticated stance below since these are more sensitive images.
+	handle /screenshot-review/* {
 		reverse_proxy 127.0.0.1:8091 {
 			header_up Authorization "Bearer {$LOCKPROFILE_TOKEN}"
 		}
@@ -231,6 +247,10 @@ http://192.168.0.254 {
 	handle /alerts/* {
 		reverse_proxy 127.0.0.1:8091
 	}
+	# See the matching block in the main vhost above -- server-to-server routes for mitm_nsfw_addon.py.
+	handle /internal/* {
+		reverse_proxy 127.0.0.1:8091
+	}
 	handle /device-logs/upload {
 		reverse_proxy 127.0.0.1:8091
 	}
@@ -256,6 +276,14 @@ http://192.168.0.254 {
 		file_server
 	}
 	handle /device-logs/view/* {
+		reverse_proxy 127.0.0.1:8091 {
+			header_up Authorization "Bearer {$LOCKPROFILE_TOKEN}"
+		}
+	}
+	# Guardian evidence viewer for NSFW-flagged screenshots (POST /screenshot-classify on the
+	# phone side) -- bearer-gated like /device-logs/view/* above, deliberately NOT following
+	# /review-data/*'s unauthenticated stance below since these are more sensitive images.
+	handle /screenshot-review/* {
 		reverse_proxy 127.0.0.1:8091 {
 			header_up Authorization "Bearer {$LOCKPROFILE_TOKEN}"
 		}
@@ -350,6 +378,30 @@ fleet.bartholomew.help {
 	}
 
 	reverse_proxy 127.0.0.1:8412
+
+	encode gzip
+}
+
+# Website-rule block page -- see mitm_nsfw_addon.py's BLOCKED_PAGE_URL/_respond_website_blocked.
+# Its own subdomain (not a path under vpn.bartholomew.help above) so a redirect here is a fresh
+# same-site navigation with a normal, publicly-issued cert -- a raw DNS sinkhole to an arbitrary
+# blocked domain can't do that (no valid cert for a domain we don't own), which is the whole reason
+# this page exists as its own real HTTPS site rather than something inlined at the DNS layer.
+# Requires a DNS A record: blocked.vpn.bartholomew.help -> this host's public IP, same as
+# fleet.bartholomew.help above.
+blocked.vpn.bartholomew.help {
+	bind 0.0.0.0
+
+	tls {
+		issuer acme {
+			preferred_chains {
+				root_common_name "ISRG Root X1"
+			}
+		}
+	}
+
+	root * /srv/blocked-page
+	file_server
 
 	encode gzip
 }

@@ -124,11 +124,6 @@ services:
     restart: unless-stopped
     depends_on:
       - adguardhome
-      # Polled for habit-gated website rules (see dns_classify_mux.py's _WebsiteRuleBlocks) --
-      # reached over this compose network by service name, same as adguardhome above. Not a hard
-      # dependency: a not-yet-ready/down lockprofile just means that check fails open until the
-      # next poll succeeds (see _WebsiteRuleBlocks.refresh_if_stale's fail-open handling).
-      - lockprofile
     ports:
       # Takes over the LAN-facing DNS port AdGuardHome used to hold. tcp binding just closes the
       # port rather than handling it -- v1 is UDP-only, see dns_classify_mux.py's docstring.
@@ -155,11 +150,6 @@ services:
       - DNS_MUX_LISTEN_PORT=53
       - UPSTREAM_DNS_HOST=adguardhome
       - UPSTREAM_DNS_PORT=53
-      # Same token lockprofile itself requires (LOCKPROFILE_TOKEN in .env) -- lets this container
-      # poll lockprofile's /internal/dns-website-blocks (see _WebsiteRuleBlocks).
-      - LOCKPROFILE_TOKEN=${LOCKPROFILE_TOKEN:?set LOCKPROFILE_TOKEN in .env}
-      - LOCKPROFILE_HOST=lockprofile
-      - LOCKPROFILE_PORT=8091
     working_dir: /opt/otterling
     # No outbound-HTTPS proxy config needed -- mitmproxy already does unrestricted outbound
     # fetches (its own domain-list refresh) from a plain Docker container on this same host, so
@@ -167,7 +157,15 @@ services:
     command: python3 dns_classify_mux.py
 
   lockprofile:
-    image: python:3.12-slim
+    # Built from lockprofile.Dockerfile (stock python:3.12-slim + the Claude Code CLI + an
+    # unprivileged claude-runner account) -- see that Dockerfile's header comment. Needed for
+    # nsfw_image_classifier.py's `claude -p` calls (POST /screenshot-classify). Image is tagged
+    # and built via `docker compose build`; deploy_filter_server.sh runs `up -d --no-build` so a
+    # normal deploy reuses the already-built tag rather than rebuilding on every push.
+    image: otterling-lockprofile-claude:latest
+    build:
+      context: .
+      dockerfile: lockprofile.Dockerfile
     container_name: otterling-lockprofile
     restart: unless-stopped
     ports:
@@ -183,6 +181,11 @@ services:
       # the dashboard as `Failed to update "<type>"` no matter which type is toggled.
       - ./report_types.json:/opt/otterling/report_types.json
       - ./lockprofile-data:/data
+      # Shared subprocess-invocation helper for the `claude -p` CLI call (env-stripping,
+      # CLAUDE_RUNNER_USER privilege drop) -- same file dns_classify_mux.py/mitm_nsfw_addon.py
+      # already mount, imported by nsfw_image_classifier.py below rather than duplicated.
+      - ./ai_classifier.py:/opt/otterling/ai_classifier.py:ro
+      - ./nsfw_image_classifier.py:/opt/otterling/nsfw_image_classifier.py:ro
     # Lets this container reach the host-level sudo_review_server.py (see that file and
     # lockprofile_service.py's SUDO_REVIEW_URL) -- `host-gateway` is the Docker Engine special value
     # that resolves to the host's own bridge-gateway IP on Linux (Docker Desktop provides this
@@ -213,6 +216,10 @@ services:
       # into the mounted data dir; absent = FCM inert, ntfy + polling unaffected. See the
       # FCM_CREDENTIALS_PATH note in lockprofile_service.py.
       - FCM_CREDENTIALS_PATH=${FCM_CREDENTIALS_PATH:-/data/fcm-service-account.json}
+      # Same subscription OAuth token as ai_classifier.py's other callers (mitm_nsfw_addon.py,
+      # dns_classify_mux.py) -- see mitmproxy.Dockerfile's comment for why not ANTHROPIC_API_KEY.
+      # Screenshot classification fails open (no block) if unset.
+      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
     working_dir: /opt/otterling
     # google-auth is only needed for the optional FCM push; installed at start rather than via a
     # Dockerfile to keep this a mounted-script service. If the install fails (offline boot), FCM
@@ -267,6 +274,11 @@ services:
       # One-time account-handoff page -- see lockprofile_service.py's HANDOFF_TOKEN_PATH comment
       # and Caddyfile's /handoff-auth/* block.
       - ./handoff:/srv/handoff:ro
+      # Real "you're blocked" page for website-rule redirects (see mitm_nsfw_addon.py's
+      # BLOCKED_PAGE_URL/_respond_website_blocked) -- its own subdomain vhost in the Caddyfile, not
+      # a path under vpn.bartholomew.help, so a redirect there is a fresh same-site navigation with
+      # a normal publicly-issued cert.
+      - ./blocked-page:/srv/blocked-page:ro
       # Read-only mirror of dns-classifier's write-side mount above -- serves the accumulated
       # AI-classified-bad-domains list to the Android app at /filter-lists/* (see Caddyfile).
       - ./classified-domains-data:/srv/filter-lists:ro

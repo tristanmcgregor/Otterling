@@ -156,6 +156,11 @@ export interface DeviceSettings {
   appBudgets: AppBudget[];
   triggerWords: TriggerWord[];
   blockedApps: BlockedApp[];
+  // Android-only (screenshot capture -> POST /screenshot-classify, see
+  // FocusGuardAccessibilityService.kt). visualFilterIntervalSeconds is the minimum gap between
+  // captures while the same app stays foregrounded.
+  visualFilterEnabled: boolean;
+  visualFilterIntervalSeconds: number;
   updatedAt: number | null;
   // macos-only -- null means "no opinion yet" (see lockprofile_service.py's
   // _default_device_settings comment). The dashboard UI only shows these controls when

@@ -100,6 +100,8 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import nsfw_image_classifier
+
 # Host-level AI reviewer for SudoBroker.swift's tier-3 fallback (see sudo_review_server.py's module
 # doc comment for why this has to be a separate host-level process rather than something this
 # container does itself). `host.docker.internal` needs docker-compose.yml's `extra_hosts:
@@ -113,6 +115,10 @@ DATA_DIR = os.environ.get("LOCKPROFILE_DATA_DIR", "/data")
 STATE_PATH = os.path.join(DATA_DIR, "state.json")
 ALERTS_PATH = os.path.join(DATA_DIR, "alerts", "events.jsonl")
 LOGS_DIR = os.path.join(DATA_DIR, "logs")
+# Flagged-only screenshot evidence for POST /screenshot-classify -- see that route's comment and
+# _store_screenshot below. Under DATA_DIR (not a new top-level path) so it inherits
+# deploy_filter_server.sh's existing `--exclude 'lockprofile-data/'` rsync protection for free.
+SCREENSHOTS_DIR = os.path.join(DATA_DIR, "screenshots")
 
 LISTEN_HOST = os.environ.get("LOCKPROFILE_LISTEN_HOST", "0.0.0.0")
 LISTEN_PORT = int(os.environ.get("LOCKPROFILE_LISTEN_PORT", "8091"))
@@ -297,6 +303,13 @@ MAX_BODY_BYTES = 16 * 1024
 # device stuck retrying uploads can't fill the disk.
 MAX_LOG_BODY_BYTES = 2 * 1024 * 1024
 MAX_LOG_FILES_PER_DEVICE = 20
+# A downscaled (720px max dimension), JPEG-compressed phone screenshot (see
+# FocusGuardAccessibilityService.kt's capture path) should be well under 1-2MB base64-encoded;
+# this caps the whole JSON request body, same pattern as MAX_LOG_BODY_BYTES above.
+MAX_SCREENSHOT_BODY_BYTES = 6 * 1024 * 1024
+# Only NSFW-classified screenshots are ever stored (see _store_screenshot) -- this is a "recent
+# incidents" cap, not a full history, so a much lower number than MAX_LOG_FILES_PER_DEVICE is fine.
+MAX_SCREENSHOT_FILES_PER_DEVICE = 50
 # Phone device ids come from Settings.Secure.ANDROID_ID -- always a 16-char lowercase hex string
 # in practice -- but _list_known_device_ids() also surfaces ids from non-phone reporters sharing
 # this same alerts/settings storage (e.g. IntegrityReporter.swift's Mac hostnames/IPs), which
@@ -432,6 +445,18 @@ HABIT_COMPLETIONS_PATH = os.path.join(DATA_DIR, "habit_completions.json")
 # rules are migrated in-place on first startup after this change -- see _migrate_legacy_device_rules.
 RULES_PATH = os.path.join(DATA_DIR, "rules.json")
 
+# Tracked browsing time for website rules that set dailyBudgetMinutes (see _build_rule) --
+# {"date": "YYYY-MM-DD", "usage": {device_id: {domain: seconds}}}. Populated by
+# mitm_nsfw_addon.py's POST /internal/website-usage-tick (that file's _UsageTracker estimates
+# active browsing time from HTTP request gaps, since a domain-level budget has no on-device
+# equivalent to AppTimeBudgetManager's per-app foreground ticks -- only the proxy that actually
+# sees ongoing requests can measure it). Resets itself the same way habit_completions.json's
+# doneToday does: the stored `date` simply stops matching _today_str(), so stale data is never
+# read back, no separate midnight-reset job needed. Consulted by
+# _currently_blocked_website_domains to fold "over budget for today" into the same blocked-domain
+# set schedule/habit-gated rules already produce.
+WEBSITE_USAGE_PATH = os.path.join(DATA_DIR, "website_usage.json")
+
 # A completion report otherwise carries NO proof at all -- POST .../complete is device-bearer
 # authenticated the same as every other low-stakes phone->server call (see Caddyfile), but that
 # bearer is embedded in the shipped APK and extractable by the same person a habit-gated app
@@ -469,6 +494,7 @@ _habits_lock = threading.Lock()
 _habit_completions_lock = threading.Lock()
 _rules_lock = threading.Lock()
 _removed_devices_lock = threading.Lock()
+_website_usage_lock = threading.Lock()
 _habitshare_account_lock = threading.Lock()
 _report_types_lock = threading.Lock()
 _handoff_token_lock = threading.Lock()
@@ -927,6 +953,54 @@ def _list_device_logs() -> dict:
     return result
 
 
+def _store_screenshot(device_id: str, package_name: str, image_bytes: bytes) -> str:
+    """Writes an NSFW-flagged screenshot to SCREENSHOTS_DIR/<device_id>/, then prunes to the
+    newest MAX_SCREENSHOT_FILES_PER_DEVICE for that device -- see POST /screenshot-classify.
+    Only ever called for a positive (NSFW) classification result; a safe/error result is never
+    written to disk at all. `package_name` is sanitized the same way _sanitize_installed_apps
+    caps a field, since it becomes part of a filename below."""
+    safe_package = "".join(c for c in package_name if c.isalnum() or c in "._-")[:200] or "unknown"
+    device_dir = os.path.join(SCREENSHOTS_DIR, device_id)
+    os.makedirs(device_dir, exist_ok=True)
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    filename = f"{stamp}-{safe_package}.jpg"
+    path = os.path.join(device_dir, filename)
+    counter = 1
+    while os.path.exists(path):
+        filename = f"{stamp}-{safe_package}-{counter}.jpg"
+        path = os.path.join(device_dir, filename)
+        counter += 1
+    with open(path, "wb") as fh:
+        fh.write(image_bytes)
+    existing = sorted(os.listdir(device_dir))
+    for stale in existing[: max(0, len(existing) - MAX_SCREENSHOT_FILES_PER_DEVICE)]:
+        try:
+            os.remove(os.path.join(device_dir, stale))
+        except OSError:
+            pass
+    return filename
+
+
+def _list_screenshots() -> dict:
+    if not os.path.isdir(SCREENSHOTS_DIR):
+        return {}
+    result = {}
+    for device_id in sorted(os.listdir(SCREENSHOTS_DIR)):
+        device_dir = os.path.join(SCREENSHOTS_DIR, device_id)
+        if not os.path.isdir(device_dir):
+            continue
+        files = []
+        for filename in sorted(os.listdir(device_dir)):
+            path = os.path.join(device_dir, filename)
+            try:
+                stat = os.stat(path)
+            except OSError:
+                continue
+            files.append({"filename": filename, "size": stat.st_size, "mtime": stat.st_mtime})
+        result[device_id] = files
+    return result
+
+
 # ─── Dashboard device settings (/dashboard-api/*) ──────────────────────────────────────────────
 # Backs the web dashboard at filter-server/dashboard/ (served by Caddy at /dashboard/, see
 # Caddyfile) -- a guardian-facing settings console, distinct from the mac/phone-facing routes
@@ -1015,6 +1089,7 @@ REPORT_TYPE_ITEM_RE = re.compile(r"^/dashboard-api/report-types/([A-Za-z0-9_]+)$
 SETTINGS_PATCH_ALLOWED_KEYS = {
     "device_name", "protections", "vpnFilter", "frictionDelay",
     "proxyFilter", "cloudFilterHost", "cloudFilterEnabled",
+    "visualFilterEnabled", "visualFilterIntervalSeconds",
 }
 
 
@@ -1279,6 +1354,42 @@ def _save_rules(rules: list) -> None:
     os.replace(tmp_path, RULES_PATH)
 
 
+def _load_website_usage() -> dict:
+    """{"date": "YYYY-MM-DD", "usage": {device_id: {domain: seconds}}} -- see WEBSITE_USAGE_PATH's
+    comment for the reset-by-ignoring-a-stale-date approach. Callers that only read (e.g.
+    _currently_blocked_website_domains) don't need _website_usage_lock; _add_website_usage_seconds
+    below takes it for its own read-modify-write."""
+    try:
+        with open(WEBSITE_USAGE_PATH, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (FileNotFoundError, json.JSONDecodeError):
+        data = {}
+    if not isinstance(data, dict) or data.get("date") != _today_str():
+        return {"date": _today_str(), "usage": {}}
+    usage = data.get("usage")
+    return {"date": data["date"], "usage": usage if isinstance(usage, dict) else {}}
+
+
+def _save_website_usage(data: dict) -> None:
+    os.makedirs(DATA_DIR, exist_ok=True)
+    tmp_path = WEBSITE_USAGE_PATH + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, indent=2, sort_keys=True)
+    os.replace(tmp_path, WEBSITE_USAGE_PATH)
+
+
+def _add_website_usage_seconds(device_id: str, domain: str, seconds: float) -> None:
+    """Accumulates today's tracked browsing time for one device+domain -- called from
+    POST /internal/website-usage-tick (see that route's comment for who calls it and why)."""
+    if seconds <= 0:
+        return
+    with _website_usage_lock:
+        data = _load_website_usage()
+        bucket = data["usage"].setdefault(device_id, {})
+        bucket[domain] = bucket.get(domain, 0) + seconds
+        _save_website_usage(data)
+
+
 def _rule_applies_to_device(rule: dict, device_id: str) -> bool:
     """`deviceIds: ["all"]` (the dashboard's "All devices" shortcut) applies everywhere;
     otherwise the device must be explicitly listed. device_id is already canonicalized by every
@@ -1464,6 +1575,33 @@ def _is_within_window(minute_of_day: int, start: int, end: int) -> bool:
     return (start <= minute_of_day < end) if start <= end else (minute_of_day >= start or minute_of_day < end)
 
 
+def _website_budget_minutes_by_device() -> dict:
+    """device_id -> {domain: dailyBudgetMinutes}, one entry per website rule that sets a budget
+    (see _build_rule) -- independent of whether that budget is currently exceeded (that's
+    _currently_blocked_website_domains' job, just below, which calls this). The smallest
+    configured budget wins if more than one rule targets the same device+domain, so a stricter
+    guardian-authored limit can never be silently loosened by a second, looser rule.
+
+    Canonical-device_id-keyed, same as _currently_blocked_website_domains itself; re-keyed onto
+    every DNS/mitm-visible source identifier by _website_budget_targets_by_source_key below."""
+    all_device_ids = list(_list_known_device_ids().keys())
+    result: dict = {}
+    for rule in _load_rules():
+        minutes = rule.get("dailyBudgetMinutes")
+        if not isinstance(minutes, (int, float)) or minutes <= 0:
+            continue
+        domains = [w.get("domain", "") for w in (rule.get("targetWebsites") or []) if w.get("domain")]
+        if not domains:
+            continue
+        device_ids = rule.get("deviceIds") or []
+        targeted_devices = all_device_ids if "all" in device_ids else device_ids
+        for device_id in targeted_devices:
+            bucket = result.setdefault(device_id, {})
+            for domain in domains:
+                bucket[domain] = min(bucket.get(domain, minutes), minutes)
+    return result
+
+
 def _currently_blocked_website_domains() -> dict:
     """device_id -> set of domains currently blocked by that device's website-targeted habit
     rules, evaluated fresh against the live schedule window and habit completion state -- the
@@ -1475,10 +1613,16 @@ def _currently_blocked_website_domains() -> dict:
     "satisfied" -- same as Android -- so it blocks unconditionally for the whole window, matching
     isWebsiteRuleSatisfied's documented semantics.
 
-    Consulted by GET /internal/dns-website-blocks, which dns_classify_mux.py polls on its own
-    short cadence (see that file) so this Mac's DNS-query-time enforcement of website habit rules
-    lifts within one poll interval of a habit being marked done, without adding a network
-    round-trip to every DNS query for every device.
+    Also folds in domains whose dailyBudgetMinutes has been used up for the day (see
+    _website_budget_minutes_by_device/WEBSITE_USAGE_PATH) -- unlike the schedule-gated rules
+    above, a budget-exceeded block ignores time-of-day/day-of-week entirely and simply stays
+    blocked for the rest of the day once the tracked usage total crosses the limit.
+
+    Consulted by GET /internal/dns-website-blocks, polled both by dns_classify_mux.py (Mac
+    clients) and mitm_nsfw_addon.py (the CONNECT-tunneled 80/443 traffic both platforms already
+    route through it -- see that file's _WebsiteRuleBlocks) on their own short cadence, so
+    enforcement lifts within one poll interval of a habit being marked done or a new day starting,
+    without adding a network round-trip to every DNS query/request for every device.
 
     Reads the global rule library (RULES_PATH, see _rules_for_device) rather than any one
     device's settings record -- a rule's deviceIds says which device(s) this applies to, with
@@ -1518,6 +1662,15 @@ def _currently_blocked_website_domains() -> dict:
         targeted_devices = all_device_ids if "all" in device_ids else device_ids
         for device_id in targeted_devices:
             result.setdefault(device_id, set()).update(domains)
+
+    budget_by_device = _website_budget_minutes_by_device()
+    if budget_by_device:
+        usage_by_device = _load_website_usage()["usage"]
+        for device_id, domain_budgets in budget_by_device.items():
+            device_usage = usage_by_device.get(device_id, {})
+            for domain, minutes in domain_budgets.items():
+                if device_usage.get(domain, 0) >= minutes * 60:
+                    result.setdefault(device_id, set()).add(domain)
     return result
 
 
@@ -1537,6 +1690,23 @@ def _dns_website_blocks_by_source_key() -> dict:
         if domains:
             result.setdefault(alias_key, set()).update(domains)
     return {key: sorted(domains) for key, domains in result.items()}
+
+
+def _website_budget_targets_by_source_key() -> dict:
+    """Same re-keying as _dns_website_blocks_by_source_key, but for _website_budget_minutes_by_device
+    -- domain->dailyBudgetMinutes per DNS/mitm-visible source identifier, regardless of whether
+    that budget is currently exceeded (see _currently_blocked_website_domains for the "is it
+    exceeded" half). Polled by mitm_nsfw_addon.py so it knows which (client, domain) pairs are
+    actually worth timing -- see that file's _BudgetTargets/_UsageTracker."""
+    by_device = _website_budget_minutes_by_device()
+    result: dict = {}
+    for device_id, domains in by_device.items():
+        result.setdefault(device_id, {}).update(domains)
+    for alias_key, canonical_id in DEVICE_ID_ALIASES.items():
+        domains = by_device.get(canonical_id)
+        if domains:
+            result.setdefault(alias_key, {}).update(domains)
+    return result
 
 
 def _default_device_settings(device_id: str = "") -> dict:
@@ -1574,6 +1744,12 @@ def _default_device_settings(device_id: str = "") -> dict:
         "triggerWords": [],
         "blockedApps": [],
         "protectedApps": [],
+        # Android-only (screenshot capture + server-side classification, see POST
+        # /screenshot-classify) -- default ON, matching every other protection field's
+        # default-safe stance. Interval is dashboard-tunable so the capture cadence can change
+        # without an app update.
+        "visualFilterEnabled": True,
+        "visualFilterIntervalSeconds": 60,
         # Reported by the device itself (POST .../installed-apps), NOT guardian-authored -- see
         # that route's comment. Deliberately not in SETTINGS_PATCH_ALLOWED_KEYS: the generic
         # settings PATCH is for guardian opinions, this is a device fact the guardian only ever
@@ -2238,6 +2414,21 @@ class Handler(BaseHTTPRequestHandler):
         if not self._authorized():
             return self._send_json(401, {"error": "unauthorized"})
 
+        if self.path == "/internal/website-usage-tick":
+            # mitm_nsfw_addon.py's _UsageTracker posts a batched elapsed-seconds delta here every
+            # ~15s for any (client, domain) pair under an active dailyBudgetMinutes rule --
+            # source_key is whatever identifier that container's client_conn.peername gave it (a
+            # LAN IP in practice), resolved to a canonical device_id the same way every other
+            # source-keyed report in this file is (_canonicalize_device_id).
+            body = self._read_json_body()
+            source_key = ((body or {}).get("source_key") or "").strip()
+            domain = ((body or {}).get("domain") or "").strip().lower()
+            seconds = (body or {}).get("seconds")
+            if not source_key or not domain or not isinstance(seconds, (int, float)):
+                return self._send_json(400, {"error": "source_key, domain and seconds required"})
+            _add_website_usage_seconds(_canonicalize_device_id(source_key), domain, float(seconds))
+            return self._send_json(200, {"status": "ok"})
+
         if self.path == "/lockprofile/provision":
             body = self._read_json_body()
             device_id = (body or {}).get("device_id", "").strip()
@@ -2363,6 +2554,48 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send_json(400, {"error": "device_id and logs required"})
             filename = _store_device_log(device_id, logs)
             return self._send_json(200, {"status": "ok", "filename": filename})
+
+        if self.path == "/screenshot-classify":
+            # See FocusGuardAccessibilityService.kt's screenshot-capture path and
+            # ScreenshotUploader.kt. A SAFE or classifier-error result is discarded immediately
+            # (decoded into memory, never written to disk) -- only a positive NSFW result is
+            # persisted, as evidence for the guardian (see /screenshot-review/* below).
+            body = self._read_json_body(MAX_SCREENSHOT_BODY_BYTES)
+            device_id = _safe_device_id((body or {}).get("device_id", "").strip())
+            package_name = (body or {}).get("package_name", "").strip() if body else ""
+            image_b64 = (body or {}).get("image_base64", "") if body else ""
+            if not device_id or not package_name or not image_b64:
+                return self._send_json(400, {"error": "device_id, package_name and image_base64 required"})
+            try:
+                image_bytes = base64.b64decode(image_b64, validate=True)
+            except (binascii.Error, ValueError):
+                return self._send_json(400, {"error": "invalid image_base64"})
+
+            # Server-side kill switch: a guardian can disable this fleet- or per-device-wide
+            # without an app update even if a stale APK keeps uploading.
+            settings = _device_settings(device_id)
+            if not settings.get("visualFilterEnabled", True):
+                return self._send_json(200, {"status": "ok", "classification": "skipped"})
+
+            verdict = nsfw_image_classifier.classify_screenshot(image_bytes)
+            if verdict is None:
+                print(f"[lockprofile] screenshot classification failed/unavailable for {device_id}", flush=True)
+                return self._send_json(200, {"status": "ok", "classification": "error"})
+            if not verdict:
+                return self._send_json(200, {"status": "ok", "classification": "safe"})
+
+            _store_screenshot(device_id, package_name, image_bytes)
+            # Alerting the guardian happens on-device (AlertReporter.report(), same local-SMS
+            # pipeline as every other Android-detected type like WATCHED_APP/TRIGGER_WORD), not
+            # here -- unlike Mac/server-origin events, Android alerts never round-trip through
+            # this server's own ntfy/FCM push. See FocusGuardAccessibilityService.kt's
+            # reportNsfwDetection call site.
+            block_until_millis = int(time.time() * 1000) + 15 * 60 * 1000
+            return self._send_json(200, {
+                "status": "ok",
+                "classification": "nsfw",
+                "blockUntilMillis": block_until_millis,
+            })
 
         if self.path.startswith("/dashboard-api/"):
             # Habit completions can carry a base64 photo (see HABIT_PROOFS_DIR) -- needs more
@@ -2992,11 +3225,19 @@ class Handler(BaseHTTPRequestHandler):
             return self._send_json(401, {"error": "unauthorized"})
 
         if parsed.path == "/internal/dns-website-blocks":
-            # Polled by dns_classify_mux.py (a separate container/process with no direct access
-            # to device_settings.json or the habit library) so it can enforce website-targeted
-            # habit rules at DNS-query time for Mac clients -- see
+            # Polled by dns_classify_mux.py and mitm_nsfw_addon.py (separate containers/processes
+            # with no direct access to device_settings.json or the habit library) so each can
+            # enforce website-targeted habit/budget rules for its own slice of traffic -- see
             # _dns_website_blocks_by_source_key's doc comment.
             return self._send_json(200, {"blocks": _dns_website_blocks_by_source_key()})
+
+        if parsed.path == "/internal/website-budget-targets":
+            # Polled by mitm_nsfw_addon.py (see that file's _BudgetTargets) so it knows which
+            # (client, domain) pairs currently sit under a dailyBudgetMinutes rule, independent of
+            # whether that budget is already exceeded -- it needs this to know what to *time*, not
+            # just what's already blocked (the /internal/dns-website-blocks route above covers
+            # that half). See _website_budget_targets_by_source_key's doc comment.
+            return self._send_json(200, {"targets": _website_budget_targets_by_source_key()})
 
         if parsed.path == "/report-config":
             # Lets the phone's own AlertReporter (Android-origin types never touch this server --
@@ -3043,6 +3284,33 @@ class Handler(BaseHTTPRequestHandler):
                 content = fh.read()
             self.send_response(200)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(content)))
+            self.end_headers()
+            self.wfile.write(content)
+            return
+
+        # Guardian evidence viewer for NSFW-flagged screenshots (see POST /screenshot-classify
+        # and _store_screenshot). Bearer-gated like /device-logs/view/* above -- deliberately NOT
+        # following /review-data/*'s newer unauthenticated stance, since these are more sensitive
+        # images than diagnostic log text.
+        if parsed.path == "/screenshot-review/list":
+            return self._send_json(200, {"devices": _list_screenshots()})
+
+        if parsed.path.startswith("/screenshot-review/"):
+            remainder = parsed.path[len("/screenshot-review/"):]
+            parts = remainder.split("/", 1)
+            if len(parts) != 2:
+                return self._send_json(404, {"error": "not found"})
+            device_id, filename = parts
+            if not DEVICE_ID_RE.match(device_id) or "/" in filename or ".." in filename:
+                return self._send_json(400, {"error": "invalid path"})
+            path = os.path.join(SCREENSHOTS_DIR, device_id, filename)
+            if not os.path.isfile(path):
+                return self._send_json(404, {"error": "not found"})
+            with open(path, "rb") as fh:
+                content = fh.read()
+            self.send_response(200)
+            self.send_header("Content-Type", "image/jpeg")
             self.send_header("Content-Length", str(len(content)))
             self.end_headers()
             self.wfile.write(content)
