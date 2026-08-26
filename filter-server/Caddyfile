@@ -85,50 +85,26 @@
 	# review-dashboard/README.md for the JSON schema release.sh must write). Also covers
 	# /device-logs/view/* (uploaded phone diagnostics, see lockprofile_service.py).
 	#
-	# Basic Auth was removed from this whole section 2026-08-18 (stuck in an unrecoverable
-	# re-prompt loop -- wrong/corrupted password hash -- and the Guardian needed this working
-	# immediately) and never re-gated afterward, leaving the AI review pipeline's own
-	# vulnerability-history writeups and uploaded phone diagnostic logs unauthenticated to the
-	# open internet. Re-gated here the same way /dashboard's own Basic Auth got replaced one day
-	# later (2026-08-19, see below) -- a custom login page + session cookie, since the native
-	# browser credentials dialog was the actual thing causing re-prompt loops, not Basic Auth's
-	# concept in general. Deliberately its own separate session cookie (see lockprofile_service.py's
-	# _handle_review_login/_handle_review_verify), not the dashboard's, so dashboard and review
-	# sessions can be handed out/revoked independently even though both now check the same shared
-	# Guardian PIN (see _guardian_pin_value's comment).
-	handle /review-auth/* {
-		reverse_proxy 127.0.0.1:8091
-	}
-	redir /review-login /review-login/ 308
-	handle_path /review-login/* {
-		root * /srv/review-login
+	# Deliberately unauthenticated (2026-08-26, at Guardian's request) -- no login page, no
+	# session gate. Anyone with the URL can read this, including the AI review pipeline's
+	# vulnerability-history writeups and uploaded phone diagnostic logs. This route was
+	# previously re-gated on 2026-08-19 after an earlier unintentional exposure (see git history);
+	# this removal is intentional, not a repeat of that incident.
+	handle_path /review-data/* {
+		root * /srv/review-data
 		file_server
 	}
-	# Explicit route{} for the same reason as /dashboard-api/*'s below: mixing a bare forward_auth
-	# with handle/handle_path blocks leaves their relative ordering to Caddy's own directive
-	# priority sort rather than guaranteeing forward_auth runs first.
-	route {
-		@review path /review /review/* /review-data/* /device-logs/view/*
-		forward_auth @review 127.0.0.1:8091 {
-			uri /review-auth/verify
+	# lockprofile_service.py separately requires its own bearer token, which a browser has no
+	# way to supply, so Caddy injects it here rather than exposing LOCKPROFILE_TOKEN to the
+	# dashboard's static JS.
+	handle /device-logs/view/* {
+		reverse_proxy 127.0.0.1:8091 {
+			header_up Authorization "Bearer {$LOCKPROFILE_TOKEN}"
 		}
-		handle_path /review-data/* {
-			root * /srv/review-data
-			file_server
-		}
-		# lockprofile_service.py separately requires its own bearer token, which a browser has no
-		# way to supply, so Caddy injects it here rather than exposing LOCKPROFILE_TOKEN to the
-		# dashboard's static JS -- unrelated to the forward_auth session gate above, which is what
-		# actually keeps this route from being open to the internet now.
-		handle /device-logs/view/* {
-			reverse_proxy 127.0.0.1:8091 {
-				header_up Authorization "Bearer {$LOCKPROFILE_TOKEN}"
-			}
-		}
-		handle_path /review* {
-			root * /srv/review-dashboard
-			file_server
-		}
+	}
+	handle_path /review* {
+		root * /srv/review-dashboard
+		file_server
 	}
 
 	# Device-settings dashboard (filter-server/dashboard/, built from the Figma export) -- a
@@ -273,35 +249,20 @@ http://192.168.0.254 {
 		reverse_proxy 127.0.0.1:8091
 	}
 
-	# See the matching block in the main vhost above for why this needs the login page +
-	# route{}/forward_auth wrapping (re-gating after Basic Auth's 2026-08-18 removal, never
-	# replaced until now).
-	handle /review-auth/* {
-		reverse_proxy 127.0.0.1:8091
-	}
-	redir /review-login /review-login/ 308
-	handle_path /review-login/* {
-		root * /srv/review-login
+	# See the matching block in the main vhost above -- deliberately unauthenticated as of
+	# 2026-08-26, no login page or session gate.
+	handle_path /review-data/* {
+		root * /srv/review-data
 		file_server
 	}
-	route {
-		@review path /review /review/* /review-data/* /device-logs/view/*
-		forward_auth @review 127.0.0.1:8091 {
-			uri /review-auth/verify
+	handle /device-logs/view/* {
+		reverse_proxy 127.0.0.1:8091 {
+			header_up Authorization "Bearer {$LOCKPROFILE_TOKEN}"
 		}
-		handle_path /review-data/* {
-			root * /srv/review-data
-			file_server
-		}
-		handle /device-logs/view/* {
-			reverse_proxy 127.0.0.1:8091 {
-				header_up Authorization "Bearer {$LOCKPROFILE_TOKEN}"
-			}
-		}
-		handle_path /review* {
-			root * /srv/review-dashboard
-			file_server
-		}
+	}
+	handle_path /review* {
+		root * /srv/review-dashboard
+		file_server
 	}
 
 	handle /dashboard-auth/* {
