@@ -1664,7 +1664,7 @@ function ReportTypeRow({
   onSaveMessage: (customMessage: string) => Promise<unknown>;
 }) {
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(info.customMessage);
+  const [draft, setDraft] = useState(info.customMessage || info.description);
   const [saving, setSaving] = useState(false);
 
   const save = async () => {
@@ -1685,14 +1685,16 @@ function ReportTypeRow({
       <div className="flex items-center justify-between gap-4">
         <div className="min-w-0">
           <p className="text-sm font-medium">{type}</p>
-          <p className="text-xs text-on-surface-variant mt-0.5 leading-tight">{info.description}</p>
+          <p className="text-xs text-on-surface-variant mt-0.5 leading-tight">
+            {info.customMessage || info.description}
+          </p>
         </div>
         <Switch checked={info.enabled} onCheckedChange={onToggle} />
       </div>
       {!editing ? (
         <button
           className="mt-1.5 text-[11px] text-primary hover:underline"
-          onClick={() => { setDraft(info.customMessage); setEditing(true); }}
+          onClick={() => { setDraft(info.customMessage || info.description); setEditing(true); }}
         >
           {info.customMessage ? "Edit message" : "Customize message"}
         </button>
