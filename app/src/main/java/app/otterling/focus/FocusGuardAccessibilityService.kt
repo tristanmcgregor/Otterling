@@ -1,8 +1,14 @@
 package app.otterling.focus
 
 import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.AccessibilityService.ScreenshotResult
+import android.accessibilityservice.AccessibilityService.TakeScreenshotCallback
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.graphics.Rect
+import android.os.Build
+import android.os.PowerManager
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
@@ -10,14 +16,19 @@ import android.widget.Toast
 import app.otterling.alerts.AlertReporter
 import app.otterling.alerts.AlertSeverity
 import app.otterling.alerts.GuardianAlertSettings
+import app.otterling.content.AppSuspensionManager
 import app.otterling.content.CustomBlocklistManager
+import app.otterling.content.DashboardConfigStore
 import app.otterling.content.UrlPathBlockEnforcer
+import app.otterling.monitoring.ScreenshotUploader
 import app.otterling.tamper.TamperEventLogger
 import app.otterling.monitoring.ProtectionController
+import java.io.ByteArrayOutputStream
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.asExecutor
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -40,10 +51,21 @@ class FocusGuardAccessibilityService : AccessibilityService() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var tickJob: Job? = null
     private var habitPollJob: Job? = null
+    private var screenshotJob: Job? = null
     private var currentPackage: String? = null
     private var lastReelsBounceMillis = 0L
     private var lastPathBlockMillis = 0L
     private var lastTriggerScanMillis = 0L
+
+    /** Own package + the current launcher -- resolved once, not per capture. Screenshotting our
+     *  own Settings UI or the home screen/lock screen is wasted uploads and a mild privacy smell. */
+    private val screenshotSkipPackages: Set<String> by lazy {
+        val launcher = packageManager.resolveActivity(
+            Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME),
+            PackageManager.MATCH_DEFAULT_ONLY,
+        )?.activityInfo?.packageName
+        setOfNotNull(packageName, launcher, "com.android.systemui", "com.android.keyguard")
+    }
 
     private lateinit var mindfulAppManager: MindfulAppManager
     private lateinit var budgetManager: AppTimeBudgetManager
@@ -276,6 +298,8 @@ class FocusGuardAccessibilityService : AccessibilityService() {
         if (packageName == HabitTrackerScanner.HABITSHARE_PACKAGE_NAME) {
             startHabitPolling()
         }
+        screenshotJob?.cancel()
+        startScreenshotLoop(packageName)
         scope.launch {
             if (!ProtectionController(applicationContext).isEnabled()) return@launch
             maybeReportWatchedApp(packageName)
@@ -367,6 +391,114 @@ class FocusGuardAccessibilityService : AccessibilityService() {
                 delay(HABIT_POLL_MILLIS)
             }
         }
+    }
+
+    /**
+     * Visual filtering: periodically uploads a screenshot of the foreground app to the server for
+     * NSFW classification (see `nsfw_image_classifier.py` / `lockprofile_service.py`) -- processed
+     * server-side, not on-device, per the dashboard's `visualFilterEnabled` setting. Same
+     * app-switch-triggered, once-per-interval-while-foregrounded loop shape as [startTicking]/
+     * [startHabitPolling]: capturing immediately on entering the loop covers "on app switch", and
+     * the delay at the end of each iteration bounds it to at most once per
+     * [visualFilterIntervalMillis] for a single long session in one app. `takeScreenshot` is API
+     * 30+ only; below that this feature is simply a no-op for the (shrinking) fraction of devices
+     * on Android 10 or earlier.
+     */
+    private fun startScreenshotLoop(packageName: String) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
+        screenshotJob = scope.launch {
+            while (isActive && currentPackage == packageName) {
+                captureScreenshotIfAllowed(packageName)
+                delay(visualFilterIntervalMillis())
+            }
+        }
+    }
+
+    private fun captureScreenshotIfAllowed(packageName: String) {
+        if (!ProtectionController(applicationContext).isEnabled()) return
+        if (packageName in screenshotSkipPackages) return
+        val snapshot = DashboardConfigStore(applicationContext).snapshot()
+        // Missing snapshot (not yet synced) defaults to enabled, same "fail toward more
+        // restrictive" stance every other protection field in this file already takes -- only an
+        // explicit guardian opt-out (false) skips capture.
+        if (snapshot?.optBoolean("visualFilterEnabled", true) == false) return
+        val powerManager = getSystemService(PowerManager::class.java)
+        if (powerManager?.isInteractive != true) return
+        takeScreenshot(
+            android.view.Display.DEFAULT_DISPLAY,
+            Dispatchers.Default.asExecutor(),
+            object : TakeScreenshotCallback {
+                override fun onSuccess(result: ScreenshotResult) {
+                    val bitmap = try {
+                        Bitmap.wrapHardwareBuffer(result.hardwareBuffer, result.colorSpace)
+                            ?.copy(Bitmap.Config.ARGB_8888, false)
+                    } finally {
+                        result.hardwareBuffer.close()
+                    }
+                    if (bitmap == null) return
+                    val scaled = downscale(bitmap)
+                    val jpegBytes = ByteArrayOutputStream().use { stream ->
+                        scaled.compress(Bitmap.CompressFormat.JPEG, SCREENSHOT_JPEG_QUALITY, stream)
+                        stream.toByteArray()
+                    }
+                    if (scaled !== bitmap) bitmap.recycle()
+                    scaled.recycle()
+                    scope.launch { handleCapturedScreenshot(packageName, jpegBytes) }
+                }
+
+                override fun onFailure(errorCode: Int) {
+                    Log.w(TAG, "Screenshot capture failed: errorCode=$errorCode")
+                }
+            },
+        )
+    }
+
+    /** Plenty of resolution for a vision model to judge "is this NSFW"; drastically cuts upload
+     *  size/battery vs. full device resolution. */
+    private fun downscale(bitmap: Bitmap): Bitmap {
+        val maxDimension = maxOf(bitmap.width, bitmap.height)
+        if (maxDimension <= SCREENSHOT_MAX_DIMENSION) return bitmap
+        val scale = SCREENSHOT_MAX_DIMENSION.toFloat() / maxDimension
+        val width = (bitmap.width * scale).toInt().coerceAtLeast(1)
+        val height = (bitmap.height * scale).toInt().coerceAtLeast(1)
+        return Bitmap.createScaledBitmap(bitmap, width, height, true)
+    }
+
+    private suspend fun handleCapturedScreenshot(packageName: String, jpegBytes: ByteArray) {
+        // Guards a fast app-switch racing the async capture callback -- don't act on a stale
+        // classification for an app that's no longer foreground.
+        if (currentPackage != packageName) return
+        val result = ScreenshotUploader.upload(applicationContext, packageName, jpegBytes).getOrNull() ?: return
+        if (result.classification != "nsfw") return
+
+        // Prefer the server-computed deadline (keeps the duration dashboard-tunable later without
+        // an app update) over a hardcoded client-side constant; clamp for clock skew between
+        // phone and server.
+        val durationMillis = result.blockUntilMillis
+            ?.let { it - System.currentTimeMillis() }
+            ?.coerceAtLeast(MIN_NSFW_BLOCK_MILLIS)
+            ?: DEFAULT_NSFW_BLOCK_MILLIS
+        runCatching { AppSuspensionManager(applicationContext).blockTemporarily(packageName, durationMillis) }
+            .onFailure { Log.w(TAG, "Temporary NSFW block failed for $packageName", it) }
+        reportNsfwDetection(packageName)
+    }
+
+    private suspend fun reportNsfwDetection(packageName: String) {
+        runCatching {
+            AlertReporter(applicationContext).report(
+                type = "NSFW_SCREENSHOT_DETECTED",
+                details = "NSFW content detected in $packageName; blocked for 15 minutes",
+                severity = AlertSeverity.CRITICAL,
+                debounceKey = "NSFW_SCREENSHOT_DETECTED|$packageName",
+            )
+        }.onFailure { Log.w(TAG, "NSFW screenshot alert failed", it) }
+    }
+
+    private fun visualFilterIntervalMillis(): Long {
+        val seconds = DashboardConfigStore(applicationContext).snapshot()
+            ?.optInt("visualFilterIntervalSeconds", DEFAULT_VISUAL_FILTER_INTERVAL_SECONDS)
+            ?: DEFAULT_VISUAL_FILTER_INTERVAL_SECONDS
+        return seconds.coerceAtLeast(MIN_VISUAL_FILTER_INTERVAL_SECONDS) * 1000L
     }
 
     private fun startTicking(packageName: String) {
@@ -528,6 +660,7 @@ class FocusGuardAccessibilityService : AccessibilityService() {
         }
         tickJob?.cancel()
         habitPollJob?.cancel()
+        screenshotJob?.cancel()
         scope.cancel()
         super.onDestroy()
     }
@@ -539,6 +672,14 @@ class FocusGuardAccessibilityService : AccessibilityService() {
         const val HABIT_POLL_MILLIS = 1_000L
         const val PATH_BLOCK_DEBOUNCE_MS = 800L
         const val TRIGGER_SCAN_DEBOUNCE_MS = 2_000L
+        // 30s (TESTING -- was 60), matching lockprofile_service.py's own default; only used if
+        // the dashboard snapshot is unavailable, since the server value normally wins.
+        const val DEFAULT_VISUAL_FILTER_INTERVAL_SECONDS = 30
+        const val MIN_VISUAL_FILTER_INTERVAL_SECONDS = 15
+        const val SCREENSHOT_MAX_DIMENSION = 720
+        const val SCREENSHOT_JPEG_QUALITY = 80
+        const val DEFAULT_NSFW_BLOCK_MILLIS = 15 * 60 * 1000L
+        const val MIN_NSFW_BLOCK_MILLIS = 60_000L
         val SUB_FEATURE_HINTS = listOf("shorts", "reel")
         // Shorts player: near-fullscreen *portrait* surface anchored at the very top of the
         // screen -- see hasFullscreenPortraitVideoSurface's doc comment for why that shape (not

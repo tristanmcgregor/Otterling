@@ -176,8 +176,60 @@ still need:
   warn on a downloaded, non-App-Store build -- not required for `UpdateManager`'s own trust chain
   (SHA-256 + Team ID already cover that), but relevant to the human clicking through the install.
 
-None of that is set up here -- it's a real, separate infrastructure decision (get a Mac CI runner,
-manage a second set of signing secrets), not something to start blind as part of this pass.
+### Automated macOS builds (implemented)
+
+The gap above is now closed using the household's own Mac as the build agent, running under a
+**separate, isolated macOS user account** created just for this (not the account used for daily
+use) -- see `HANDOVER.md` for why account separation, not a second physical machine, was the
+accepted trade-off here. This is weaker than a fully separate CI host (a local admin with physical
+access to the Mac can still reach the build-agent account), but strictly better than the fully
+manual status quo, and every actual trust decision still happens only on the Linux review host --
+this account can build and upload bytes, but cannot itself sign a `reviewAttestation` or publish
+anything the client would accept.
+
+How it works, end to end:
+
+1. `release.sh` (Linux host), after a cumulative `VERDICT: PASS`, checks whether the reviewed diff
+   touched `macos/` paths. If so, it writes `/var/lib/otterling/ci/macos-pending-build.json`
+   (`{"gitSha", "versionCode", "versionName", "claimed": false}`) -- a single pending-job file, not
+   a queue, so multiple pushes while the agent is offline coalesce to just the latest.
+2. `Scripts/build_agent_poll.sh`, run every ~15 minutes by a LaunchDaemon under the isolated
+   account (see `build_agent.launchd.plist.example`), polls `GET /ci/pending-macos-build` with a
+   narrowly-scoped `MACOS_BUILD_AGENT_TOKEN` bearer (deliberately NOT `LOCKPROFILE_TOKEN` -- a
+   compromised build agent should not also be able to impersonate a phone/Mac device). If a job is
+   pending, it does a clean `git clone` + `checkout --force --detach <gitSha>` into a throwaway
+   temp directory -- never a persistent local checkout -- and verifies the resulting `HEAD` matches
+   the requested SHA exactly before building anything.
+3. `Scripts/build_agent_build_and_upload.sh` unlocks a dedicated build keychain (never the
+   account's login keychain), runs `build_app.sh --keychain <path> "<identity>"` (see that script's
+   own doc comment for the new non-interactive-signing flag), optionally notarizes if
+   `NOTARY_PROFILE` is configured, zips via `ditto`, and `POST`s the raw zip bytes plus
+   `X-Git-Sha`/`X-Version-Code`/`X-Version-Name`/`X-Codesign-Team-Id` headers to
+   `/ci/macos-build-result`.
+4. The Linux host (`webhook_server.py`'s `/ci/macos-build-result` handler) independently computes
+   the SHA-256 of the bytes it actually received -- **it never trusts a client-reported hash for
+   anything security-relevant** -- validates the claimed `gitSha` matches the still-pending job,
+   invokes the existing, unmodified `otterling-attest-macos` with that host-computed hash, and (on
+   success) writes `macos-manifest.json` + the zip straight into
+   `/var/lib/otterling/updates/` via a new `publish_macos_from_upload.sh`. `attest_macos_release.sh`
+   itself, and the private attestation key, are completely unchanged by any of this.
+
+One-time setup on the build-agent account: run `Scripts/setup_build_agent.sh <path-to-your.p12>`.
+It creates the dedicated signing keychain, generates and stores its unlock password, imports the
+certificate, auto-detects the resulting signing identity string (preferring a Developer ID
+Application identity if present, but accepting the free "Apple Development" one too, matching this
+project's already-documented stance above and `publish_release.sh`'s own `ALLOW_NON_DEVELOPER_ID`
+precedent for the manual path -- the actual trust check is SHA-256 + pinned Team ID either way),
+writes `~/.otterling-build-agent/config.env` (prompting for the Otterling host, GitHub repo, and
+`MACOS_BUILD_AGENT_TOKEN` -- generate that token once with `openssl rand -hex 32` and set the same
+value in the Linux host's `secrets.env`), and installs the LaunchDaemon. The one thing it cannot do
+for you is obtain *some* code-signing certificate in the first place and export it as a `.p12`
+(Keychain Access -> My Certificates -> Export) -- there's no way to script around a human holding
+that credential, but for most single-developer setups this is just the free identity Xcode already
+generated the first time you signed in with an Apple ID, no paid Developer Program membership
+needed. The script is idempotent (safe to re-run) and its own header comment documents exactly what
+it automates vs. what it can't. `build_agent.env.example` / `build_agent.launchd.plist.example` are
+still here as reference for anyone who'd rather do the equivalent steps by hand.
 
 ## Gotcha: pinning the wrong Team ID
 

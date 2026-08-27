@@ -50,7 +50,7 @@ import app.otterling.tamper.TamperEventDao
         AlertEvent::class,
         SmsOutboxEntry::class,
     ],
-    version = 19,
+    version = 20,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -112,6 +112,7 @@ abstract class AppDatabase : RoomDatabase() {
                         MIGRATION_16_17,
                         MIGRATION_17_18,
                         MIGRATION_18_19,
+                        MIGRATION_19_20,
                     )
                     .build()
                     .also { instance = it }
@@ -422,6 +423,12 @@ abstract class AppDatabase : RoomDatabase() {
         private val MIGRATION_18_19 = object : Migration(18, 19) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE sms_outbox ADD COLUMN recipientOverride TEXT")
+            }
+        }
+
+        private val MIGRATION_19_20 = object : Migration(19, 20) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE blocked_apps ADD COLUMN blockedUntilMillis INTEGER")
             }
         }
     }

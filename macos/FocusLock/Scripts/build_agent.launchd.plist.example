@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Template for the build-agent LaunchDaemon, installed ONCE by hand, as root, at
+  /Library/LaunchDaemons/app.otterling.buildagent.plist (then `sudo launchctl bootstrap system
+  /Library/LaunchDaemons/app.otterling.buildagent.plist`). Runs build_agent_poll.sh in the
+  isolated build-agent account's context (UserName below) on a timer, without that account ever
+  needing an interactive login session; see RELEASE.md's "Automated macOS builds" section.
+
+  Replace <build-agent-account> and the Scripts path below with your real values before installing.
+  This file is a template, not live config; nothing here is a secret.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>app.otterling.buildagent</string>
+    <key>UserName</key>
+    <string>&lt;build-agent-account&gt;</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/&lt;build-agent-account&gt;/otterling-checkout/macos/FocusLock/Scripts/build_agent_poll.sh</string>
+    </array>
+    <!-- 15 minutes, matching this repo's existing WorkManager-floor convention for periodic
+         background checks elsewhere (Android's habit/update polling). -->
+    <key>StartInterval</key>
+    <integer>900</integer>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/Users/&lt;build-agent-account&gt;/.otterling-build-agent/logs/launchd.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/&lt;build-agent-account&gt;/.otterling-build-agent/logs/launchd.log</string>
+</dict>
+</plist>

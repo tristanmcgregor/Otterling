@@ -3,19 +3,42 @@
 # SwiftPM build products and code-signs it, including the embedded FocusLockHelperd LaunchDaemon
 # that SMAppService registers.
 #
-# Usage: Scripts/build_app.sh "Apple Development: Your Name (TEAMID)"
+# Usage: Scripts/build_app.sh ["--keychain <path>"] "<code signing identity>"
 #
 # Run `security find-identity -v -p codesigning` first to see available identities once the
 # certificate from developer.apple.com is installed in your login keychain.
+#
+# --keychain <path>: pass a specific keychain to every codesign invocation instead of relying on
+# the ambient keychain search list. Needed for non-interactive/headless signing (see
+# build_agent_build_and_upload.sh) -- a LaunchDaemon has no login session and no unlocked default
+# keychain, so codesign can't find the identity without being told exactly where to look. The
+# caller is responsible for unlocking that keychain first (`security unlock-keychain`); this
+# script doesn't touch keychain passwords at all, keeping that secret's blast radius to the one
+# small script that needs it. Omit entirely for the normal interactive/manual path -- unchanged.
 
 set -euo pipefail
 
+KEYCHAIN_PATH=""
+if [ "${1:-}" = "--keychain" ]; then
+  KEYCHAIN_PATH="${2:?--keychain needs a path argument}"
+  shift 2
+fi
+
 SIGN_IDENTITY="${1:-}"
 if [ -z "$SIGN_IDENTITY" ]; then
-  echo "Usage: $0 \"<code signing identity>\""
+  echo "Usage: $0 [--keychain <path>] \"<code signing identity>\""
   echo "Available identities:"
   security find-identity -v -p codesigning || true
   exit 1
+fi
+
+# Empty array (not appended inline) so `codesign "${CODESIGN_KEYCHAIN_ARGS[@]}" ...` is a true
+# no-op when $KEYCHAIN_PATH is unset -- bash has no clean way to conditionally splice extra args
+# into a fixed positional command otherwise without either duplicating every codesign line or
+# risking a stray empty-string argument.
+CODESIGN_KEYCHAIN_ARGS=()
+if [ -n "$KEYCHAIN_PATH" ]; then
+  CODESIGN_KEYCHAIN_ARGS=(--keychain "$KEYCHAIN_PATH")
 fi
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -173,11 +196,11 @@ tee "$INSTALL_PATH/Contents/Library/LaunchAgents/${SCANNER_LABEL}.plist" > /dev/
 PLIST
 
 echo "==> Code-signing (daemons + agent first, then app bundle)"
-codesign --force --options runtime --sign "$SIGN_IDENTITY" "$INSTALL_PATH/Contents/MacOS/FocusLockHelperd"
-codesign --force --options runtime --sign "$SIGN_IDENTITY" "$INSTALL_PATH/Contents/MacOS/FocusLockWatchdog"
-codesign --force --options runtime --sign "$SIGN_IDENTITY" "$INSTALL_PATH/Contents/MacOS/FocusLockScanner"
-codesign --force --options runtime --sign "$SIGN_IDENTITY" "$INSTALL_PATH/Contents/MacOS/${EXECUTABLE_NAME}"
-codesign --force --options runtime --sign "$SIGN_IDENTITY" "$INSTALL_PATH"
+codesign --force --options runtime "${CODESIGN_KEYCHAIN_ARGS[@]}" --sign "$SIGN_IDENTITY" "$INSTALL_PATH/Contents/MacOS/FocusLockHelperd"
+codesign --force --options runtime "${CODESIGN_KEYCHAIN_ARGS[@]}" --sign "$SIGN_IDENTITY" "$INSTALL_PATH/Contents/MacOS/FocusLockWatchdog"
+codesign --force --options runtime "${CODESIGN_KEYCHAIN_ARGS[@]}" --sign "$SIGN_IDENTITY" "$INSTALL_PATH/Contents/MacOS/FocusLockScanner"
+codesign --force --options runtime "${CODESIGN_KEYCHAIN_ARGS[@]}" --sign "$SIGN_IDENTITY" "$INSTALL_PATH/Contents/MacOS/${EXECUTABLE_NAME}"
+codesign --force --options runtime "${CODESIGN_KEYCHAIN_ARGS[@]}" --sign "$SIGN_IDENTITY" "$INSTALL_PATH"
 
 echo "==> Verifying signatures"
 codesign -dv --verbose=4 "$INSTALL_PATH" 2>&1 | grep -E "Identifier|TeamIdentifier|Authority"
@@ -188,7 +211,7 @@ echo "==> Installing otterlingctl to /usr/local/bin"
 mkdir -p /usr/local/bin
 rm -f /usr/local/bin/focuslockctl
 cp "$BUILD_DIR/otterlingctl" /usr/local/bin/otterlingctl
-codesign --force --options runtime --sign "$SIGN_IDENTITY" /usr/local/bin/otterlingctl
+codesign --force --options runtime "${CODESIGN_KEYCHAIN_ARGS[@]}" --sign "$SIGN_IDENTITY" /usr/local/bin/otterlingctl
 
 echo "==> Done. Launch with: open ${INSTALL_PATH}"
 echo "    Guardian CLI: otterlingctl status"
