@@ -47,7 +47,17 @@ class MitmExemptManager(context: Context) {
         seedV5DefaultsIfNeeded()
     }
 
-    fun exemptPackages(): Set<String> = (localPackages() + dashboardExemptPackages()) - NEVER_EXEMPT_PACKAGES
+    fun exemptPackages(): Set<String> = (localPackages() + dashboardExemptPackages()) - neverExemptPackages()
+
+    /**
+     * Every package that must never be MITM-exempt: every installed browser resolved from
+     * [PackageManager] (see [BrowserPackages]), unioned with the hardcoded Chrome floor.
+     *
+     * Resolved per call rather than cached: a browser installed after the tunnel came up must be
+     * covered on the next [exemptPackages] read, and this is only consulted on tunnel
+     * (re)establishment and on [add], not per packet.
+     */
+    fun neverExemptPackages(): Set<String> = BrowserPackages.resolve(appContext, NEVER_EXEMPT_PACKAGES)
 
     /** The local-only set (seeded defaults, [add]/[remove], [PinningFailureTracker] auto-exempts)
      *  -- deliberately NOT merged with [dashboardExemptPackages], so the seed*IfNeeded methods
@@ -82,7 +92,7 @@ class MitmExemptManager(context: Context) {
      * [app.otterling.ui.VpnFilterSection]) so nothing that calls this directly can add it either.
      */
     fun add(packageName: String) {
-        if (packageName in NEVER_EXEMPT_PACKAGES) return
+        if (packageName in neverExemptPackages()) return
         prefs.edit().putStringSet(KEY_PACKAGES, localPackages() + packageName).apply()
     }
 
@@ -225,7 +235,15 @@ class MitmExemptManager(context: Context) {
             "com.samsung.android.app.watchmanager", // Galaxy Wearable (Samsung Gear/Watch companion app)
         )
 
-        /** Chrome (all channels) can never be added to [exemptPackages] -- see [add]. */
+        /**
+          * The hardcoded FLOOR of packages that can never be exempted -- not the whole set.
+          *
+          * [neverExemptPackages] unions this with every browser [BrowserPackages] resolves from
+          * PackageManager, which is what actually delivers the "a browser can be pointed at any
+          * site, so exempting one exempts all browsing" rule this list was written for. This set
+          * remains as a floor for the case where the query fails or returns nothing, so behaviour
+          * can never regress below what it was when this was the entire list.
+          */
         val NEVER_EXEMPT_PACKAGES = setOf(
             "com.android.chrome",
             "com.chrome.beta",

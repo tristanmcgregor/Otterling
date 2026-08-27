@@ -2,11 +2,17 @@ package app.otterling.content
 
 import android.content.Context
 import android.util.Log
+import app.otterling.alerts.AlertReporter
+import app.otterling.alerts.AlertSeverity
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
 
 /**
  * Watches for [TcpRelayManager] connections that look like a certificate-pinning rejection (see
  * [PinningFailureHeuristic]) and, once the same app has shown [FAILURE_THRESHOLD] of them inside
- * [WINDOW_MS], adds it to [MitmExemptManager] automatically -- no Guardian has to notice an app is
+ * [WINDOW_MS], adds it to [MitmExemptManager] automatically -- unless it is a browser, which is
+ * refused outright (see [MitmExemptManager.neverExemptPackages] and [BrowserPackages]), and always
+ * reporting the outcome to the guardian either way -- no Guardian has to notice an app is
  * broken and go find the exempt-list setting themselves. This closes the gap a static seeded list
  * can't: an app nobody thought to add in advance (see the Morphe YouTube fork gap and the HotDoc
  * gap, both found via live-device testing) still ends up working, without lowering the bar enough
@@ -41,7 +47,13 @@ import android.util.Log
  * not a fail-open of the tunnel/DNS layer, which is unaffected either way (see
  * [TcpRelayManager]/[MitmExemptManager]'s own docs).
  */
-class PinningFailureTracker(context: Context) {
+/**
+ * [alertScope] must outlive a tunnel rebuild. A successful auto-exemption calls
+ * [VpnFilterService.reestablish], which cancels the per-generation relay scope -- dispatching the
+ * report there would cancel it mid-send, so the guardian would silently not be told about exactly
+ * the case that matters most. The service-lifetime scope is the correct owner.
+ */
+class PinningFailureTracker(context: Context, private val alertScope: CoroutineScope) {
     private val appContext = context.applicationContext
     private val exemptManager = MitmExemptManager(appContext)
     private val packageManager = appContext.packageManager
@@ -78,12 +90,58 @@ class PinningFailureTracker(context: Context) {
         prefs.edit().remove(failureTimesKey(uid)).apply()
 
         val alreadyExempt = exemptManager.exemptPackages()
+        // Resolved once for this call rather than per package -- see MitmExemptManager.
+        val neverExempt = exemptManager.neverExemptPackages()
         var addedAny = false
+        val exempted = mutableListOf<String>()
         for (pkg in packages) {
+            // A browser is never auto-exempted, however its connections look. The heuristic's
+            // input is attacker-shapeable (see PinningFailureHeuristic), so without this an app
+            // could talk its way out of content inspection by deliberately producing two
+            // fast/small/few-read closes. MitmExemptManager.add() enforces this too; checking here
+            // as well is what makes the refusal visible to the guardian instead of a silent no-op.
+            if (pkg in neverExempt) {
+                Log.w(TAG, "Refusing to auto-exempt $pkg (uid=$uid): it is a browser, which can never skip MITM")
+                alertScope.launch {
+                    runCatching {
+                        AlertReporter(appContext).report(
+                            type = "MITM_EXEMPT_REFUSED",
+                            details = "Refused to bypass content filtering for the browser $pkg " +
+                                "despite ${recentFailures.size} connection(s) shaped like a " +
+                                "certificate-pinning rejection.",
+                            severity = AlertSeverity.WARNING,
+                            debounceKey = "MITM_EXEMPT_REFUSED:$pkg",
+                        )
+                    }.onFailure { Log.w(TAG, "exempt-refusal alert failed", it) }
+                }
+                continue
+            }
             if (pkg !in alreadyExempt) {
                 exemptManager.add(pkg)
                 addedAny = true
+                exempted.add(pkg)
                 Log.i(TAG, "Auto-exempted $pkg (uid=$uid) from MITM after ${recentFailures.size} suspected pinning rejections")
+            }
+        }
+
+        // An auto-exemption permanently reduces filtering coverage for that app, decided by a
+        // heuristic rather than by the guardian. It used to happen silently, discoverable only by
+        // reading logcat or noticing the count in Settings. Reporting it puts the decision in front
+        // of the accountability partner the same way every other protection-reducing change in this
+        // project is -- see the macOS side's TamperReporter usage for the same principle.
+        if (exempted.isNotEmpty()) {
+            alertScope.launch {
+                runCatching {
+                    AlertReporter(appContext).report(
+                        type = "MITM_EXEMPT_AUTO",
+                        details = "Content filtering (page inspection) was automatically disabled for " +
+                            exempted.joinToString() + " after connections matching a certificate-pinning " +
+                            "rejection. DNS filtering still applies. Remove the exemption in Settings if " +
+                            "this app should be inspected.",
+                        severity = AlertSeverity.WARNING,
+                        debounceKey = "MITM_EXEMPT_AUTO:" + exempted.sorted().joinToString(),
+                    )
+                }.onFailure { Log.w(TAG, "auto-exempt alert failed", it) }
             }
         }
         if (addedAny) {
