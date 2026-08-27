@@ -25,7 +25,7 @@ source "$CONFIG_FILE"
 
 : "${OTTERLING_HOST:?set in config.env}"
 : "${MACOS_BUILD_AGENT_TOKEN:?set in config.env}"
-: "${SIGNING_IDENTITY:?set in config.env, e.g. 'Developer ID Application: Your Name (TEAMID)'}"
+: "${SIGNING_IDENTITY:?set in config.env -- e.g. 'Developer ID Application: Name (TEAMID)' or the free 'Apple Development: Name (TEAMID)', see RELEASE.md}"
 : "${BUILD_KEYCHAIN_PATH:?set in config.env}"
 : "${BUILD_KEYCHAIN_PASSWORD_FILE:?set in config.env, chmod 600 file containing just the password}"
 # NOTARY_PROFILE is optional -- notarization is skipped entirely if unset (see below).

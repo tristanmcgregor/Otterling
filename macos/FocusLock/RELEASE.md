@@ -214,18 +214,22 @@ How it works, end to end:
    `/var/lib/otterling/updates/` via a new `publish_macos_from_upload.sh`. `attest_macos_release.sh`
    itself, and the private attestation key, are completely unchanged by any of this.
 
-One-time setup on the build-agent account: run `Scripts/setup_build_agent.sh
-<path-to-developer-id.p12>`. It creates the dedicated signing keychain, generates and stores its
-unlock password, imports the certificate, auto-detects the resulting signing identity string,
+One-time setup on the build-agent account: run `Scripts/setup_build_agent.sh <path-to-your.p12>`.
+It creates the dedicated signing keychain, generates and stores its unlock password, imports the
+certificate, auto-detects the resulting signing identity string (preferring a Developer ID
+Application identity if present, but accepting the free "Apple Development" one too, matching this
+project's already-documented stance above and `publish_release.sh`'s own `ALLOW_NON_DEVELOPER_ID`
+precedent for the manual path -- the actual trust check is SHA-256 + pinned Team ID either way),
 writes `~/.otterling-build-agent/config.env` (prompting for the Otterling host, GitHub repo, and
 `MACOS_BUILD_AGENT_TOKEN` -- generate that token once with `openssl rand -hex 32` and set the same
 value in the Linux host's `secrets.env`), and installs the LaunchDaemon. The one thing it cannot do
-for you is obtain the Developer ID Application certificate itself -- that requires an Apple
-Developer Program membership and either generating one via Xcode/developer.apple.com or already
-having a `.p12` export; there's no way to script around a human holding that credential. The script
-is idempotent (safe to re-run) and its own header comment documents exactly what it automates vs.
-what it can't. `build_agent.env.example` / `build_agent.launchd.plist.example` are still here as
-reference for anyone who'd rather do the equivalent steps by hand.
+for you is obtain *some* code-signing certificate in the first place and export it as a `.p12`
+(Keychain Access -> My Certificates -> Export) -- there's no way to script around a human holding
+that credential, but for most single-developer setups this is just the free identity Xcode already
+generated the first time you signed in with an Apple ID, no paid Developer Program membership
+needed. The script is idempotent (safe to re-run) and its own header comment documents exactly what
+it automates vs. what it can't. `build_agent.env.example` / `build_agent.launchd.plist.example` are
+still here as reference for anyone who'd rather do the equivalent steps by hand.
 
 ## Gotcha: pinning the wrong Team ID
 

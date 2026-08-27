@@ -1,25 +1,29 @@
 #!/bin/bash
 # One-time setup for the macOS build agent (see RELEASE.md's "Automated macOS builds" section) --
 # automates everything that CAN be automated: creating a dedicated signing keychain, generating and
-# storing its unlock password, importing your Developer ID certificate, auto-detecting the
+# storing its unlock password, importing your code-signing certificate, auto-detecting the
 # resulting signing identity string, writing config.env, and installing the LaunchDaemon.
 #
-# What this script deliberately CANNOT do for you: obtain a Developer ID Application certificate
-# in the first place. That requires an Apple Developer Program membership (a paid Apple account)
-# and either generating one via Xcode/developer.apple.com yourself, or already having one exported
-# as a .p12 file -- Apple's code-signing trust model has no path around a human holding that
-# credential. Everything else here is just local machine setup around a cert you already have.
+# What this script deliberately CANNOT do for you: obtain a code-signing certificate in the first
+# place. RELEASE.md's "One-time setup" section explains this project's stance in detail -- the free
+# "Apple Development" identity Xcode already generates for any Apple ID works fine here (the actual
+# trust check is SHA-256 + pinned Team ID, not the certificate class), so a paid Apple Developer
+# Program membership is NOT required unless you specifically want a real Developer ID Application
+# identity instead. Either way, exporting *some* certificate + its private key as a .p12 is a step
+# only you can do (via Keychain Access), since Apple's code-signing trust model has no path around
+# a human holding that credential.
 #
-# Usage: Scripts/setup_build_agent.sh <path-to-developer-id.p12>
+# Usage: Scripts/setup_build_agent.sh <path-to-your.p12>
 #   You'll be prompted (not passed on the command line, so it never lands in shell history or a
 #   process listing) for the .p12's own export password.
 set -euo pipefail
 
 P12_PATH="${1:-}"
 if [[ -z "$P12_PATH" || ! -f "$P12_PATH" ]]; then
-  echo "Usage: $0 <path-to-developer-id.p12>" >&2
-  echo "  (export this from Keychain Access, or from wherever you generated your Developer ID" >&2
-  echo "  Application certificate -- see RELEASE.md's One-time setup section if you don't have one)" >&2
+  echo "Usage: $0 <path-to-your.p12>" >&2
+  echo "  Export this from Keychain Access (My Certificates -> right-click your identity -> Export)." >&2
+  echo "  The free 'Apple Development' identity Xcode already set up for you works fine -- see" >&2
+  echo "  RELEASE.md's One-time setup section. No paid Apple Developer account required." >&2
   exit 1
 fi
 
@@ -57,10 +61,23 @@ security import "$P12_PATH" -k "$KEYCHAIN_PATH" -P "$P12_PASSWORD" -T /usr/bin/c
 security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH" >/dev/null
 
 echo "==> Detecting signing identity in the new keychain…"
-IDENTITY_LINE=$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep "Developer ID Application" | head -1 || true)
+ALL_IDENTITIES=$(security find-identity -v -p codesigning "$KEYCHAIN_PATH")
+# Prefer a real Developer ID Application identity if present, but this project deliberately also
+# accepts the free "Apple Development" identity (see RELEASE.md's "One-time setup" section) -- the
+# actual trust check (SHA-256 + pinned Team Identifier) works identically either way, and requiring
+# a paid Apple Developer Program membership here would contradict that documented, deliberate
+# choice. publish_release.sh's own ALLOW_NON_DEVELOPER_ID stance is the precedent this mirrors.
+IDENTITY_LINE=$(echo "$ALL_IDENTITIES" | grep "Developer ID Application" | head -1 || true)
 if [[ -z "$IDENTITY_LINE" ]]; then
-  echo "ERROR: no 'Developer ID Application' identity found in $KEYCHAIN_PATH after import." >&2
-  echo "The .p12 may be an ad-hoc/Apple Development identity instead -- see RELEASE.md." >&2
+  IDENTITY_LINE=$(echo "$ALL_IDENTITIES" | grep -E '"(Apple Development|3rd Party Mac Developer Application)' | head -1 || true)
+  if [[ -n "$IDENTITY_LINE" ]]; then
+    echo "    No Developer ID Application identity found -- using the free identity below instead"
+    echo "    (this project's documented, intentional stance; see RELEASE.md's One-time setup)."
+  fi
+fi
+if [[ -z "$IDENTITY_LINE" ]]; then
+  echo "ERROR: no usable code-signing identity found in $KEYCHAIN_PATH after import." >&2
+  echo "Expected either a 'Developer ID Application' or 'Apple Development' identity." >&2
   exit 1
 fi
 SIGNING_IDENTITY=$(echo "$IDENTITY_LINE" | sed -E 's/^[0-9]+\) [0-9A-F]+ "(.*)"$/\1/')
