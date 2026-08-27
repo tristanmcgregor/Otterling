@@ -272,6 +272,19 @@ final class EnforcementLoop {
                 self.lastAppliedProxyIPs = proxyIPs
             }
 
+            // Shell-based CLI tools (Claude Code among them) don't read the system-wide proxy
+            // setting PFBlocker/ProxyEnforcer just reconciled -- only HTTP_PROXY/HTTPS_PROXY env
+            // vars, which live in the console user's shell startup files, not this daemon's own
+            // process environment. Only meaningful (and only run) when forceProxyActive is what
+            // would actually block a direct connection -- see ShellProxyEnvManager's doc comment.
+            if let password = ProxyEnforcer.currentProxyPassword() {
+                ShellProxyEnvManager.apply(
+                    host: state.proxyHost, port: state.proxyPort,
+                    user: FocusLockConstants.defaultProxyUser, password: password,
+                    active: forceProxyActive
+                )
+            }
+
             // Rule-driven blocks (see RuleBlockEnforcer's doc comment for why these are computed
             // fresh every tick rather than stored in state.blockedApps) merge into the SAME
             // enforce() call -- AppBlockEnforcer already dedupes by executableName internally, and

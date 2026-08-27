@@ -78,6 +78,10 @@ enum ProxyEnforcer {
         }
     }
 
+    /// Exposed so `ShellProxyEnvManager` can give shell-based CLI tools the exact same credential
+    /// `apply` already uses for the system-wide GUI proxy setting, rather than a second copy.
+    static func currentProxyPassword() -> String? { readProxyPassword() }
+
     private static func readProxyPassword() -> String? {
         guard let data = FileManager.default.contents(atPath: FocusLockConstants.proxyPasswordPath) else { return nil }
         return String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
