@@ -162,13 +162,15 @@ public enum FocusLockConstants {
         "com.apple.WebKit.WebContent",  // Safari renderer process, seen as frontmost in some setups
     ]
 
-    /// How often `FocusLockScanner`'s `ScreenshotMonitor` captures the frontmost app and uploads it
-    /// to `/screenshot-classify` for NSFW classification -- the Mac equivalent of the phone's
-    /// `visualFilterIntervalSeconds` loop in `FocusGuardAccessibilityService`. No dashboard-tunable
-    /// override yet (unlike the phone): this is a fixed constant for the same reason
-    /// `scannerScanInterval` above has no dashboard toggle either -- `FocusLockScanner` doesn't poll
-    /// `DashboardConfigSync`'s per-device settings today. A future pass could wire one in.
+    /// Default/floor for how often `FocusLockScanner`'s `ScreenshotMonitor` captures the frontmost
+    /// app and uploads it to `/screenshot-classify` -- the Mac equivalent of the phone's
+    /// `DEFAULT_VISUAL_FILTER_INTERVAL_SECONDS`/`MIN_VISUAL_FILTER_INTERVAL_SECONDS`
+    /// (`FocusGuardAccessibilityService`). `DashboardVisualFilterSettings` polls the guardian
+    /// dashboard's per-device `visualFilterIntervalSeconds` independently and falls back to this
+    /// default/floor when unconfigured or unreachable -- unlike `scannerScanInterval` above (which
+    /// genuinely has no dashboard-tunable equivalent), this one does.
     public static let screenshotScanInterval: Double = 30
+    public static let screenshotMinScanInterval: Double = 15
 
     /// Matches the phone's `SCREENSHOT_MAX_DIMENSION`/`SCREENSHOT_JPEG_QUALITY` (see
     /// `FocusGuardAccessibilityService.kt`) -- plenty of resolution for a vision/ONNX classifier to

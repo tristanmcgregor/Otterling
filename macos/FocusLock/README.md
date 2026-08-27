@@ -91,7 +91,11 @@ assuming otherwise.
      to Otterling); the scanner keeps re-checking so this starts working the moment it's granted,
      no restart needed. Catches content DNS/`pf` filtering can't -- images inside an app's own
      traffic that already passed through an allowed domain, or content in an app that doesn't use
-     the network filtering path at all.
+     the network filtering path at all. Respects the guardian dashboard's per-device
+     `visualFilterEnabled`/`visualFilterIntervalSeconds` settings (`DashboardVisualFilterSettings`
+     polls them independently of `FocusLockHelperd`'s own dashboard sync, since that daemon's cache
+     is root-only `0600` state a per-user LaunchAgent can't read) -- same kill switch and interval
+     control the Android app's equivalent loop already exposes.
 - **Trigger-word scanning**: the same `FocusLockScanner` LaunchAgent also walks the frontmost
   browser's accessibility tree for on-screen trigger words (report-only, never blocks) -- the Mac
   equivalent of the phone's `FocusGuardAccessibilityService` trigger-word scan. Requires

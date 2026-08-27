@@ -21,7 +21,15 @@ import Foundation
 /// continuously, so this mirrors the phone's `AppSuspensionManager.blockTemporarily` closely enough
 /// without adding new XPC surface for a short-lived, best-effort block. A scanner restart clears
 /// it, same as `Scanner.lastReported` above has no persistence either.
+///
+/// Respects the guardian's `visualFilterEnabled`/`visualFilterIntervalSeconds` dashboard settings
+/// via `DashboardVisualFilterSettings` -- the same server-side kill switch/interval the phone's
+/// `captureScreenshotIfAllowed`/`visualFilterIntervalMillis` already honor.
 enum ScreenshotMonitor {
+    // Guards the three fields below: `tick()` (main run loop, via the scanner's Timer) and
+    // ScreenshotUploader's URLSession completion handler (an arbitrary background queue) both
+    // read/write them.
+    private static let lock = NSLock()
     private static var lastCaptureAt = Date.distantPast
     private static var blockedUntil: [String: Date] = [:]
     private static var promptedForScreenRecording = false
@@ -29,27 +37,38 @@ enum ScreenshotMonitor {
     static func tick() {
         enforceActiveBlocks()
 
+        let settings = DashboardVisualFilterSettings.current()
+        guard settings.enabled else { return }
         guard hasScreenRecordingAccess() else { return }
-        guard Date().timeIntervalSince(lastCaptureAt) >= FocusLockConstants.screenshotScanInterval else { return }
+
+        lock.lock()
+        let dueForCapture = Date().timeIntervalSince(lastCaptureAt) >= settings.intervalSeconds
+        lock.unlock()
+        guard dueForCapture else { return }
+
         guard let app = NSWorkspace.shared.frontmostApplication,
               let bundleID = app.bundleIdentifier,
               !FocusLockConstants.screenshotSkipBundleIdentifiers.contains(bundleID) else { return }
 
+        lock.lock()
         lastCaptureAt = Date()
+        lock.unlock()
         guard let imageData = captureScreenJPEG() else { return }
         classify(imageData: imageData, bundleID: bundleID, appName: app.localizedName ?? bundleID)
     }
 
     /// Re-checked every tick (cheap -- no capture, no network) so an app force-quit for an NSFW hit
     /// that gets relaunched within the block window is quit again immediately, rather than only at
-    /// the next `screenshotScanInterval` capture.
+    /// the next capture interval.
     private static func enforceActiveBlocks() {
         let now = Date()
+        lock.lock()
         blockedUntil = blockedUntil.filter { $0.value > now }
-        guard !blockedUntil.isEmpty,
-              let app = NSWorkspace.shared.frontmostApplication,
+        let currentlyBlocked = blockedUntil
+        lock.unlock()
+        guard let app = NSWorkspace.shared.frontmostApplication,
               let bundleID = app.bundleIdentifier,
-              blockedUntil[bundleID] != nil else { return }
+              currentlyBlocked[bundleID] != nil else { return }
         app.forceTerminate()
     }
 
@@ -125,7 +144,9 @@ enum ScreenshotMonitor {
             let blockSeconds = value.blockUntilMillis
                 .map { max(FocusLockConstants.minNsfwBlockSeconds, $0 / 1000.0 - Date().timeIntervalSince1970) }
                 ?? FocusLockConstants.defaultNsfwBlockSeconds
+            lock.lock()
             blockedUntil[bundleID] = Date().addingTimeInterval(blockSeconds)
+            lock.unlock()
 
             if let app = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == bundleID }) {
                 app.forceTerminate()
