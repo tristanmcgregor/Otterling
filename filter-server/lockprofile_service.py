@@ -3553,10 +3553,16 @@ def main() -> None:
     if not TOKEN:
         raise SystemExit("LOCKPROFILE_TOKEN must be set -- refusing to start unauthenticated")
     _migrate_legacy_device_rules()
-    # Load/validate the ONNX NSFW models once here, not on a request thread (section 8.3/15.1 of
-    # the migration plan) -- a no-op today until real model files are dropped under ./models/, in
-    # which case this just logs "not ready" and nsfw_image_classifier keeps using claude -p.
-    onnx_nsfw_pipeline.initialize()
+    # Load/validate the ONNX NSFW models on a background thread, not a request thread (section
+    # 8.3/15.1 of the migration plan) and NOT inline here -- with real model files dropped under
+    # ./models/ (a few hundred MB combined), onnxruntime.InferenceSession loading can take long
+    # enough (or enough memory) on modest hardware to delay or stall this call, which previously
+    # blocked the HTTP server from ever binding -- taking down every route on this process,
+    # including /dashboard-auth/*, with nothing at all listening on LISTEN_PORT for Caddy to
+    # proxy to (502 Bad Gateway) for as long as loading took. classify() calls
+    # onnx_nsfw_pipeline.available() lazily anyway, so nsfw_image_classifier just keeps using the
+    # claude -p fallback until this thread finishes.
+    threading.Thread(target=onnx_nsfw_pipeline.initialize, daemon=True, name="onnx-nsfw-init").start()
     server = ThreadingHTTPServer((LISTEN_HOST, LISTEN_PORT), Handler)
     print(f"[lockprofile] listening on {LISTEN_HOST}:{LISTEN_PORT}", flush=True)
     server.serve_forever()
