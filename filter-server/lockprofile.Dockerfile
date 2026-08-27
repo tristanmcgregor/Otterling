@@ -5,6 +5,11 @@
 # (subscription auth instead of a metered ANTHROPIC_API_KEY). Same base image
 # and same CLI version as dns-classifier.Dockerfile, which this mirrors.
 #
+# Also installs onnxruntime/numpy/Pillow for onnx_nsfw_pipeline.py, the two-stage
+# Falconsai/NudeNet ONNX pipeline nsfw_image_classifier.py tries before falling
+# back to `claude -p` -- see that module's docstring. Inert (no-op) until an
+# operator drops real .onnx model files into the /models volume mounted below.
+#
 # lockprofile_service.py runs as root in this container (no USER directive,
 # same as the stock image it replaces), and `claude -p --permission-mode
 # bypassPermissions` refuses to run as root/via sudo -- so, exactly like
@@ -21,7 +26,7 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/* && \
     useradd --create-home --home-dir /home/claude-runner --shell /usr/sbin/nologin claude-runner && \
     useradd --create-home --home-dir /home/lockprofile --shell /usr/sbin/nologin lockprofile && \
-    pip install --no-cache-dir google-auth requests
+    pip install --no-cache-dir google-auth requests onnxruntime numpy Pillow
 
 # Runs unprivileged. Unlike dns-classifier (which must stay root to bind port 53), this service
 # listens on 8091 -- an unprivileged port -- so root bought nothing while this container serves

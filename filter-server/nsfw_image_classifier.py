@@ -13,6 +13,13 @@ Confirmed empirically (2026-08-27): `claude -p` reads an image referenced by loc
 the prompt text when its subprocess `cwd` is the same directory the image lives in -- no `--file`/
 `--add-dir` flag needed. This module writes the temp image into `ai_classifier._CLAUDE_CWD` (the
 same fixed `/tmp` cwd already used for text classification) specifically so that holds.
+
+Since 2026-08-27, `classify_screenshot` tries `onnx_nsfw_pipeline` (the two-stage Falconsai/NudeNet
+ONNX pipeline from the NSFW Screenshot Classifier Integration Plan) first -- see that module's
+docstring for why this stays server-side rather than moving to the phone (battery). Until model
+files are dropped into that pipeline's configured paths, `onnx_nsfw_pipeline.available()` is False
+and every call here falls through to the `claude -p` path unchanged, so this file's existing
+behavior is untouched until an operator opts in.
 """
 from __future__ import annotations
 
@@ -22,6 +29,7 @@ import os
 import tempfile
 
 import ai_classifier
+import onnx_nsfw_pipeline
 
 log = logging.getLogger("otterling.nsfw_image_classifier")
 
@@ -56,7 +64,25 @@ def classify_screenshot(image_bytes: bytes) -> bool | None:
     """Returns True if the screenshot is NSFW (should block + alert), False if safe, None if the
     classification call itself failed -- callers must fail *open* on None (discard the image,
     don't block, don't alert) so an outage of this classifier can never itself count as a false
-    positive, matching ai_classifier.classify_with_ai's contract."""
+    positive, matching ai_classifier.classify_with_ai's contract.
+
+    Tries the on-device-grade ONNX pipeline first (cheap, no subprocess/network round trip); falls
+    back to the `claude -p` vision path below if that pipeline has no model files configured, or if
+    inference on this particular image fails for any reason. A pipeline failure is not itself a
+    None-verdict -- it's silently absorbed by falling back, so an ONNX bug can never regress
+    behavior below what this file already did."""
+    if onnx_nsfw_pipeline.available():
+        try:
+            result = onnx_nsfw_pipeline.classify(image_bytes)
+            log.info(
+                "ONNX pipeline verdict=%s score=%.3f stage1=%s stage2=%s policy=%s time=%dms",
+                result.decision, result.nsfw_score, result.stage1_model_version,
+                result.stage2_model_version, result.policy_version, result.processing_time_ms,
+            )
+            return result.decision == onnx_nsfw_pipeline.DECISION_BLOCK
+        except onnx_nsfw_pipeline.PipelineUnavailableError as error:
+            log.warning("ONNX pipeline failed, falling back to claude -p: %s", error)
+
     fd, path = tempfile.mkstemp(suffix=".png", dir=ai_classifier._CLAUDE_CWD)
     try:
         with os.fdopen(fd, "wb") as fh:

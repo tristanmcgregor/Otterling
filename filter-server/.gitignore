@@ -1,3 +1,8 @@
 .ci-otterling-deploy-key
 .deployed-at
 .deployed-git-sha
+
+# Converted ONNX model weights for onnx_nsfw_pipeline.py -- binary, not source, and gated/licensed
+# per their own model cards (see that module's "Bringing your own models" doc). Mounted read-only
+# into the lockprofile container by docker-compose.yml.
+/models/
