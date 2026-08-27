@@ -185,10 +185,20 @@ fun AccountabilityPartnerSection(context: Context) {
         )
         Button(
             onClick = {
+                val trimmed = newNumber.trim()
+                val alreadyKnown = trimmed in settings.partnerNumbers()
                 settings.addPartnerNumber(newNumber)
                 newNumber = ""
                 status = "Number added"
                 refresh++
+                // Only for a genuinely new number -- re-adding one already in the list (a no-op in
+                // AccountabilityPartnerSettings.addPartnerNumber) must not re-send the welcome
+                // text, since this button offers no other way to resend it deliberately.
+                if (!alreadyKnown && trimmed.isNotEmpty()) {
+                    scope.launch {
+                        reporter.sendWelcomeMessage(trimmed)
+                    }
+                }
             },
             modifier = Modifier.fillMaxWidth(),
             enabled = newNumber.isNotBlank(),

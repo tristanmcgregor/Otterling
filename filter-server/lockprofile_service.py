@@ -782,12 +782,17 @@ def _save_report_types_file(data: dict) -> None:
         json.dump(data, fh, indent=2, sort_keys=False)
 
 
+REPORT_SUSPICION_LEVELS = ("high", "medium", "low")
+
+
 def _update_report_type(report_type: str, updates: dict) -> dict | None:
-    """Updates an EXISTING type's `enabled` flag and/or `customMessage` -- never adds/removes/
-    renames a type via this path, keeping the API narrowly "edit something that's already
-    defined" rather than a general file editor. `updates` may contain either or both of `enabled`
+    """Updates an EXISTING type's `enabled` flag, `customMessage`, and/or `suspicion` -- never
+    adds/removes/renames a type via this path, keeping the API narrowly "edit something that's
+    already defined" rather than a general file editor. `updates` may contain any of `enabled`
     (bool) / `customMessage` (str, "" clears back to the built-in default wording -- see
-    `customMessage`'s own comment in report_types.json's schema for where it's consulted).
+    `customMessage`'s own comment in report_types.json's schema for where it's consulted) /
+    `suspicion` (one of REPORT_SUSPICION_LEVELS -- see that key's own comment in
+    report_types.json's schema; caller has already validated it's one of those three values).
     Returns the updated file (for the response), or None if report_type isn't a known key (caller
     sends 404)."""
     with _report_types_lock:
@@ -799,6 +804,8 @@ def _update_report_type(report_type: str, updates: dict) -> dict | None:
             types[report_type]["enabled"] = updates["enabled"]
         if "customMessage" in updates:
             types[report_type]["customMessage"] = updates["customMessage"]
+        if "suspicion" in updates:
+            types[report_type]["suspicion"] = updates["suspicion"]
         _save_report_types_file(data)
         return data
 
@@ -2901,8 +2908,13 @@ class Handler(BaseHTTPRequestHandler):
                     self._send_json(400, {"error": "customMessage must be a string"})
                     return True
                 updates["customMessage"] = body["customMessage"][:500]
+            if "suspicion" in body:
+                if body["suspicion"] not in REPORT_SUSPICION_LEVELS:
+                    self._send_json(400, {"error": f"suspicion must be one of {REPORT_SUSPICION_LEVELS}"})
+                    return True
+                updates["suspicion"] = body["suspicion"]
             if not updates:
-                self._send_json(400, {"error": "enabled (boolean) and/or customMessage (string) required"})
+                self._send_json(400, {"error": "enabled (boolean), customMessage (string), and/or suspicion required"})
                 return True
             updated = _update_report_type(report_type, updates)
             if updated is None:
@@ -3055,6 +3067,25 @@ class Handler(BaseHTTPRequestHandler):
                 "notified": notified,
                 "fcmConfigured": project_id is not None,
             })
+            return True
+
+        # "Send test report" button (Global Settings' Report Types panel): fires a synthetic
+        # TEST_REPORT event through the exact same pipeline as every real alert (_append_alert ->
+        # JSONL + ntfy push -> phone's /alerts/poll -> SMS relay), so a guardian can confirm the
+        # whole chain works without waiting for a real tamper event. Honors TEST_REPORT's own
+        # enabled flag in report_types.json like any other type, so disabling it there also
+        # disables this button's effect.
+        if path == "/dashboard-api/report-types/test" and method == "POST":
+            event = _append_alert({
+                "device_id": "dashboard",
+                "type": "TEST_REPORT",
+                "details": "Test report triggered from Global Settings.",
+                "reported_at": time.time(),
+                "received_at": time.time(),
+            })
+            if event:
+                _push_event(event)
+            self._send_json(200, {"status": "ok", "sent": event is not None})
             return True
 
         match = DASHBOARD_DEVICE_RE.match(path)
@@ -3244,13 +3275,18 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/report-config":
             # Lets the phone's own AlertReporter (Android-origin types never touch this server --
             # see report_types.json's "_readme") honor the same enabled/disabled list AND the same
-            # guardian-editable customMessage override this server's own _send_ntfy_notification
-            # already applies for mac/server-origin types -- see AlertReporter.kt's formatBody.
-            # source/description are for humans editing the file, not needed on the wire.
+            # guardian-editable customMessage/suspicion overrides this server's own
+            # _send_ntfy_notification already applies (customMessage) or that live only here
+            # (suspicion) -- see AlertReporter.kt's formatBody. source/description are for humans
+            # editing the file, not needed on the wire.
             config = _load_report_config()
             return self._send_json(200, {
                 "types": {
-                    k: {"enabled": v.get("enabled", True) is not False, "customMessage": v.get("customMessage", "")}
+                    k: {
+                        "enabled": v.get("enabled", True) is not False,
+                        "customMessage": v.get("customMessage", ""),
+                        "suspicion": v.get("suspicion") if v.get("suspicion") in REPORT_SUSPICION_LEVELS else "medium",
+                    }
                     for k, v in config.items()
                 },
             })

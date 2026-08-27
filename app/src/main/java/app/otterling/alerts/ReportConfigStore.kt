@@ -33,6 +33,16 @@ class ReportConfigStore(context: Context) {
      *  fetched or not set server-side) means "use the built-in default wording". */
     fun customMessage(type: String): String = prefs.getString(MESSAGE_PREFIX + type, "").orEmpty()
 
+    /** How alarming this report type is (report_types.json's `suspicion`, set via the dashboard's
+     *  Report Types panel) -- consulted by [AlertReporter.formatBody] to tag the SMS, e.g.
+     *  "[HIGH SUSPICION]". Defaults to "medium" for a type never fetched, not set server-side, or
+     *  set to something outside high/medium/low -- same "fail toward a safe middle" stance as the
+     *  server's own /report-config route. */
+    fun suspicion(type: String): String {
+        val value = prefs.getString(SUSPICION_PREFIX + type, "medium").orEmpty()
+        return if (value in VALID_SUSPICION) value else "medium"
+    }
+
     /** Best-effort: a failed fetch just leaves the existing cache (or the all-enabled default) in
      *  place rather than throwing, so a network hiccup during [MacTamperPollWorker]'s poll never
      *  blocks or fails that poll over this. */
@@ -51,6 +61,7 @@ class ReportConfigStore(context: Context) {
                 val entry = types.optJSONObject(key)
                 editor.putBoolean(ENABLED_PREFIX + key, entry?.optBoolean("enabled", true) ?: true)
                 editor.putString(MESSAGE_PREFIX + key, entry?.optString("customMessage", "").orEmpty())
+                editor.putString(SUSPICION_PREFIX + key, entry?.optString("suspicion", "medium").orEmpty())
             }
             editor.apply()
         } catch (error: Exception) {
@@ -72,5 +83,7 @@ class ReportConfigStore(context: Context) {
         const val PREFS = "report_config_cache"
         const val ENABLED_PREFIX = "enabled_"
         const val MESSAGE_PREFIX = "message_"
+        const val SUSPICION_PREFIX = "suspicion_"
+        val VALID_SUSPICION = setOf("high", "medium", "low")
     }
 }

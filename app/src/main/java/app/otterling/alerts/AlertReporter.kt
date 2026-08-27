@@ -78,6 +78,17 @@ class AlertReporter(context: Context) {
         if (enqueued) flushOutbox()
     }
 
+    /** Sent once, the first time a number is added as an accountability partner (see
+     *  `AccountabilityPartnerSection.kt`'s "Add number" button) -- explains the whole system
+     *  before any real alert ever lands, most importantly what each [ReportConfigStore.suspicion]
+     *  tag on every later message means, so the partner isn't guessing the first time one arrives.
+     *  Returns whether the send succeeded; caller decides what to do on failure (the number is
+     *  still added either way -- this is a courtesy, not a gate on functioning). */
+    suspend fun sendWelcomeMessage(number: String): Boolean = withContext(Dispatchers.IO) {
+        SmsPermissionGranter.grantSendSms(appContext)
+        sender.send(WELCOME_MESSAGE, number)
+    }
+
     /** Sends a test SMS to every configured partner number; returns how many succeeded. */
     suspend fun sendTestSmsToPartner(): Int = withContext(Dispatchers.IO) {
         SmsPermissionGranter.grantSendSms(appContext)
@@ -187,6 +198,11 @@ class AlertReporter(context: Context) {
      * the above when non-blank -- `{details}` inside it is substituted with [details], same
      * placeholder convention as the server's own `_send_ntfy_notification`, so a reworded message
      * can still reference what actually happened.
+     *
+     * Every message is also tagged with [ReportConfigStore.suspicion]'s level for [type] (e.g.
+     * `[HIGH SUSPICION]`) -- the one-time welcome SMS ([WELCOME_MESSAGE], sent when a partner
+     * number is first added) spells out what each level means, so this short tag is all the
+     * context needed on every later message.
      */
     private fun formatBody(type: String, details: String, deviceName: String?): String {
         val device = deviceName?.takeIf { it.isNotBlank() } ?: Build.MODEL
@@ -202,12 +218,31 @@ class AlertReporter(context: Context) {
             type in BENIGN_TYPES -> details
             else -> "App has been tampered with. It is highly recommended to check up on Tristan."
         }
-        val raw = "Otterling Alert: $message ($device) · $time"
+        val suspicionTag = when (reportConfig.suspicion(type)) {
+            "high" -> "[HIGH SUSPICION]"
+            "low" -> "[LOW SUSPICION]"
+            else -> "[MEDIUM SUSPICION]"
+        }
+        val raw = "$suspicionTag Otterling Alert: $message ($device) · $time"
         return if (raw.length <= 300) raw else raw.take(297) + "..."
     }
 
     private companion object {
         const val TAG = "AlertReporter"
+
+        // Sent once, by sendWelcomeMessage(), the first time a number is added as an
+        // accountability partner. Explains the suspicion tags every later Otterling Alert SMS
+        // carries -- keep this in sync with report_types.json's "suspicion" comment and with
+        // formatBody()'s suspicionTag values (HIGH/MEDIUM/LOW SUSPICION) if either changes.
+        const val WELCOME_MESSAGE = "Otterling: you've been added as Tristan's accountability " +
+            "partner. From now on you may get SMS alerts here when something on his phone or " +
+            "Mac needs attention. Each one is tagged with how concerning it is:\n\n" +
+            "[HIGH SUSPICION] — there's a high likelihood Tristan is trying to bypass Otterling. " +
+            "Please check in with him.\n\n" +
+            "[MEDIUM SUSPICION] — could be a false positive, but check in with him to be safe.\n\n" +
+            "[LOW SUSPICION] — most likely nothing, and not detrimental to his protection either " +
+            "way, but still worth checking in with him.\n\n" +
+            "Thanks for helping keep him accountable."
 
         // Matches the exact `"<word>" seen in/on <place>` shape every trigger-word source writes.
         val TRIGGER_WORD_DETAILS = Regex("^\"(.+)\" seen (in|on) (.+)$")

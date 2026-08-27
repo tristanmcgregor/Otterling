@@ -1464,7 +1464,10 @@ function GlobalSettingsScreen() {
       </div>
 
       <div className="space-y-3">
-        <SectionLabel>Report Types</SectionLabel>
+        <div className="flex items-center justify-between gap-3">
+          <SectionLabel>Report Types</SectionLabel>
+          <SendTestReportButton />
+        </div>
         <p className="text-xs text-on-surface-variant -mt-1">
           Every kind of accountability report/alert Otterling can send, grouped by where it comes
           from. Turning one off fully suppresses it — no SMS, no local log entry, nothing recorded
@@ -1596,6 +1599,35 @@ function GlobalRulesList({
   );
 }
 
+// Fires a TEST_REPORT event through the real alert pipeline (ntfy push + accountability-partner
+// SMS relay) so a guardian can confirm it's wired up end-to-end without waiting for a real tamper
+// event. Honors TEST_REPORT's own enabled toggle in the panel below like any other type.
+function SendTestReportButton() {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<string | null>(null);
+
+  const handleClick = () => {
+    setBusy(true);
+    setResult(null);
+    api.sendTestReport()
+      .then((res) => setResult(res.sent ? "Test report sent" : "TEST_REPORT is disabled below"))
+      .catch((err) => setResult(err instanceof ApiError ? err.message : "Couldn't reach the server"))
+      .finally(() => {
+        setBusy(false);
+        window.setTimeout(() => setResult(null), 5000);
+      });
+  };
+
+  return (
+    <div className="flex items-center gap-2">
+      {result && <p className="text-[11px] text-on-surface-variant">{result}</p>}
+      <Button variant="text" size="sm" className="px-0 text-xs h-7" onClick={handleClick} disabled={busy}>
+        {busy ? "Sending…" : "Send test report"}
+      </Button>
+    </div>
+  );
+}
+
 function ReportTypesPanel() {
   const [data, setData] = useState<ReportTypesFile | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -1613,6 +1645,10 @@ function ReportTypesPanel() {
       setError(`Failed to update "${type}"'s message`);
       throw new Error("failed"); // lets the row know the save didn't stick
     });
+
+  const setSuspicion = (type: string, suspicion: ReportType["suspicion"]) => {
+    api.setReportTypeSuspicion(type, suspicion).then(setData).catch(() => setError(`Failed to update "${type}"'s suspicion level`));
+  };
 
   if (error) return <p className="text-xs text-error">{error}</p>;
   if (!data) return <p className="text-xs text-on-surface-variant">Loading…</p>;
@@ -1642,6 +1678,7 @@ function ReportTypesPanel() {
                 info={info}
                 onToggle={(v) => toggle(type, v)}
                 onSaveMessage={(msg) => setMessage(type, msg)}
+                onSetSuspicion={(level) => setSuspicion(type, level)}
               />
             ))}
           </Card>
@@ -1651,13 +1688,20 @@ function ReportTypesPanel() {
   );
 }
 
+const SUSPICION_LEVELS: Array<{ value: ReportType["suspicion"]; label: string; pill: "error" | "warning" | "default" }> = [
+  { value: "high", label: "High", pill: "error" },
+  { value: "medium", label: "Medium", pill: "warning" },
+  { value: "low", label: "Low", pill: "default" },
+];
+
 function ReportTypeRow({
-  type, info, onToggle, onSaveMessage,
+  type, info, onToggle, onSaveMessage, onSetSuspicion,
 }: {
   type: string;
   info: ReportType;
   onToggle: (v: boolean) => void;
   onSaveMessage: (customMessage: string) => Promise<unknown>;
+  onSetSuspicion: (level: ReportType["suspicion"]) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(info.customMessage || info.description);
@@ -1686,6 +1730,17 @@ function ReportTypeRow({
           </p>
         </div>
         <Switch checked={info.enabled} onCheckedChange={onToggle} />
+      </div>
+      <div className="flex items-center gap-1.5 mt-1.5">
+        {SUSPICION_LEVELS.map((level) => (
+          <button key={level.value} onClick={() => onSetSuspicion(level.value)}>
+            <Pill variant={info.suspicion === level.value ? level.pill : "default"}>
+              <span className={info.suspicion === level.value ? "font-semibold" : "opacity-50"}>
+                {level.label}
+              </span>
+            </Pill>
+          </button>
+        ))}
       </div>
       {!editing ? (
         <button

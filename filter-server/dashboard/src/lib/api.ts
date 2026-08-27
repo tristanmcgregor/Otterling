@@ -66,6 +66,10 @@ export interface ReportType {
   // (android-origin, via AlertReporter.kt's formatBody) -- same placeholder, same substitution,
   // different place it happens depending on where that report type's message actually gets sent.
   customMessage: string;
+  // How alarming this report is -- shown as a short tag (e.g. "[HIGH SUSPICION]") on the SMS sent
+  // to the accountability partner. "medium" is the default for any type missing this key. See
+  // report_types.json's "_readme" and AlertReporter.kt's formatBody for where it's consulted.
+  suspicion: "high" | "medium" | "low";
 }
 
 export interface ReportTypesFile {
@@ -311,6 +315,14 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify({ customMessage }),
     }),
+  setReportTypeSuspicion: (type: string, suspicion: ReportType["suspicion"]) =>
+    request<ReportTypesFile>(`/report-types/${enc(type)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ suspicion }),
+    }),
+  // Fires a synthetic TEST_REPORT event through the real alert pipeline (ntfy push + SMS relay)
+  // so a guardian can confirm it's wired up without waiting for a real tamper event.
+  sendTestReport: () => request<{ status: string; sent: boolean }>("/report-types/test", { method: "POST" }),
 
   // Guardian-only. GET returns the effective values (template merged onto the hardcoded
   // fallback), so the UI can show real toggle states even before the guardian has ever touched
