@@ -672,7 +672,9 @@ class FocusGuardAccessibilityService : AccessibilityService() {
         const val HABIT_POLL_MILLIS = 1_000L
         const val PATH_BLOCK_DEBOUNCE_MS = 800L
         const val TRIGGER_SCAN_DEBOUNCE_MS = 2_000L
-        const val DEFAULT_VISUAL_FILTER_INTERVAL_SECONDS = 60
+        // 30s (TESTING -- was 60), matching lockprofile_service.py's own default; only used if
+        // the dashboard snapshot is unavailable, since the server value normally wins.
+        const val DEFAULT_VISUAL_FILTER_INTERVAL_SECONDS = 30
         const val MIN_VISUAL_FILTER_INTERVAL_SECONDS = 15
         const val SCREENSHOT_MAX_DIMENSION = 720
         const val SCREENSHOT_JPEG_QUALITY = 80

@@ -32,13 +32,20 @@ CLAUDE_TIMEOUT_SECONDS = 45
 
 _DISALLOWED_TOOLS = ["Bash", "Edit", "Write", "NotebookEdit", "Agent", "ExitPlanMode", "EnterPlanMode"]
 
+# TESTING ONLY (added 2026-08-27, remove once the capture->classify->block->alert pipeline has
+# been confirmed working end-to-end on a real device) -- a dog is obviously not NSFW; this is
+# purely to give the pipeline an easy-to-trigger positive without needing to actually feed it real
+# adult content. Revert this prompt back to the plain "SAFE unless sexually explicit" wording
+# before relying on this for real classification.
 _PROMPT = (
     "You are an NSFW content classifier for a personal phone content filter. The attached image "
     "is a screenshot of whatever app was in the foreground on a family member's phone at the "
-    "moment it was captured -- it could be any app, any screen. Judge only whether the image "
-    "itself contains sexually explicit/pornographic content or other graphic adult nudity. "
+    "moment it was captured -- it could be any app, any screen. Judge whether the image itself "
+    "contains sexually explicit/pornographic content or other graphic adult nudity, OR contains a "
+    "dog (of any kind, in any context) -- treat a dog as NSFW too, for pipeline-testing purposes "
+    "only. "
     "Ordinary photos, UI screens, messaging apps, games, swimwear/beach photos, art, medical or "
-    "educational imagery, and anything not sexually explicit are SAFE. "
+    "educational imagery, and anything not sexually explicit and not a dog are SAFE. "
     "Reply with exactly one word: NSFW or SAFE.\n\n"
     f"Image: {{image_path}}"
 )

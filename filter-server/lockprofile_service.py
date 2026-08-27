@@ -1749,7 +1749,9 @@ def _default_device_settings(device_id: str = "") -> dict:
         # default-safe stance. Interval is dashboard-tunable so the capture cadence can change
         # without an app update.
         "visualFilterEnabled": True,
-        "visualFilterIntervalSeconds": 60,
+        # 30s (TESTING -- was 60) for faster pipeline verification; bump back up once the
+        # capture->classify->block->alert flow has been confirmed working end-to-end.
+        "visualFilterIntervalSeconds": 30,
         # Reported by the device itself (POST .../installed-apps), NOT guardian-authored -- see
         # that route's comment. Deliberately not in SETTINGS_PATCH_ALLOWED_KEYS: the generic
         # settings PATCH is for guardian opinions, this is a device fact the guardian only ever
