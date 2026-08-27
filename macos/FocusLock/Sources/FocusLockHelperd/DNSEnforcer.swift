@@ -19,9 +19,17 @@ import Network
 ///
 /// This alone isn't enough -- a determined bypass would just set a different resolver via the
 /// system's normal UI just as easily as this app does, or a browser could ignore system DNS
-/// entirely via its own DNS-over-HTTPS. `PFBlocker` is what actually forecloses those: it drops
-/// all traffic to known alternate DoH resolver IPs and to port 853 (DNS-over-TLS) whenever DNS
-/// enforcement is on, which forces resolution back through the enforced resolver.
+/// entirely via its own DNS-over-HTTPS. `PFBlocker` NARROWS those: it drops traffic to a list of
+/// known public DoH/DoT resolver IPs and to port 853 (DNS-over-TLS) whenever DNS enforcement is on,
+/// which pushes resolution back through the enforced resolver for every resolver on that list.
+///
+/// It does not CLOSE them, and this comment used to say it did. An IP denylist cannot cover a
+/// custom DoH endpoint hosted on a shared CDN address, because blocking that address would break
+/// unrelated web traffic on the same IP. A browser configured with such an endpoint still resolves
+/// around this. The durable answer is browser policy (a managed preference forcing DoH off), not a
+/// firewall rule; on the phone side the same gap is why `mitm_nsfw_addon.py`'s content inspection
+/// matters so much more than the DNS tier. Recorded plainly here because other parts of this
+/// design were reasoning from the stronger claim.
 enum DNSEnforcer {
     static let cloudflareFamilyDNS = ["1.1.1.3", "1.0.0.3"]
 
@@ -86,14 +94,31 @@ enum DNSEnforcer {
         // A bare IP address needs no resolution -- also lets the host field accept a literal IP.
         if isIPv4Address(host) { return [host] }
 
+        // The result crosses threads, so it goes through a lock rather than a bare `var`. On
+        // timeout this function returns while the background getaddrinfo is still running, and that
+        // thread will still write its answer -- an unsynchronized Optional<[String]> read here
+        // against that write is a genuine data race, in root-privileged code, on the path whose
+        // whole job is recovering from a broken resolver.
+        final class Box {
+            private let lock = NSLock()
+            private var value: [String]?
+            func set(_ newValue: [String]?) {
+                lock.lock(); defer { lock.unlock() }
+                value = newValue
+            }
+            func get() -> [String]? {
+                lock.lock(); defer { lock.unlock() }
+                return value
+            }
+        }
+        let box = Box()
         let semaphore = DispatchSemaphore(value: 0)
-        var result: [String]?
         DispatchQueue.global().async {
-            result = resolveIPv4Blocking(host)
+            box.set(resolveIPv4Blocking(host))
             semaphore.signal()
         }
         _ = semaphore.wait(timeout: .now() + resolveTimeout)
-        return result
+        return box.get()
     }
 
     private static func resolveIPv4Blocking(_ host: String) -> [String]? {
