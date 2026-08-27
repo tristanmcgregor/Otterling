@@ -15,7 +15,8 @@
 # restriction for the release-review pipeline's own claude -p call), and
 # this container's runtime user is never root, so no privilege-drop dance
 # is needed here (contrast dns-classifier.Dockerfile, which does).
-FROM mitmproxy/mitmproxy:latest
+# Pinned rather than `latest` -- see docker-compose.yml's adguardhome comment.
+FROM mitmproxy/mitmproxy:11.0.2
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends curl ca-certificates gnupg && \

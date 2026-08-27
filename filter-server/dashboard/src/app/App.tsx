@@ -1408,7 +1408,7 @@ function HabitsScreen({
 // own top-level Habits screen (see HabitsScreen) rather than here.
 function GlobalSettingsScreen() {
   const [pinModalOpen, setPinModalOpen] = useState(false);
-  const [pinStatus, setPinStatus] = useState<{ pin: string | null; updatedAt: number | null } | null>(null);
+  const [pinStatus, setPinStatus] = useState<{ configured: boolean; updatedAt: number | null } | null>(null);
   const reloadPinStatus = () => api.getPin().then(setPinStatus).catch(() => setPinStatus(null));
   useEffect(() => { reloadPinStatus(); }, []);
 
@@ -1429,8 +1429,8 @@ function GlobalSettingsScreen() {
             <div>
               <div className="flex items-center gap-2">
                 <p className="text-sm font-medium">Guardian PIN</p>
-                <Pill variant={pinStatus?.pin ? "success" : "default"}>
-                  {pinStatus?.pin ? "Set" : "Not set"}
+                <Pill variant={pinStatus?.configured ? "success" : "default"}>
+                  {pinStatus?.configured ? "Set" : "Not set"}
                 </Pill>
               </div>
               <p className="text-xs text-on-surface-variant">

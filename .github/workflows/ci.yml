@@ -1,0 +1,135 @@
+name: CI
+
+# Checks only. This workflow deliberately CANNOT publish anything -- releasing is done by
+# /var/lib/otterling/ci/release.sh on the update host (root-owned, AI-gated), never from GitHub.
+# See filter-server/SELF_LOCKOUT.md and AGENTS.md. Do not add a sign-and-publish job here: the
+# whole point of the self-lockout design is that a git push cannot ship a protection-weakening
+# build. Adding one would hand the person being filtered a way to do exactly that.
+#
+# Why this exists at all: before it, CI ran no build, no tests, no lint and no secret scanning --
+# the only workflow present echoed a reminder that releases happen elsewhere. That left
+# .gitignore as the sole thing keeping a Firebase admin-SDK key out of the repo, and left the
+# enforcement logic (the code that decides what runs as root) with no automated check whatsoever.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history: a key committed and later removed is still a leaked key, so the whole
+          # log is in scope, not just the tip.
+          fetch-depth: 0
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Assert no service-account key is tracked
+        # Belt and braces alongside gitleaks: these exact patterns are what .gitignore protects,
+        # and a tracked file matching them is unambiguous rather than heuristic.
+        run: |
+          set -euo pipefail
+          matches="$(git ls-files | grep -iE 'firebase-adminsdk.*\.json$|fcm-service-account\.json$|(^|/)\.env$|\.(pem|p12|jks|keystore)$' | grep -v 'app/src/main/res/raw/otterling_proxy_ca.pem' || true)"
+          if [ -n "$matches" ]; then
+            echo "::error::Tracked files look like secrets:"; echo "$matches"; exit 1
+          fi
+          echo "No tracked secret-shaped files (otterling_proxy_ca.pem is the intended public CA cert)."
+
+  macos:
+    name: macOS helper (build + test)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: swift build
+        working-directory: macos/FocusLock
+        run: swift build
+      - name: swift test
+        working-directory: macos/FocusLock
+        # Covers CommandPolicy (what may run as root), HostsFileBlock (what gets written to
+        # /etc/hosts), HostnameValidator, and the passcode digest handling.
+        run: swift test
+
+  python:
+    name: filter-server (syntax + tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          # Matches the containers (python:3.12-slim). lockprofile_service.py uses 3.10+ syntax, so
+          # an older interpreter cannot even import it.
+          python-version: '3.12'
+      - name: Byte-compile every service
+        working-directory: filter-server
+        run: python -m compileall -q . --exclude 'dashboard|node_modules'
+      - name: Unit tests
+        working-directory: filter-server
+        # route_policy (the device-vs-guardian boundary) and session_token (PIN-bound sessions).
+        run: python -m unittest discover -s tests -v
+      - name: Ruff lint
+        run: |
+          pip install --quiet ruff
+          # Errors only, not style: this codebase has its own conventions and a style fight in CI
+          # would just get switched off. E9/F63/F7/F82 are genuine bugs (syntax errors, undefined
+          # names, broken comparisons).
+          ruff check --select E9,F63,F7,F82 filter-server/
+
+  android:
+    name: Android (unit tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Unit tests
+        # Unit tests only -- no emulator, no instrumentation. Covers the pure enforcement logic
+        # (MitmExemptionPolicy, PinningFailureHeuristic, blocklist parsing, the TCP relay's
+        # CONNECT buffering).
+        run: ./gradlew :app:testDebugUnitTest --no-daemon
+
+  dashboard:
+    name: Dashboard (build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: filter-server/dashboard/package-lock.json
+      - name: Install
+        working-directory: filter-server/dashboard
+        run: npm ci
+      - name: Build
+        working-directory: filter-server/dashboard
+        run: npm run build
+      - name: Check the committed dist is current
+        working-directory: filter-server/dashboard
+        # dist/ is committed because the deploy host has no Node (see dashboard/README.md), so a
+        # stale bundle silently ships old UI against a new API. This catches a src change whose
+        # dist was never rebuilt.
+        run: |
+          if ! git diff --quiet -- dist; then
+            echo "::error::dist/ is out of date. Run 'npm run build' in filter-server/dashboard and commit the result."
+            git diff --stat -- dist
+            exit 1
+          fi
+          echo "Committed dist matches src."

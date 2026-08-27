@@ -15,11 +15,17 @@ import java.security.cert.CertificateFactory
  * for [TcpRelayManager]'s CONNECT-based HTTPS filtering to actually work -- without this, every
  * HTTPS site behind the proxy fails TLS validation instead of loading.
  *
- * The bundled `res/raw/otterling_proxy_ca.pem` is a placeholder generated locally (not by a real
- * mitmproxy instance) purely so this compiles out of the box -- see filter-server/ca/README.md.
- * It must be replaced with the real CA extracted from your own filter-server deployment before the
- * proxy filter can work; until then, [installIfNeeded] happily installs the wrong (harmless,
- * useless) certificate.
+ * NOTE (corrected 2026-08-27): `res/raw/otterling_proxy_ca.pem` is the REAL CA certificate for
+ * this deployment (`CN=mitmproxy`, issued 2026-08-05) -- NOT a placeholder, which is what this
+ * comment used to claim. It is the public certificate only (no private key), which is exactly what
+ * has to ship inside the APK for the phone to validate mitmproxy's leaf certificates. See
+ * filter-server/ca/README.md for verification steps and the full correction.
+ *
+ * The old wording ("a placeholder generated locally, not by a real mitmproxy instance... must be
+ * replaced before the proxy filter can work") was actively misleading in both directions: someone
+ * following it would have replaced a working CA believing it was inert, and an auditor would have
+ * skipped the file believing it carried nothing real. If you deploy a different mitmproxy, its CA
+ * will differ and this file does need replacing -- but for THIS deployment it is already correct.
  */
 class CaCertInstaller(private val context: Context) {
     private val devicePolicyManager: DevicePolicyManager? =

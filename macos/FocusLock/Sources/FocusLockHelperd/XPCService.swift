@@ -339,14 +339,31 @@ final class XPCService: NSObject, FocusLockXPCProtocol {
             return
         }
 
-        // Setting the first passcode only ever adds a gate, so it's ungated -- but it is a
-        // one-way door in practice (removing it costs the current passcode), which is the point.
-        // Rotating an existing one requires the current passcode.
+        // Rotating an existing passcode requires the current one (see `authorize`).
+        //
+        // Setting the FIRST one requires admin group membership but no passcode (there is none to
+        // present yet). It used to require nothing at all, on the reasoning that adding a gate
+        // where none existed is protection-increasing. That reasoning has a hole: once a passcode
+        // is set it *replaces* the admin-group check as the authorization boundary for every
+        // removal (see this protocol's doc comment), so whoever sets it first holds the only
+        // credential that can weaken anything. An unprivileged local process claiming it before
+        // the accountability partner ran `otterlingctl set-passcode` would capture the boundary and
+        // lock the partner out -- inverting the whole design. Requiring admin for the first set
+        // costs a Guardian nothing (they are admin under both deployment models) and closes it.
         if existing != nil {
             if let denial = authorize(passcode: currentPasscode, action: "change the Guardian passcode") {
                 reply(FocusLockCodec.encode(FocusLockResult.denied(denial)))
                 return
             }
+        } else if !isCallerAdmin() {
+            TamperReporter.report(
+                type: "passcode_set_refused",
+                details: "A non-admin caller tried to set the first Guardian passcode."
+            )
+            reply(FocusLockCodec.encode(FocusLockResult.denied(
+                "Only the Guardian admin account can set the first Guardian passcode."
+            )))
+            return
         }
 
         guard let record = PasscodeHash.make(passcode: newPasscode) else {

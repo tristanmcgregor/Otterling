@@ -48,10 +48,27 @@ CLAUDE_RUNNER_USER = os.environ.get("CLAUDE_RUNNER_USER", "claude-runner")
 # single-token behavior as before.
 CLAUDE_CODE_OAUTH_TOKEN_BACKUP = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN_BACKUP", "")
 
-# Every tool a one-word safe/unsafe judgment has no legitimate reason to use -- this call is
-# text-in/text-out only, the same capability the old raw-API call had. Mirrors
-# anthropic_review_stream.py's DISALLOWED_TOOLS for the same reason.
-_DISALLOWED_TOOLS = ["Bash", "Edit", "Write", "NotebookEdit", "Agent", "ExitPlanMode", "EnterPlanMode"]
+# Every tool this call could possibly be talked into using. The prompt below embeds a page's own
+# URL/title/text, which is attacker-controlled by definition, so the tool set -- not the prompt
+# wording -- has to be what makes injection unexploitable.
+#
+# WHY THIS LIST GREW: it used to omit Read, Glob, Grep, WebFetch and WebSearch while still passing
+# `--permission-mode bypassPermissions`. A read tool plus an egress tool is a complete
+# exfiltration primitive, and this addon runs inside the mitmproxy container, where
+# /home/mitmproxy/.mitmproxy holds mitmproxy-ca.pem -- the CA PRIVATE KEY that signs every
+# intercepted TLS leaf. A page whose text talked the classifier into reading that file and fetching
+# an attacker URL would hand over the ability to forge certificates every enrolled device trusts.
+# This call is text-in/one-word-out and has no legitimate use for any tool at all.
+_DISALLOWED_TOOLS = [
+    # Execution / mutation.
+    "Bash", "BashOutput", "KillShell", "Edit", "Write", "NotebookEdit",
+    # Filesystem read -- the first half of the exfiltration primitive.
+    "Read", "Glob", "Grep",
+    # Network egress -- the second half.
+    "WebFetch", "WebSearch",
+    # Delegation and control flow, which could reach any of the above indirectly.
+    "Agent", "Task", "SlashCommand", "ExitPlanMode", "EnterPlanMode", "TodoWrite",
+]
 # Fixed, harmless cwd for the `claude` call -- the prompt is passed over stdin, so `claude` never
 # touches any real project directory.
 _CLAUDE_CWD = "/tmp"

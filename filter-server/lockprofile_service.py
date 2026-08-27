@@ -158,7 +158,9 @@ FLEET_WEBHOOK_SECRET = os.environ.get("FLEET_WEBHOOK_SECRET", "")
 # same PIN already used on-device instead, rather than juggle two secrets. See GUARDIAN_PIN_PATH's
 # comment for the PIN's own storage/exposure rules. /review used to check this same PIN via its
 # own session cookie too, until it was made unauthenticated on 2026-08-26 (see Caddyfile).
-DASHBOARD_SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60  # 30 days
+# Re-exported from session_token, which is now the authority (see that module). Kept as a name
+# here because the cookie-setting docstring below refers to it.
+DASHBOARD_SESSION_MAX_AGE_SECONDS = session_token.MAX_AGE_SECONDS  # 30 days
 
 # One-time handoff link: lets whoever currently holds a guardian dashboard session (see
 # POST /dashboard-api/handoff-link below) generate a single-use, expiring, unguessable (256-bit)
@@ -2689,6 +2691,11 @@ class Handler(BaseHTTPRequestHandler):
         cookie, so checking the cookie here does not break the dashboard; a device request has the
         bearer and no cookie, and is confined to route_policy's explicit device list.
         """
+        # do_GET passes parsed.path; do_POST/PATCH/DELETE pass self.path, which still carries any
+        # query string. Strip it before matching -- otherwise a device request with a query string
+        # would miss its own allowlist entry and be refused. That direction is safe (fail closed)
+        # but it would be a self-inflicted client outage, so normalize rather than rely on it.
+        path = urllib.parse.urlparse(path).path
         if not route_policy.governs(path):
             return False
         if route_policy.required_access(method, path) == route_policy.DEVICE_BEARER_OK:

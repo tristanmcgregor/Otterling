@@ -317,7 +317,9 @@ class VpnFilterService : VpnService() {
         // and add it manually. See PinningFailureTracker/PinningFailureHeuristic for the actual
         // signal, and PinningFailureTracker's own doc for the persistence bug that used to stop
         // this from ever firing in practice.
-        val pinningFailureTracker = PinningFailureTracker(applicationContext)
+        // `scope`, not `relayScope`: an auto-exemption calls reestablish(), which cancels the
+        // per-generation scope -- see PinningFailureTracker's constructor doc.
+        val pinningFailureTracker = PinningFailureTracker(applicationContext, scope)
         // Fresh per tunnel generation, same as pinningFailureTracker above, but unlike it this is
         // never persisted -- a proxy outage is a live signal about *this* generation's proxy
         // health, not a slow-accumulating per-app one. See ProxyOutageTracker's own doc for why it

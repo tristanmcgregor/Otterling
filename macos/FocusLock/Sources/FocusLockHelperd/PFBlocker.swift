@@ -20,11 +20,40 @@ import FocusLockShared
 enum PFBlocker {
     private static let pfConfPath = "/etc/pf.conf"
 
+    /// Known public DNS-over-HTTPS / DNS-over-TLS resolver addresses, dropped while DNS enforcement
+    /// is on so a browser cannot resolve through its own encrypted resolver instead of the mandated
+    /// one. Includes Cloudflare's *unfiltered* 1.1.1.1/1.0.0.1 -- when enforcement wants the
+    /// filtered 1.1.1.3 pair, blocking the unfiltered pair closes the obvious "just pick the other
+    /// address" bypass.
+    ///
+    /// HONEST LIMIT: an IP list can only ever cover named resolvers. It does NOT stop a custom DoH
+    /// endpoint on a shared CDN address, which cannot be blocked without breaking unrelated web
+    /// traffic. See `DNSEnforcer`'s doc comment, which used to overstate what this achieves.
     private static let knownDoHResolverIPs = [
-        "1.1.1.1", "1.0.0.1", // Cloudflare
-        "8.8.8.8", "8.8.4.4", // Google
-        "9.9.9.9", "149.112.112.112", // Quad9
-        "208.67.222.222", "208.67.220.220", // OpenDNS
+        "1.1.1.1", "1.0.0.1",                                   // Cloudflare (unfiltered)
+        "1.1.1.2", "1.0.0.2",                                   // Cloudflare (malware-only)
+        "8.8.8.8", "8.8.4.4",                                   // Google
+        "9.9.9.9", "149.112.112.112",                           // Quad9
+        "9.9.9.10", "149.112.112.10",                           // Quad9 (unsecured)
+        "208.67.222.222", "208.67.220.220",                     // OpenDNS
+        "208.67.222.123", "208.67.220.123",                     // OpenDNS FamilyShield
+        "45.90.28.0", "45.90.30.0",                             // NextDNS anycast
+        "94.140.14.14", "94.140.15.15",                         // AdGuard DNS
+        "94.140.14.15", "94.140.15.16",                         // AdGuard Family
+        "76.76.2.0", "76.76.10.0",                              // Control D
+        "193.110.81.0", "185.253.5.0",                          // dns0.eu
+        "185.222.222.222", "45.11.45.11",                        // dns.sb
+        "77.88.8.8", "77.88.8.1",                               // Yandex
+        "185.228.168.9", "185.228.169.9",                        // CleanBrowsing
+        "156.154.70.1", "156.154.71.1",                         // Neustar/UltraDNS
+        "8.26.56.26", "8.20.247.20",                            // Comodo
+        "64.6.64.6", "64.6.65.6",                               // Verisign
+        "195.46.39.39", "195.46.39.40",                         // SafeDNS
+        "168.95.1.1",                                            // HiNet
+        "101.101.101.101", "101.102.103.104",                    // Quad101
+        "223.5.5.5", "223.6.6.6",                               // AliDNS
+        "180.76.76.76",                                          // Baidu
+        "119.29.29.29",                                          // DNSPod
     ]
 
     /// [allowedResolverIPs]: the current cloud filter host's resolved addresses (see

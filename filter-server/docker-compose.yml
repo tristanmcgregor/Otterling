@@ -1,6 +1,9 @@
 services:
   adguardhome:
-    image: adguard/adguardhome:latest
+    # Pinned: `latest` meant a `docker compose pull` could silently change the DNS filtering
+    # engine underneath a working deployment. The Claude CLI in the Dockerfiles was already pinned
+    # for the same reason; this applies the same rule to the bases.
+    image: adguard/adguardhome:v0.107.63
     container_name: otterling-filter-server
     restart: unless-stopped
     ports:
@@ -182,11 +185,11 @@ services:
       - "127.0.0.1:${LOCKPROFILE_PORT:-8091}:8091/tcp"
     volumes:
       - ./lockprofile_service.py:/opt/otterling/lockprofile_service.py:ro
-      # Read-write, unlike lockprofile_service.py above: the dashboard's Report Types panel
-      # PATCHes this file at runtime (see _save_report_types_file/_update_report_type) to
-      # persist a guardian's enable/disable + customMessage edits. A `:ro` mount here makes
-      # every one of those PATCHes fail (os.replace onto a read-only bind mount), surfacing to
-      # the dashboard as `Failed to update "<type>"` no matter which type is toggled.
+      # Read-write (though lockprofile_service.py no longer actually writes here -- see
+      # REPORT_TYPES_OVERRIDES_PATH's comment there): ships each type's *default*
+      # enabled/customMessage/suspicion. Git-tracked, so a release deploy overwrites it wholesale
+      # from git -- a guardian's dashboard edit now lands in REPORT_TYPES_OVERRIDES_PATH (under
+      # /data below) instead, specifically so a deploy can never revert it the way it used to.
       - ./report_types.json:/opt/otterling/report_types.json
       - ./lockprofile-data:/data
       # Shared subprocess-invocation helper for the `claude -p` CLI call (env-stripping,
@@ -233,13 +236,14 @@ services:
       # fallback, same single-token behavior as before this existed.
       - CLAUDE_CODE_OAUTH_TOKEN_BACKUP=${CLAUDE_CODE_OAUTH_TOKEN_BACKUP:-}
     working_dir: /opt/otterling
-    # google-auth is only needed for the optional FCM push; installed at start rather than via a
-    # Dockerfile to keep this a mounted-script service. If the install fails (offline boot), FCM
-    # stays inert and ntfy + polling still work.
-    command: sh -c "pip install --no-cache-dir --quiet google-auth requests || true; python3 lockprofile_service.py"
+    # google-auth/requests are baked into the image now (see lockprofile.Dockerfile) rather than
+    # pip-installed at container start. That start-time install could not survive this service
+    # dropping to a non-root USER -- an unprivileged process cannot write to site-packages -- and it
+    # made every boot depend on pypi being reachable for a dependency that never changes.
+    command: python3 lockprofile_service.py
 
   updates:
-    image: caddy:alpine
+    image: caddy:2.8-alpine
     container_name: otterling-updates
     restart: unless-stopped
     # Host networking: docker-proxy DNAT on this host breaks TLS to the container (phones and
@@ -280,9 +284,11 @@ services:
       # app, so it can be served un-authenticated without carving an exception into the @dashboard
       # matcher that gates everything else.
       - ./dashboard-login:/srv/dashboard-login:ro
-      # Same standalone-login-page pattern as dashboard-login above, for /review et al -- see
-      # Caddyfile's /review-auth/* + forward_auth.
-      - ./review-login:/srv/review-login:ro
+      # (Removed 2026-08-27) ./review-login used to be mounted here for a /review-auth/* login
+      # page. That route was deleted from the Caddyfile when /review was made unauthenticated on
+      # 2026-08-26, and the source directory no longer exists either -- so the mount was pointing
+      # Docker at a non-existent host path, which silently creates an empty root-owned directory.
+      # If /review is ever re-gated, restore both the directory and the Caddyfile route together.
       # One-time account-handoff page -- see lockprofile_service.py's HANDOFF_TOKEN_PATH comment
       # and Caddyfile's /handoff-auth/* block.
       - ./handoff:/srv/handoff:ro

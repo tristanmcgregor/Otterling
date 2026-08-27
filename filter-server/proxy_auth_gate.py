@@ -31,6 +31,7 @@ also be set, or both mechanisms would double-gate the same requests).
 from __future__ import annotations
 
 import base64
+import hmac
 import os
 import weakref
 
@@ -49,6 +50,25 @@ class HouseholdProxyAuth:
     def __init__(self):
         self.user = os.environ.get("PROXY_USER", "otterling")
         self.password = os.environ.get("PROXY_PASSWORD", "")
+        # FAIL CLOSED, deliberately against this project's usual fail-open rule. An empty password
+        # used to disable the auth challenge entirely, on a proxy that is intentionally reachable
+        # from the public internet AND intentionally runs with `block_global=false` (see
+        # docker-compose.yml) -- so mitmproxy's own open-relay safety net is already off. The
+        # combination turns a blank env var into an open MITM relay fronting a CA that every
+        # enrolled device trusts. Compose's `${PROXY_PASSWORD:?...}` catches an *unset* variable but
+        # not an empty one, and not a change made after start, so the check belongs here too.
+        #
+        # Refusing to start is the right direction here: no proxy means traffic falls back to a
+        # direct connection and stays filtered by DNS, whereas an unauthenticated proxy is an abuse
+        # vector. That is the opposite call from DNS/proxy *enforcement*, which must fail open so
+        # the filter can never take a machine offline -- different problems, different correct
+        # failure directions.
+        if not self.password:
+            raise RuntimeError(
+                "PROXY_PASSWORD is empty -- refusing to load proxy_auth_gate.py. An unauthenticated "
+                "mitmproxy on a public interface is an open relay. Set PROXY_PASSWORD in "
+                "filter-server/.env and restart the mitmproxy service."
+            )
         self.exempt_ips = _load_exempt_ips()
         # Tracks connections already authenticated by a prior CONNECT, same as mitmproxy's own
         # addon -- an HTTPS tunnel only sends Proxy-Authorization once, on the CONNECT itself; every
@@ -72,7 +92,10 @@ class HouseholdProxyAuth:
             user, _, password = decoded.partition(":")
         except Exception:
             return False
-        ok = user == self.user and password == self.password
+        # compare_digest on both halves: not because a proxy password is realistically grindable
+        # over the network, but because this is the only credential comparison in the file and the
+        # rest of the project (the Guardian PIN, the handoff token) already holds this line.
+        ok = hmac.compare_digest(user, self.user) and hmac.compare_digest(password, self.password)
         if ok:
             del flow.request.headers[PROXY_AUTH_HEADER]
         return ok
@@ -85,7 +108,9 @@ class HouseholdProxyAuth:
         )
 
     def http_connect(self, flow: http.HTTPFlow) -> None:
-        if not self.password or self._is_exempt(flow):
+        # `self.password` is guaranteed non-empty by __init__, so the only bypass left is the
+        # explicit household-IP exemption.
+        if self._is_exempt(flow):
             return
         if self._check_credentials(flow):
             self._authenticated.add(flow.client_conn)
@@ -93,7 +118,7 @@ class HouseholdProxyAuth:
             self._challenge(flow)
 
     def requestheaders(self, flow: http.HTTPFlow) -> None:
-        if not self.password or self._is_exempt(flow):
+        if self._is_exempt(flow):
             return
         if flow.client_conn in self._authenticated:
             return

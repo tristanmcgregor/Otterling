@@ -324,6 +324,30 @@
       "source": "server",
       "suspicion": "low",
       "description": "Guardian pressed \"Send test report\" in Global Settings to verify the alert pipeline (ntfy push + accountability-partner SMS) is wired up."
+    },
+    "xpc_peer_rejected": {
+      "enabled": true,
+      "source": "mac",
+      "suspicion": "high",
+      "description": "An unrecognized process tried to connect to the Mac daemon's XPC service and was refused. The daemon's Mach service is reachable machine-wide, so this is either a bug or somebody probing the privileged interface directly."
+    },
+    "passcode_set_refused": {
+      "enabled": true,
+      "source": "mac",
+      "suspicion": "high",
+      "description": "A non-admin caller tried to set the FIRST Guardian passcode. Since the passcode replaces the admin check as the removal gate once set, claiming it first would capture that gate -- so this is refused and reported."
+    },
+    "MITM_EXEMPT_AUTO": {
+      "enabled": true,
+      "source": "android",
+      "suspicion": "high",
+      "description": "Page-content inspection was automatically disabled for an app after its connections looked like certificate-pinning rejections. DNS filtering still applies, but this app's web traffic is no longer inspected -- worth confirming the app genuinely pins."
+    },
+    "MITM_EXEMPT_REFUSED": {
+      "enabled": true,
+      "source": "android",
+      "suspicion": "high",
+      "description": "A browser produced connections shaped like certificate-pinning rejections, which would normally auto-exempt an app from content inspection. Refused, because exempting a browser would disable filtering for all browsing through it. Repeated occurrences may mean a deliberate bypass attempt."
     }
   }
 }
