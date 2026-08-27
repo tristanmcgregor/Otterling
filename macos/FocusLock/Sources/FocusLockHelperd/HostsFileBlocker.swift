@@ -9,7 +9,14 @@ enum HostsFileBlocker {
 
     static func apply(domains: [String]) {
         guard let original = try? String(contentsOfFile: hostsPath, encoding: .utf8) else { return }
-        let stripped = stripManagedBlock(from: original)
+        // A nil strip means the file's managed block is malformed (BEGIN with no END). Bail rather
+        // than rewrite -- see stripManagedBlock's doc comment for the data loss this prevents.
+        guard let stripped = HostsFileBlock.strip(from: original) else {
+            FileHandle.standardError.write(
+                "[hosts] /etc/hosts has a BEGIN marker with no matching END -- refusing to rewrite it. Repair the file by hand (remove the stray marker) and enforcement will resume on the next tick.\n".data(using: .utf8)!
+            )
+            return
+        }
 
         // Hard safety cap, independent of any caller: an oversized /etc/hosts cripples mDNSResponder
         // and takes the whole machine offline. Callers are expected to prioritise the Guardian's
@@ -32,10 +39,7 @@ enum HostsFileBlocker {
         } else {
             var lines = [FocusLockConstants.hostsMarkerBegin]
             for domain in safeDomains {
-                lines.append("127.0.0.1 \(domain)")
-                lines.append("127.0.0.1 www.\(domain)")
-                lines.append("::1 \(domain)")
-                lines.append("::1 www.\(domain)")
+                lines.append(contentsOf: HostsFileBlock.lines(for: domain))
             }
             lines.append(FocusLockConstants.hostsMarkerEnd)
             let trimmedBase = stripped.trimmingCharacters(in: .newlines)
@@ -45,26 +49,6 @@ enum HostsFileBlocker {
         guard newContent != original else { return }
         try? newContent.write(toFile: hostsPath, atomically: true, encoding: .utf8)
         flushDNSCache()
-    }
-
-    private static func stripManagedBlock(from content: String) -> String {
-        var result: [String] = []
-        var inBlock = false
-        for line in content.components(separatedBy: "\n") {
-            // Recognizes both the current and the previous (FocusLock-branded) marker text, so an
-            // upgrade cleans up a block written by an older build instead of leaving it orphaned.
-            if line == FocusLockConstants.hostsMarkerBegin || line == FocusLockConstants.legacyHostsMarkerBegin {
-                inBlock = true
-                continue
-            }
-            if line == FocusLockConstants.hostsMarkerEnd || line == FocusLockConstants.legacyHostsMarkerEnd {
-                inBlock = false
-                continue
-            }
-            if inBlock { continue }
-            result.append(line)
-        }
-        return result.joined(separator: "\n")
     }
 
     private static func flushDNSCache() {
