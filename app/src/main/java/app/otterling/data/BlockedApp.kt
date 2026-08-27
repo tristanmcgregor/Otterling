@@ -7,4 +7,7 @@ import androidx.room.PrimaryKey
 data class BlockedApp(
     @PrimaryKey val packageName: String,
     val blocked: Boolean = true,
+    // Set only by AppSuspensionManager.blockTemporarily (e.g. a visual-filter NSFW detection) --
+    // null for an ordinary guardian/dashboard block, which never expires on its own.
+    val blockedUntilMillis: Long? = null,
 )

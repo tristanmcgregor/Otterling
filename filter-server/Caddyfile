@@ -110,13 +110,11 @@
 			header_up Authorization "Bearer {$LOCKPROFILE_TOKEN}"
 		}
 	}
-	# Guardian evidence viewer for NSFW-flagged screenshots (POST /screenshot-classify on the
-	# phone side) -- bearer-gated like /device-logs/view/* above, deliberately NOT following
-	# /review-data/*'s unauthenticated stance below since these are more sensitive images.
-	handle /screenshot-review/* {
-		reverse_proxy 127.0.0.1:8091 {
-			header_up Authorization "Bearer {$LOCKPROFILE_TOKEN}"
-		}
+	# The phone authenticates itself with its own LOCKPROFILE_TOKEN bearer, same as
+	# /device-logs/upload above -- this is the device uploading a screenshot for classification,
+	# not a human reading evidence back (see /screenshot-review/* below for that, gated instead).
+	handle /screenshot-classify {
+		reverse_proxy 127.0.0.1:8091
 	}
 	handle_path /review* {
 		root * /srv/review-dashboard
@@ -201,11 +199,21 @@
 		reverse_proxy @dashboardApiDeviceGet 127.0.0.1:8091
 		reverse_proxy @dashboardApiDevicePost 127.0.0.1:8091
 
-		@dashboard path /dashboard /dashboard/* /dashboard-api/*
+		@dashboard path /dashboard /dashboard/* /dashboard-api/* /screenshot-review/*
 		forward_auth @dashboard 127.0.0.1:8091 {
 			uri /dashboard-auth/verify
 		}
 		handle /dashboard-api/* {
+			reverse_proxy 127.0.0.1:8091 {
+				header_up Authorization "Bearer {$LOCKPROFILE_TOKEN}"
+			}
+		}
+		# Guardian evidence viewer for NSFW-flagged screenshots (POST /screenshot-classify on the
+		# phone side). Unlike /device-logs/view/* above (bearer-injected but no session gate),
+		# this requires a real guardian login via the forward_auth @dashboard matcher just above --
+		# these are more sensitive images than diagnostic log text, so it deliberately does NOT
+		# match /device-logs/view/*'s (or /review-data/*'s) weaker, unauthenticated-by-URL stance.
+		handle /screenshot-review/* {
 			reverse_proxy 127.0.0.1:8091 {
 				header_up Authorization "Bearer {$LOCKPROFILE_TOKEN}"
 			}
@@ -280,13 +288,11 @@ http://192.168.0.254 {
 			header_up Authorization "Bearer {$LOCKPROFILE_TOKEN}"
 		}
 	}
-	# Guardian evidence viewer for NSFW-flagged screenshots (POST /screenshot-classify on the
-	# phone side) -- bearer-gated like /device-logs/view/* above, deliberately NOT following
-	# /review-data/*'s unauthenticated stance below since these are more sensitive images.
-	handle /screenshot-review/* {
-		reverse_proxy 127.0.0.1:8091 {
-			header_up Authorization "Bearer {$LOCKPROFILE_TOKEN}"
-		}
+	# The phone authenticates itself with its own LOCKPROFILE_TOKEN bearer, same as
+	# /device-logs/upload above -- this is the device uploading a screenshot for classification,
+	# not a human reading evidence back (see /screenshot-review/* below for that, gated instead).
+	handle /screenshot-classify {
+		reverse_proxy 127.0.0.1:8091
 	}
 	handle_path /review* {
 		root * /srv/review-dashboard
@@ -337,11 +343,21 @@ http://192.168.0.254 {
 		reverse_proxy @dashboardApiDeviceGet 127.0.0.1:8091
 		reverse_proxy @dashboardApiDevicePost 127.0.0.1:8091
 
-		@dashboard path /dashboard /dashboard/* /dashboard-api/*
+		@dashboard path /dashboard /dashboard/* /dashboard-api/* /screenshot-review/*
 		forward_auth @dashboard 127.0.0.1:8091 {
 			uri /dashboard-auth/verify
 		}
 		handle /dashboard-api/* {
+			reverse_proxy 127.0.0.1:8091 {
+				header_up Authorization "Bearer {$LOCKPROFILE_TOKEN}"
+			}
+		}
+		# Guardian evidence viewer for NSFW-flagged screenshots (POST /screenshot-classify on the
+		# phone side). Unlike /device-logs/view/* above (bearer-injected but no session gate),
+		# this requires a real guardian login via the forward_auth @dashboard matcher just above --
+		# these are more sensitive images than diagnostic log text, so it deliberately does NOT
+		# match /device-logs/view/*'s (or /review-data/*'s) weaker, unauthenticated-by-URL stance.
+		handle /screenshot-review/* {
 			reverse_proxy 127.0.0.1:8091 {
 				header_up Authorization "Bearer {$LOCKPROFILE_TOKEN}"
 			}
