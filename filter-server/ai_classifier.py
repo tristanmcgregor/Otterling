@@ -12,6 +12,12 @@ which fails this tier open (safe) but silently disables it. Same fix already app
 release-review pipeline for the same reason, see /var/lib/otterling/ci/anthropic_review_stream.py.
 Both container images (mitmproxy.Dockerfile, dns-classifier.Dockerfile) install the `claude` CLI
 at build time and are given a CLAUDE_CODE_OAUTH_TOKEN, not an ANTHROPIC_API_KEY.
+
+A subscription account has its own usage/session limits, separate from API credit balance -- once
+CLAUDE_CODE_OAUTH_TOKEN's account hits its limit, `claude -p` starts exiting non-zero exactly like
+any other failure, and this tier goes fail-open until that account's limit resets. If
+CLAUDE_CODE_OAUTH_TOKEN_BACKUP is set (a second, separate subscription's token), a failed call
+retries once against it before giving up -- see _run_claude_with_fallback.
 """
 import json
 import logging
@@ -37,6 +43,11 @@ CLASSIFY_EXCERPT_CHARS = 4000
 # is simply unused.
 CLAUDE_RUNNER_USER = os.environ.get("CLAUDE_RUNNER_USER", "claude-runner")
 
+# Optional second subscription's token, tried once if CLAUDE_CODE_OAUTH_TOKEN's account fails --
+# see the module docstring and _run_claude_with_fallback. Empty = no fallback configured, same
+# single-token behavior as before.
+CLAUDE_CODE_OAUTH_TOKEN_BACKUP = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN_BACKUP", "")
+
 # Every tool a one-word safe/unsafe judgment has no legitimate reason to use -- this call is
 # text-in/text-out only, the same capability the old raw-API call had. Mirrors
 # anthropic_review_stream.py's DISALLOWED_TOOLS for the same reason.
@@ -59,13 +70,18 @@ def extract_title_and_excerpt(body: str) -> tuple[str, str]:
     return title, excerpt
 
 
-def _claude_subprocess_kwargs() -> dict:
+def _claude_subprocess_kwargs(oauth_token: str | None = None) -> dict:
     """Env/user for the `claude` subprocess. Strips ANTHROPIC_API_KEY -- it outranks
     CLAUDE_CODE_OAUTH_TOKEN in Claude Code's own credential precedence, so leaving it set would
     silently route this call back to the metered API it's supposed to replace. Drops to
-    CLAUDE_RUNNER_USER (and points HOME at that account) only when this process itself is root."""
+    CLAUDE_RUNNER_USER (and points HOME at that account) only when this process itself is root.
+    [oauth_token] overrides CLAUDE_CODE_OAUTH_TOKEN for just this call -- used by
+    _run_claude_with_fallback's backup-account retry; omitted, the ambient env var is used as-is,
+    same as before this parameter existed."""
     env = dict(os.environ)
     env.pop("ANTHROPIC_API_KEY", None)
+    if oauth_token:
+        env["CLAUDE_CODE_OAUTH_TOKEN"] = oauth_token
     kwargs: dict = {"env": env}
     if os.geteuid() == 0:
         try:
@@ -76,6 +92,64 @@ def _claude_subprocess_kwargs() -> dict:
             env["HOME"] = pw.pw_dir
             kwargs["user"] = CLAUDE_RUNNER_USER
     return kwargs
+
+
+def _run_claude(
+    args: list[str],
+    prompt: str,
+    oauth_token: str | None = None,
+    timeout: float = CLAUDE_TIMEOUT_SECONDS,
+    cwd: str = _CLAUDE_CWD,
+) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        args,
+        input=prompt,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        cwd=cwd,
+        **_claude_subprocess_kwargs(oauth_token),
+    )
+
+
+def _run_claude_with_fallback(
+    args: list[str],
+    prompt: str,
+    context: str,
+    timeout: float = CLAUDE_TIMEOUT_SECONDS,
+    cwd: str = _CLAUDE_CWD,
+) -> subprocess.CompletedProcess | None:
+    """Runs `claude` against CLAUDE_CODE_OAUTH_TOKEN (the ambient env var, untouched); if that
+    attempt doesn't cleanly exit 0 -- including the primary account hitting its subscription
+    usage/session limit, which surfaces as an ordinary non-zero exit, not a distinct error -- and
+    CLAUDE_CODE_OAUTH_TOKEN_BACKUP is set to a *different* token, retries once against the backup
+    before giving up. [timeout]/[cwd] let nsfw_image_classifier.py reuse this with its own longer
+    timeout and same fixed cwd, instead of duplicating the fallback logic. Returns whichever
+    CompletedProcess is the more useful result to log/inspect (the backup's, if a retry happened;
+    otherwise the primary's), or None only if every attempt made raised before producing one
+    (missing `claude` binary, a timeout)."""
+    try:
+        process = _run_claude(args, prompt, timeout=timeout, cwd=cwd)
+    except Exception as error:
+        log.warning("claude -p failed to start for %s (primary token): %s", context, error)
+        process = None
+    else:
+        if process.returncode == 0:
+            return process
+        log.warning(
+            "claude -p exited %s for %s (primary token): %s",
+            process.returncode, context, process.stderr.strip()[:500],
+        )
+
+    if not CLAUDE_CODE_OAUTH_TOKEN_BACKUP or CLAUDE_CODE_OAUTH_TOKEN_BACKUP == os.environ.get("CLAUDE_CODE_OAUTH_TOKEN"):
+        return process
+
+    log.warning("Retrying %s against CLAUDE_CODE_OAUTH_TOKEN_BACKUP", context)
+    try:
+        return _run_claude(args, prompt, oauth_token=CLAUDE_CODE_OAUTH_TOKEN_BACKUP, timeout=timeout, cwd=cwd)
+    except Exception as error:
+        log.warning("claude -p failed to start for %s (backup token): %s", context, error)
+        return process
 
 
 def classify_with_ai(url: str, title: str, excerpt: str) -> bool | None:
@@ -115,15 +189,9 @@ def classify_with_ai(url: str, title: str, excerpt: str) -> bool | None:
     # Broad on purpose -- this function's whole contract is "never raise, always return
     # True/False/None", since callers treat None as fail-open.
     try:
-        process = subprocess.run(
-            args,
-            input=prompt,
-            capture_output=True,
-            text=True,
-            timeout=CLAUDE_TIMEOUT_SECONDS,
-            cwd=_CLAUDE_CWD,
-            **_claude_subprocess_kwargs(),
-        )
+        process = _run_claude_with_fallback(args, prompt, context=url)
+        if process is None:
+            return None
         if process.returncode != 0:
             log.warning(
                 "AI content classification failed for %s: claude -p exited %s: %s",

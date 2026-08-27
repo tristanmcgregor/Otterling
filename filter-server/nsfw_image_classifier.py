@@ -3,8 +3,9 @@
 Sibling to ai_classifier.py, not an edit to it -- image classification has a different prompt
 shape, a different input encoding path (temp file vs. text excerpt), and a different (longer)
 timeout, so keeping it separate avoids conditional branching inside that file's already-delicate
-subprocess-invocation code. Reuses ai_classifier's `_claude_subprocess_kwargs()` so the
-env-stripping/CLAUDE_RUNNER_USER drop-privilege logic isn't duplicated -- see that file's own
+subprocess-invocation code. Reuses ai_classifier's `_run_claude_with_fallback()` (env-stripping/
+CLAUDE_RUNNER_USER drop-privilege logic, and the CLAUDE_CODE_OAUTH_TOKEN_BACKUP retry if the
+primary subscription account is out of usage) so none of that is duplicated -- see that file's own
 docstring for why this shells out to the `claude` CLI (subscription OAuth) rather than a metered
 Anthropic API key.
 
@@ -18,7 +19,6 @@ from __future__ import annotations
 import json
 import logging
 import os
-import subprocess
 import tempfile
 
 import ai_classifier
@@ -69,15 +69,11 @@ def classify_screenshot(image_bytes: bytes) -> bool | None:
             "--permission-mode", "bypassPermissions",
         ]
         try:
-            process = subprocess.run(
-                args,
-                input=prompt,
-                capture_output=True,
-                text=True,
-                timeout=CLAUDE_TIMEOUT_SECONDS,
-                cwd=ai_classifier._CLAUDE_CWD,
-                **ai_classifier._claude_subprocess_kwargs(),
+            process = ai_classifier._run_claude_with_fallback(
+                args, prompt, context="screenshot", timeout=CLAUDE_TIMEOUT_SECONDS, cwd=ai_classifier._CLAUDE_CWD,
             )
+            if process is None:
+                return None
             if process.returncode != 0:
                 log.warning(
                     "Screenshot classification failed: claude -p exited %s: %s",

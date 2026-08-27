@@ -84,6 +84,10 @@ services:
       # Code's credential precedence, so leaving both set would silently defeat the switch.
       # Addon fails open (no block) if this is unset.
       - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
+      # Optional second subscription's token -- ai_classifier.py retries against it once if
+      # the primary account's token fails (e.g. its usage/session limit is hit). Unset = no
+      # fallback, same single-token behavior as before this existed.
+      - CLAUDE_CODE_OAUTH_TOKEN_BACKUP=${CLAUDE_CODE_OAUTH_TOKEN_BACKUP:-}
       # block_reporter.py POSTs trigger-word alerts here. This container's DNS is overridden to
       # public resolvers (see `dns:` above), so it can't resolve the internal `lockprofile` service
       # name -- it reports to the PUBLIC /alerts/tamper the same way phones do, back through Caddy.
@@ -146,6 +150,10 @@ services:
       # comment for why ANTHROPIC_API_KEY is deliberately NOT also set here. Fails open (no block,
       # domain resolves normally) if unset.
       - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
+      # Optional second subscription's token -- ai_classifier.py retries against it once if
+      # the primary account's token fails (e.g. its usage/session limit is hit). Unset = no
+      # fallback, same single-token behavior as before this existed.
+      - CLAUDE_CODE_OAUTH_TOKEN_BACKUP=${CLAUDE_CODE_OAUTH_TOKEN_BACKUP:-}
       - DNS_MUX_LISTEN_HOST=0.0.0.0
       - DNS_MUX_LISTEN_PORT=53
       - UPSTREAM_DNS_HOST=adguardhome
@@ -220,6 +228,10 @@ services:
       # dns_classify_mux.py) -- see mitmproxy.Dockerfile's comment for why not ANTHROPIC_API_KEY.
       # Screenshot classification fails open (no block) if unset.
       - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
+      # Optional second subscription's token -- ai_classifier.py retries against it once if
+      # the primary account's token fails (e.g. its usage/session limit is hit). Unset = no
+      # fallback, same single-token behavior as before this existed.
+      - CLAUDE_CODE_OAUTH_TOKEN_BACKUP=${CLAUDE_CODE_OAUTH_TOKEN_BACKUP:-}
     working_dir: /opt/otterling
     # google-auth is only needed for the optional FCM push; installed at start rather than via a
     # Dockerfile to keep this a mounted-script service. If the install fails (offline boot), FCM
