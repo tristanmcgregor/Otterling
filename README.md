@@ -233,4 +233,5 @@ keystore under `/var/lib/otterling/ci/secrets/`), not in GitHub Actions and not 
 ## Secret handling
 
 `local.properties` and `app/libs/*.jar` are ignored. Never commit Knox license
-keys.
+keys. Rotate any secret immediately if it's ever accidentally committed, even
+to a branch that's since been deleted.
