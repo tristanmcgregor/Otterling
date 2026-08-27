@@ -39,8 +39,13 @@ data class ProxyConfig(
  * destination, performs an HTTP CONNECT handshake first, and only then starts bridging bytes --
  * from that point on the proxy sees exactly what a direct connection's peer would have, since the
  * bytes past the CONNECT handshake are the same TLS/HTTP the client itself sent. A failed CONNECT
- * (auth rejected, proxy unreachable, etc.) fails that flow closed (RST) rather than silently
- * connecting directly, so a proxy outage can't be used to bypass filtering.
+ * (auth rejected, proxy unreachable, etc.) fails that one flow closed (RST) by default, so a single
+ * pinned app or one flaky CONNECT can't be used to bypass filtering. Only once [ProxyOutageTracker]
+ * independently confirms a genuine filter-server outage (many distinct destinations failing, not
+ * one app) does a subsequent failed flow fall back to a direct connection instead of RST-ing --
+ * DNS-level filtering stays enforced either way, so that's strictly better than the whole device
+ * losing internet access for as long as the outage lasts. See [establish]'s use of
+ * [isProxyLikelyDown].
  *
  * This exists because a [android.net.VpnService] that captures all app traffic (needed so every
  * app's DNS goes through our filter) but only has routes for a handful of specific IPs makes every
@@ -84,6 +89,13 @@ class TcpRelayManager(
      *  which decides whether failures across many different destinations in a short window warrant
      *  alerting the Guardian instead of looking like a wave of unrelated app breakage. */
     private val onProxyConnectFailure: (String) -> Unit = {},
+    /** [ProxyOutageTracker.isLikelyDown] -- true once enough *distinct* destinations have failed
+     *  their proxy CONNECT in a short window that this looks like a genuine filter-server outage
+     *  rather than one app being pinned or one site being briefly slow. Consulted in [establish]
+     *  only after a proxy-eligible flow's own CONNECT (plus its one retry) has already failed:
+     *  a single flow never bypasses the proxy on its own say-so, only once the outage signal
+     *  itself has independently crossed threshold. See the class doc for why this exists at all. */
+    private val isProxyLikelyDown: () -> Boolean = { false },
 ) {
     private data class FlowKey(val srcIp: String, val srcPort: Int, val dstIp: String, val dstPort: Int)
 
@@ -234,14 +246,29 @@ class TcpRelayManager(
             delay(RETRY_DELAY_MS)
             socket = attemptConnect(connection, useProxy)
         }
+        if (socket == null && useProxy) {
+            onProxyConnectFailure(connection.key.dstIp)
+            // Both the original CONNECT and its retry failed. Normally that's still fail-closed --
+            // a single flow (or even a single pinned app) never gets to talk the Guardian's proxy
+            // out of inspecting it just by having its own CONNECT fail. But once ProxyOutageTracker
+            // independently confirms this looks like a genuine filter-server outage (many distinct
+            // destinations failing, not one app), staying fail-closed here means the *entire
+            // device* loses the internet for as long as the outage lasts -- DNS-level filtering
+            // (isBlockedDestination, already checked above, plus ServerClassifiedDomainsManager --
+            // see that class's doc for exactly this fallback) is still enforced either way, so
+            // degrading to a direct connection is strictly better than blocking everything with no
+            // filtering benefit left to show for it.
+            if (isProxyLikelyDown()) {
+                Log.w(
+                    TAG,
+                    "${connection.key.dstIp}:${connection.key.dstPort} proxy looks down -- falling back to a direct connection",
+                )
+                connection.wasProxied = false
+                socket = attemptConnect(connection, useProxy = false)
+            }
+        }
         if (socket == null) {
-            // Fail closed for 80/443 when the proxy is enabled: no fallback to a direct connection
-            // on proxy failure, by construction -- there simply is no direct-connect code path
-            // taken here once useProxy is true, only the RST below. Reaching here for a
-            // proxy-eligible flow means both the original attempt and the retry above failed, i.e.
-            // a sustained failure, not a one-off blip.
             connections.remove(connection.key)
-            if (useProxy) onProxyConnectFailure(connection.key.dstIp)
             writeToTun(rstFor(synPacket))
             return
         }

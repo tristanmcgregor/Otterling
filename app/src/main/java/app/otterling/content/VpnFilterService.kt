@@ -360,6 +360,7 @@ class VpnFilterService : VpnService() {
                     }
                 }
             },
+            isProxyLikelyDown = { proxyOutageTracker.isLikelyDown() },
         )
         val udpRelay = UdpRelayManager(
             scope = relayScope,

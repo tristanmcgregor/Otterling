@@ -1,5 +1,6 @@
 import Foundation
 import FocusLockShared
+import Network
 
 /// Points every active network service's DNS at a cloud content-filter host (a Canopy-style
 /// AdGuard Home deployment -- the primary category filter, mirroring the Android app's
@@ -7,11 +8,14 @@ import FocusLockShared
 /// pattern as everything else in the enforcement loop. Changing DNS back by hand in System
 /// Settings only lasts until the next tick.
 ///
-/// Falls back to Cloudflare Family (1.1.1.3/1.0.0.3 -- blocks malware and adult content) only when
-/// the cloud filter is turned off or its host can't currently be resolved -- so a cloud outage
-/// degrades to a still-reasonable baseline rather than leaving DNS unmanaged. The local adult
-/// hosts list (`AdultBlocklistManager`, applied via `HostsFileBlocker` regardless of this toggle)
-/// is the actual always-on defense in depth either way.
+/// Falls back to Cloudflare Family (1.1.1.3/1.0.0.3 -- blocks malware and adult content) whenever the
+/// cloud filter is turned off, its host can't currently be resolved, OR the resolved server fails a
+/// live UDP DNS probe (`isDNSReachable`) -- so a cloud *outage* (server merely offline, hostname still
+/// resolving fine) degrades to a still-reasonable baseline exactly the same as an unresolvable host,
+/// rather than pointing every network service's DNS at a dead server and leaving the Mac with no
+/// internet until it comes back. Mirrors `ProxyEnforcer`'s fail-open reachability gate. The local
+/// adult hosts list (`AdultBlocklistManager`, applied via `HostsFileBlocker` regardless of this
+/// toggle) is the actual always-on defense in depth either way.
 ///
 /// This alone isn't enough -- a determined bypass would just set a different resolver via the
 /// system's normal UI just as easily as this app does, or a browser could ignore system DNS
@@ -34,16 +38,18 @@ enum DNSEnforcer {
     /// would otherwise shadow with a public answer even while on the home network).
     static func apply(cloudHost: String, cloudEnabled: Bool, onHomeLAN: Bool = false) {
         let servers: [String]
-        if cloudEnabled, cloudHost == FocusLockConstants.defaultCloudFilterHost, onHomeLAN {
+        if cloudEnabled, cloudHost == FocusLockConstants.defaultCloudFilterHost, onHomeLAN,
+           isDNSReachable(host: FocusLockConstants.homeLANHost) {
             servers = [FocusLockConstants.homeLANHost]
             lastResolvedIPs = servers
-        } else if cloudEnabled, !cloudHost.isEmpty, let resolved = resolveIPv4(cloudHost), !resolved.isEmpty {
+        } else if cloudEnabled, !cloudHost.isEmpty, let resolved = resolveIPv4(cloudHost), !resolved.isEmpty,
+                  isDNSReachable(host: resolved[0]) {
             servers = resolved
             lastResolvedIPs = resolved
         } else {
             if cloudEnabled {
                 FileHandle.standardError.write(
-                    "[dns] could not resolve cloud filter host '\(cloudHost)' -- falling back to Cloudflare Family\n".data(using: .utf8)!
+                    "[dns] cloud filter host '\(cloudHost)' unresolved or unreachable -- falling back to Cloudflare Family\n".data(using: .utf8)!
                 )
             }
             servers = cloudflareFamilyDNS
@@ -121,6 +127,68 @@ enum DNSEnforcer {
     private static func isIPv4Address(_ host: String) -> Bool {
         var addr = in_addr()
         return host.withCString { inet_pton(AF_INET, $0, &addr) } == 1
+    }
+
+    /// A short UDP DNS liveness probe (mirrors `ProxyEnforcer.isReachable`, and
+    /// `FocusLockShared.CloudFilterProbe.testReachable` used by the GUI's "test connection" button)
+    /// gating whether `apply()` actually points system DNS at the resolved cloud filter server. Without
+    /// this, a server that's merely offline but whose hostname still resolves (or a stale `homeLANHost`
+    /// while still "on the home LAN") gets set as the DNS server anyway, and every DNS query on the
+    /// machine times out until the server comes back -- the same fail-open reasoning as `ProxyEnforcer`,
+    /// just applied to DNS instead of the web proxy.
+    private static let probeTimeout: TimeInterval = 2
+
+    private static func isDNSReachable(host: String) -> Bool {
+        guard let port = NWEndpoint.Port(rawValue: 53) else { return false }
+        let connection = NWConnection(host: NWEndpoint.Host(host), port: port, using: .udp)
+        let lock = NSLock()
+        var finished = false
+        var reachable = false
+        let semaphore = DispatchSemaphore(value: 0)
+        let finish: (Bool) -> Void = { ok in
+            lock.lock()
+            defer { lock.unlock() }
+            guard !finished else { return }
+            finished = true
+            reachable = ok
+            semaphore.signal()
+        }
+        connection.stateUpdateHandler = { state in
+            switch state {
+            case .ready:
+                connection.send(content: buildDNSProbeQuery(), completion: .contentProcessed { _ in })
+                connection.receiveMessage { data, _, _, error in
+                    finish(data != nil && error == nil)
+                }
+            case .failed, .cancelled:
+                finish(false)
+            default:
+                break
+            }
+        }
+        connection.start(queue: .global())
+        _ = semaphore.wait(timeout: .now() + probeTimeout)
+        connection.cancel()
+        return reachable
+    }
+
+    /// Minimal standalone "A" query for `example.com`, matching `CloudFilterProbe.buildQuery`.
+    private static func buildDNSProbeQuery() -> Data {
+        var bytes: [UInt8] = [
+            0x12, 0x34, // arbitrary transaction ID
+            0x01, 0x00, // flags: standard query, recursion desired
+            0x00, 0x01, // QDCOUNT = 1
+            0x00, 0x00, // ANCOUNT
+            0x00, 0x00, // NSCOUNT
+            0x00, 0x00, // ARCOUNT
+        ]
+        for label in "example.com".split(separator: ".") {
+            bytes.append(UInt8(label.utf8.count))
+            bytes.append(contentsOf: Array(label.utf8))
+        }
+        bytes.append(0) // root label
+        bytes.append(contentsOf: [0x00, 0x01, 0x00, 0x01]) // QTYPE=A, QCLASS=IN
+        return Data(bytes)
     }
 
     /// `networksetup -listallnetworkservices` prints a header line first, then one service name
