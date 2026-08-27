@@ -214,12 +214,18 @@ How it works, end to end:
    `/var/lib/otterling/updates/` via a new `publish_macos_from_upload.sh`. `attest_macos_release.sh`
    itself, and the private attestation key, are completely unchanged by any of this.
 
-One-time setup on the build-agent account: copy `Scripts/build_agent.env.example` to
-`~/.otterling-build-agent/config.env` (`chmod 600`), fill in a freshly generated
-`MACOS_BUILD_AGENT_TOKEN` (`openssl rand -hex 32`, and set the same value in the Linux host's
-`secrets.env`), create a dedicated non-login keychain and import the Developer ID `.p12` into it,
-and install `build_agent.launchd.plist.example` (with real paths substituted) as a root-owned
-LaunchDaemon. See that example file's own comments for exact commands.
+One-time setup on the build-agent account: run `Scripts/setup_build_agent.sh
+<path-to-developer-id.p12>`. It creates the dedicated signing keychain, generates and stores its
+unlock password, imports the certificate, auto-detects the resulting signing identity string,
+writes `~/.otterling-build-agent/config.env` (prompting for the Otterling host, GitHub repo, and
+`MACOS_BUILD_AGENT_TOKEN` -- generate that token once with `openssl rand -hex 32` and set the same
+value in the Linux host's `secrets.env`), and installs the LaunchDaemon. The one thing it cannot do
+for you is obtain the Developer ID Application certificate itself -- that requires an Apple
+Developer Program membership and either generating one via Xcode/developer.apple.com or already
+having a `.p12` export; there's no way to script around a human holding that credential. The script
+is idempotent (safe to re-run) and its own header comment documents exactly what it automates vs.
+what it can't. `build_agent.env.example` / `build_agent.launchd.plist.example` are still here as
+reference for anyone who'd rather do the equivalent steps by hand.
 
 ## Gotcha: pinning the wrong Team ID
 
