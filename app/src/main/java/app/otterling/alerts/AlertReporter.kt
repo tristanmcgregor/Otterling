@@ -86,7 +86,8 @@ class AlertReporter(context: Context) {
      *  still added either way -- this is a courtesy, not a gate on functioning). */
     suspend fun sendWelcomeMessage(number: String): Boolean = withContext(Dispatchers.IO) {
         SmsPermissionGranter.grantSendSms(appContext)
-        sender.send(WELCOME_MESSAGE, number)
+        val message = reportConfig.welcomeMessage().ifBlank { DEFAULT_WELCOME_MESSAGE }
+        sender.send(message, number)
     }
 
     /** Sends a test SMS to every configured partner number; returns how many succeeded. */
@@ -230,19 +231,21 @@ class AlertReporter(context: Context) {
     private companion object {
         const val TAG = "AlertReporter"
 
-        // Sent once, by sendWelcomeMessage(), the first time a number is added as an
-        // accountability partner. Explains the suspicion tags every later Otterling Alert SMS
-        // carries -- keep this in sync with report_types.json's "suspicion" comment and with
-        // formatBody()'s suspicionTag values (HIGH/MEDIUM/LOW SUSPICION) if either changes.
-        const val WELCOME_MESSAGE = "Otterling: you've been added as Tristan's accountability " +
-            "partner. From now on you may get SMS alerts here when something on his phone or " +
-            "Mac needs attention. Each one is tagged with how concerning it is:\n\n" +
-            "[HIGH SUSPICION] — there's a high likelihood Tristan is trying to bypass Otterling. " +
-            "Please check in with him.\n\n" +
-            "[MEDIUM SUSPICION] — could be a false positive, but check in with him to be safe.\n\n" +
-            "[LOW SUSPICION] — most likely nothing, and not detrimental to his protection either " +
-            "way, but still worth checking in with him.\n\n" +
-            "Thanks for helping keep him accountable."
+        // Fallback used only when the guardian hasn't customized the welcome message on the
+        // dashboard's Accountability screen yet, or the phone hasn't fetched /report-config yet
+        // (see ReportConfigStore.welcomeMessage/refresh) -- sendWelcomeMessage() prefers the
+        // server-fetched, guardian-editable wording over this. Explains the suspicion tags every
+        // later Otterling Alert SMS carries -- keep this in sync with report_types.json's
+        // "suspicion" comment, the server's own DEFAULT_WELCOME_MESSAGE, and formatBody()'s
+        // suspicionTag values (HIGH/MEDIUM/LOW SUSPICION) if any of those change.
+        const val DEFAULT_WELCOME_MESSAGE = "Otterling: you've been added as an accountability " +
+            "partner. From now on you may get SMS alerts here when something on the monitored " +
+            "device needs attention. Each one is tagged with how concerning it is:\n\n" +
+            "[HIGH SUSPICION] — there's a high likelihood of an attempt to bypass Otterling. " +
+            "Please check in.\n\n" +
+            "[MEDIUM SUSPICION] — could be a false positive, but check in to be safe.\n\n" +
+            "[LOW SUSPICION] — most likely nothing, but still worth checking in.\n\n" +
+            "Thanks for helping with accountability."
 
         // Matches the exact `"<word>" seen in/on <place>` shape every trigger-word source writes.
         val TRIGGER_WORD_DETAILS = Regex("^\"(.+)\" seen (in|on) (.+)$")

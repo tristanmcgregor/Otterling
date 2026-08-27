@@ -76,6 +76,15 @@ export interface ReportTypesFile {
   types: Record<string, ReportType>;
 }
 
+// The one-time welcome SMS sent the first time a phone number is added as an accountability
+// partner (see AlertReporter.kt's sendWelcomeMessage). isDefault tells the dashboard whether
+// `message` is the built-in fallback wording or a saved guardian override, so it can offer
+// "Reset to default" only when there's actually something to reset.
+export interface WelcomeMessage {
+  message: string;
+  isDefault: boolean;
+}
+
 export interface RuleSchedule {
   startTime?: string;
   endTime?: string;
@@ -323,6 +332,15 @@ export const api = {
   // Fires a synthetic TEST_REPORT event through the real alert pipeline (ntfy push + SMS relay)
   // so a guardian can confirm it's wired up without waiting for a real tamper event.
   sendTestReport: () => request<{ status: string; sent: boolean }>("/report-types/test", { method: "POST" }),
+
+  // Guardian-only. "" clears back to the built-in default wording, same convention as
+  // ReportType.customMessage.
+  getWelcomeMessage: () => request<WelcomeMessage>("/welcome-message"),
+  setWelcomeMessage: (message: string) =>
+    request<WelcomeMessage>("/welcome-message", {
+      method: "PATCH",
+      body: JSON.stringify({ message }),
+    }),
 
   // Guardian-only. GET returns the effective values (template merged onto the hardcoded
   // fallback), so the UI can show real toggle states even before the guardian has ever touched

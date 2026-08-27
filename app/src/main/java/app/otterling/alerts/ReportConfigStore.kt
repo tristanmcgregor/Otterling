@@ -43,6 +43,12 @@ class ReportConfigStore(context: Context) {
         return if (value in VALID_SUSPICION) value else "medium"
     }
 
+    /** Guardian-editable wording for the one-time welcome SMS (dashboard's Accountability screen,
+     *  server's `_effective_welcome_message`) -- see [AlertReporter.sendWelcomeMessage]. Empty
+     *  string (the default when never fetched) means "use the built-in fallback wording", same
+     *  convention as [customMessage]. */
+    fun welcomeMessage(): String = prefs.getString(WELCOME_MESSAGE_KEY, "").orEmpty()
+
     /** Best-effort: a failed fetch just leaves the existing cache (or the all-enabled default) in
      *  place rather than throwing, so a network hiccup during [MacTamperPollWorker]'s poll never
      *  blocks or fails that poll over this. */
@@ -53,7 +59,8 @@ class ReportConfigStore(context: Context) {
         if (host.isBlank()) return
         try {
             val response = httpGet("https://$host/report-config", settings.token())
-            val types = JSONObject(response).optJSONObject("types") ?: return
+            val parsed = JSONObject(response)
+            val types = parsed.optJSONObject("types") ?: return
             val editor = prefs.edit()
             val keys = types.keys()
             while (keys.hasNext()) {
@@ -63,6 +70,7 @@ class ReportConfigStore(context: Context) {
                 editor.putString(MESSAGE_PREFIX + key, entry?.optString("customMessage", "").orEmpty())
                 editor.putString(SUSPICION_PREFIX + key, entry?.optString("suspicion", "medium").orEmpty())
             }
+            editor.putString(WELCOME_MESSAGE_KEY, parsed.optString("welcomeMessage", "").orEmpty())
             editor.apply()
         } catch (error: Exception) {
             Log.w(TAG, "report-config fetch failed", error)
@@ -84,6 +92,7 @@ class ReportConfigStore(context: Context) {
         const val ENABLED_PREFIX = "enabled_"
         const val MESSAGE_PREFIX = "message_"
         const val SUSPICION_PREFIX = "suspicion_"
+        const val WELCOME_MESSAGE_KEY = "welcome_message"
         val VALID_SUSPICION = setOf("high", "medium", "low")
     }
 }

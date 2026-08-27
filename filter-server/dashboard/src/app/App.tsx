@@ -3,13 +3,14 @@ import {
   Shield, Lock, Clock, Globe, CheckCircle, Bug, RefreshCw,
   Plus, Settings as SettingsIcon, X, Trash2, LogOut, Laptop,
   Home, ListChecks, AlertTriangle, Moon, Sun,
-  BarChart3, Check, Wifi, ChevronDown, ShieldCheck,
+  BarChart3, Check, Wifi, ChevronDown, ShieldCheck, Users,
 } from "lucide-react";
 import { cn, Card, Button, Switch, Pill } from "./components/ui";
 import { api, ApiError, logout } from "../lib/api";
 import type {
   DeviceSettings, DeviceSummary, ActivityEvent, Rule, RuleSchedule, RuleTargetApp, RuleTargetWebsite,
   AppBudget, ProtectedApp, Habit, ReportType, ReportTypesFile, DefaultSettings, Protections, DevicePlatform,
+  WelcomeMessage,
 } from "../lib/api";
 
 type Screen =
@@ -20,6 +21,7 @@ type Screen =
   | "ContentFilter"
   | "Settings"
   | "Habits"
+  | "Accountability"
   | "GlobalSettings"
   | "Wizard";
 
@@ -58,6 +60,7 @@ function deviceNav(platform: DevicePlatform | undefined): NavDef[] {
 // right now".
 const FLEET_NAV: NavDef[] = [
   { id: "Habits", label: "Habits", icon: CheckCircle },
+  { id: "Accountability", label: "Accountability", icon: Users },
   { id: "GlobalSettings", label: "Global Settings", icon: Globe },
 ];
 
@@ -197,6 +200,9 @@ export default function App() {
           onEditRule={startEditRule}
         />
       );
+    }
+    if (screen === "Accountability") {
+      return <AccountabilityScreen />;
     }
     if (!deviceId) {
       return <NoDeviceScreen devices={devices} />;
@@ -1464,20 +1470,6 @@ function GlobalSettingsScreen() {
       </div>
 
       <div className="space-y-3">
-        <div className="flex items-center justify-between gap-3">
-          <SectionLabel>Report Types</SectionLabel>
-          <SendTestReportButton />
-        </div>
-        <p className="text-xs text-on-surface-variant -mt-1">
-          Every kind of accountability report/alert Otterling can send, grouped by where it comes
-          from. Turning one off fully suppresses it — no SMS, no local log entry, nothing recorded
-          — so use this deliberately. A type not listed here (e.g. a newly added one) defaults to
-          on. Takes effect immediately server-side; the phone picks up a change within ~15 minutes.
-        </p>
-        <ReportTypesPanel />
-      </div>
-
-      <div className="space-y-3">
         <SectionLabel>Default Protections for New Devices</SectionLabel>
         <p className="text-xs text-on-surface-variant -mt-1">
           What a brand-new device gets on its very first check-in, before you've touched its own
@@ -1596,6 +1588,118 @@ function GlobalRulesList({
         </Card>
       ))}
     </div>
+  );
+}
+
+// ─── Accountability ────────────────────────────────────────────────────────────
+// Fleet-wide, not scoped to whichever device is selected — everything about accountability
+// partners that isn't the phone number list itself (that's on-device only, see
+// AccountabilityPartnerSection.kt): the wording of the one-time welcome text they get, and Reports
+// (every kind of alert/report Otterling can send them, formerly a subsection of Global Settings).
+function AccountabilityScreen() {
+  return (
+    <div className="p-7 max-w-[900px] space-y-6">
+      <div>
+        <h1 className="text-xl font-bold">Accountability</h1>
+        <p className="text-sm text-on-surface-variant mt-0.5">
+          What accountability partners see and hear from Otterling — the one-time welcome text
+          they get, and every kind of report/alert that can follow it.
+        </p>
+      </div>
+
+      <div className="space-y-3">
+        <SectionLabel>Welcome Message</SectionLabel>
+        <p className="text-xs text-on-surface-variant -mt-1">
+          Sent once, automatically, the first time a phone number is added as an accountability
+          partner (from the phone's own Settings). Explains what the SMS suspicion tags mean, so
+          a partner isn't guessing the first time a real alert arrives.
+        </p>
+        <WelcomeMessagePanel />
+      </div>
+
+      <div className="space-y-3">
+        <div className="flex items-center justify-between gap-3">
+          <SectionLabel>Reports</SectionLabel>
+          <SendTestReportButton />
+        </div>
+        <p className="text-xs text-on-surface-variant -mt-1">
+          Every kind of accountability report/alert Otterling can send, grouped by where it comes
+          from. Turning one off fully suppresses it — no SMS, no local log entry, nothing recorded
+          — so use this deliberately. A type not listed here (e.g. a newly added one) defaults to
+          on. Takes effect immediately server-side; the phone picks up a change within ~15 minutes.
+        </p>
+        <ReportTypesPanel />
+      </div>
+    </div>
+  );
+}
+
+// Guardian-editable wording for the one-time welcome SMS (see AlertReporter.kt's
+// sendWelcomeMessage) -- "" clears back to DEFAULT_WELCOME_MESSAGE, same convention as a report
+// type's customMessage. The phone picks up a saved change within ~15 minutes (MacTamperPollWorker
+// cadence), same as everything else in report_types.json.
+function WelcomeMessagePanel() {
+  const [data, setData] = useState<WelcomeMessage | null>(null);
+  const [draft, setDraft] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    api.getWelcomeMessage()
+      .then((d) => { setData(d); setDraft(d.message); })
+      .catch(() => setError("Failed to load welcome message"));
+  }, []);
+
+  const save = (message: string) => {
+    setSaving(true);
+    setSaved(false);
+    api.setWelcomeMessage(message)
+      .then((d) => {
+        setData(d);
+        setDraft(d.message);
+        setSaved(true);
+        window.setTimeout(() => setSaved(false), 3000);
+      })
+      .catch(() => setError("Failed to save welcome message"))
+      .finally(() => setSaving(false));
+  };
+
+  if (error) return <p className="text-xs text-error">{error}</p>;
+  if (!data) return <p className="text-xs text-on-surface-variant">Loading…</p>;
+
+  const dirty = draft !== data.message;
+
+  return (
+    <Card className="rounded-2xl space-y-2.5">
+      <textarea
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        rows={8}
+        maxLength={1000}
+        className="w-full text-sm px-3 py-2.5 rounded-xl border border-outline bg-surface focus:outline-none focus:ring-2 focus:ring-primary resize-none"
+      />
+      <div className="flex items-center gap-2">
+        <Button size="sm" className="h-8 px-3 text-xs" disabled={saving || !dirty} onClick={() => save(draft)}>
+          {saving ? "Saving…" : "Save"}
+        </Button>
+        {!data.isDefault && (
+          <Button
+            variant="outlined"
+            size="sm"
+            className="h-8 px-3 text-xs"
+            disabled={saving}
+            onClick={() => save("")}
+          >
+            Reset to default
+          </Button>
+        )}
+        {saved && <p className="text-[11px] text-on-surface-variant">Saved</p>}
+        {data.isDefault && !dirty && (
+          <p className="text-[11px] text-on-surface-variant/70">Using the built-in default wording</p>
+        )}
+      </div>
+    </Card>
   );
 }
 

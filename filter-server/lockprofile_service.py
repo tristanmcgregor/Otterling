@@ -145,6 +145,28 @@ REPORT_TYPES_CONFIG_PATH = os.environ.get(
 # given type -- see _merged_report_types().
 REPORT_TYPES_OVERRIDES_PATH = os.path.join(DATA_DIR, "report_types_overrides.json")
 
+# Guardian-editable override for the one-time welcome SMS (see AlertReporter.kt's
+# sendWelcomeMessage, sent the first time a phone number is added as an accountability partner).
+# Same gitignored-DATA_DIR-file pattern as REPORT_TYPES_OVERRIDES_PATH, for the same reason: a
+# release deploy must never revert a live edit. Missing file/key means "use
+# DEFAULT_WELCOME_MESSAGE" -- see _effective_welcome_message().
+WELCOME_MESSAGE_OVERRIDE_PATH = os.path.join(DATA_DIR, "welcome_message_override.json")
+
+# Fallback wording, kept in sync with AlertReporter.kt's own DEFAULT_WELCOME_MESSAGE constant
+# (that copy is what actually ships in the APK and is used if the phone has never fetched
+# /report-config yet -- this one is only what the dashboard shows/sends as the starting point for
+# a guardian who hasn't customized it).
+DEFAULT_WELCOME_MESSAGE = (
+    "Otterling: you've been added as an accountability partner. From now on you may get SMS "
+    "alerts here when something on the monitored device needs attention. Each one is tagged with "
+    "how concerning it is:\n\n"
+    "[HIGH SUSPICION] — there's a high likelihood of an attempt to bypass Otterling. Please check "
+    "in.\n\n"
+    "[MEDIUM SUSPICION] — could be a false positive, but check in to be safe.\n\n"
+    "[LOW SUSPICION] — most likely nothing, but still worth checking in.\n\n"
+    "Thanks for helping with accountability."
+)
+
 # Separate secret for the Fleet failing-policy webhook. Fleet's webhook can't send an Authorization
 # header, so that one route authenticates on a `?token=` query secret instead of the Bearer TOKEN
 # every other route requires -- see Handler._handle_fleet_webhook. Empty = the route is disabled
@@ -846,6 +868,34 @@ def _update_report_type(report_type: str, updates: dict) -> dict | None:
             entry["suspicion"] = updates["suspicion"]
         _save_report_types_overrides(overrides)
         return _merged_report_types()
+
+
+def _load_welcome_message_override() -> str:
+    """"" (empty) means "no override -- use DEFAULT_WELCOME_MESSAGE", same convention as
+    ReportType.customMessage. Missing/malformed file -> no override."""
+    try:
+        with open(WELCOME_MESSAGE_OVERRIDE_PATH, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+            message = data.get("message", "") if isinstance(data, dict) else ""
+            return message if isinstance(message, str) else ""
+    except (OSError, json.JSONDecodeError):
+        return ""
+
+
+def _save_welcome_message_override(message: str) -> None:
+    os.makedirs(os.path.dirname(WELCOME_MESSAGE_OVERRIDE_PATH), exist_ok=True)
+    tmp_path = WELCOME_MESSAGE_OVERRIDE_PATH + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as fh:
+        json.dump({"message": message}, fh, indent=2)
+    os.replace(tmp_path, WELCOME_MESSAGE_OVERRIDE_PATH)
+
+
+def _effective_welcome_message() -> str:
+    """What actually gets sent -- the guardian's override if they've set one, else the built-in
+    default. Consulted by both GET /dashboard-api/welcome-message (dashboard display) and
+    GET /report-config (device fetch, see AlertReporter.kt's sendWelcomeMessage)."""
+    override = _load_welcome_message_override()
+    return override if override.strip() else DEFAULT_WELCOME_MESSAGE
 
 
 # ─── Dashboard session cookie (custom login, replacing Caddy basic_auth) ───────────────────────
@@ -3019,6 +3069,31 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(200, updated)
             return True
 
+        # Guardian-editable wording for the one-time welcome SMS (see AlertReporter.kt's
+        # sendWelcomeMessage) -- same guardian-only /dashboard-api/* gating as report-types above.
+        # isDefault tells the dashboard whether it's showing the built-in default or a saved
+        # override, so it can offer "Reset to default" only when there's actually something to
+        # reset.
+        if path == "/dashboard-api/welcome-message" and method == "GET":
+            self._send_json(200, {
+                "message": _effective_welcome_message(),
+                "isDefault": not _load_welcome_message_override().strip(),
+            })
+            return True
+
+        if path == "/dashboard-api/welcome-message" and method == "PATCH":
+            body = body or {}
+            if "message" not in body or not isinstance(body["message"], str):
+                self._send_json(400, {"error": "message (string) required"})
+                return True
+            # "" clears back to the default -- same convention as report-types' customMessage.
+            _save_welcome_message_override(body["message"][:1000])
+            self._send_json(200, {
+                "message": _effective_welcome_message(),
+                "isDefault": not _load_welcome_message_override().strip(),
+            })
+            return True
+
         habit_match = HABIT_ITEM_RE.match(path)
         if habit_match:
             habit_id, suffix = habit_match.group(1), habit_match.group(2)
@@ -3385,6 +3460,9 @@ class Handler(BaseHTTPRequestHandler):
                     }
                     for k, v in config.items()
                 },
+                # Guardian-editable wording for the one-time welcome SMS (dashboard's Accountability
+                # screen) -- see AlertReporter.kt's sendWelcomeMessage/ReportConfigStore.kt.
+                "welcomeMessage": _effective_welcome_message(),
             })
 
         if parsed.path == "/alerts/poll":
