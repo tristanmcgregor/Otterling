@@ -11,6 +11,10 @@ control. That server-side separation is the whole point of this checklist.
 
 
 
+
+
+
+
 ---
 
 ## A. Server owner — lock the user out of the backend
