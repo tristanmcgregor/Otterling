@@ -176,8 +176,28 @@ enum UpdateManager {
         return digest.map { String(format: "%02x", $0) }.joined()
     }
 
+    /// Extracts only after confirming no entry would land outside `destinationDir`.
+    ///
+    /// Reaching this point already requires a manifest signed by the review host's Ed25519 key and
+    /// a matching SHA-256, so a hostile archive is not the expected case -- but "an archive we
+    /// already trust" is exactly the assumption a zip-slip check is cheap insurance against, and
+    /// this runs as root with `/Applications` as its neighbour. `unzip -j` is not an option (it
+    /// flattens the directory structure, which destroys the .app bundle), so the listing is
+    /// validated first instead.
     private static func unzip(zipPath: String, into destinationDir: String) -> Bool {
-        ProcessRunner.run("/usr/bin/unzip", ["-q", zipPath, "-d", destinationDir]).status == 0
+        let listing = ProcessRunner.run("/usr/bin/unzip", ["-Z", "-1", zipPath])
+        guard listing.status == 0 else { return false }
+        for entry in listing.output.split(separator: "\n").map(String.init) {
+            let path = entry.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !path.isEmpty else { continue }
+            if path.hasPrefix("/") || path.hasPrefix("../") || path.contains("/../") || path == ".." {
+                FileHandle.standardError.write(
+                    "[update] refusing archive: entry '\(path)' would extract outside the staging directory\n".data(using: .utf8)!
+                )
+                return false
+            }
+        }
+        return ProcessRunner.run("/usr/bin/unzip", ["-q", zipPath, "-d", destinationDir]).status == 0
     }
 
     /// Verifies `manifest.reviewAttestation` (base64 Ed25519 signature, from `sudo

@@ -59,8 +59,17 @@ enum ProxyEnforcer {
         let user = FocusLockConstants.defaultProxyUser
         let portString = String(port)
         for service in activeNetworkServices() {
-            // Skip services already pointed here to avoid re-running networksetup (and re-passing the
-            // password on the command line) four times per service on every tick.
+            // Skip services already pointed here to avoid re-running networksetup (and re-passing
+            // the password on the command line) four times per service on every tick.
+            //
+            // On the argv exposure: `networksetup -setwebproxy` takes the credential positionally
+            // and offers no stdin or keychain path, so unlike `otterlingctl` (which deliberately
+            // refuses to accept the Guardian passcode as an argument) this one cannot be moved off
+            // argv without abandoning networksetup entirely. What actually bounds it: macOS
+            // restricts reading another process's arguments to the same uid or root, and this
+            // daemon is root -- so a Standard account cannot see it, and an admin account could
+            // become root anyway. Minimising the number of invocations is therefore the whole
+            // available mitigation, which is what the skip below is for.
             guard !isProxyAlreadySet(service: service, host: target, port: port) else { continue }
             ProcessRunner.runSilently("/usr/sbin/networksetup",
                 ["-setwebproxy", service, target, portString, "on", user, password])
