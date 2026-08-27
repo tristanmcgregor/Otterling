@@ -216,7 +216,7 @@ class AlertReporter(context: Context) {
         // human-readable sentence, so it's sent as-is rather than collapsed to the generic tamper
         // message. Everything NOT listed here (see formatBody's doc comment) defaults to tamper.
         val BENIGN_TYPES = setOf(
-            "VPN_BLOCK", "WATCHED_APP", "UPDATE_REQUESTED", "APP_UPDATE", "HABIT_UNLOCK",
+            "VPN_BLOCK", "WATCHED_APP", "UPDATE_REQUESTED", "APP_UPDATE", "HABIT_UNLOCK", "APP_CRASH",
             "MAC_VPN_CLEARED", "MAC_LOCK_PROFILE_INSTALLED", "MAC_BACK", "MAC_DNS_FLOOR_REENABLED",
             // Both already-clear, self-describing sentences from TamperReporter's own details text
             // (see XPCService.killSwitch/.restoreFromKillSwitch) -- more useful shown verbatim than
