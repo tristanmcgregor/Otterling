@@ -101,6 +101,8 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import nsfw_image_classifier
+import route_policy
+import session_token
 
 # Host-level AI reviewer for SudoBroker.swift's tier-3 fallback (see sudo_review_server.py's module
 # doc comment for why this has to be a separate host-level process rather than something this
@@ -127,10 +129,21 @@ TOKEN = os.environ.get("LOCKPROFILE_TOKEN", "")
 # Hand-editable master list of every report/alert type (mac/server/android) -- see that file's
 # "_readme" for the full contract. Mounted read-only alongside the script (same pattern as
 # ai_classifier.py/domain_blocklist.py), not the gitignored DATA_DIR, because this is meant to be
-# tracked and hand-edited in the repo, not treated as generated runtime state.
+# tracked and hand-edited in the repo, not treated as generated runtime state. Ships each type's
+# *default* enabled/customMessage/suspicion/description/source -- never written to at runtime (see
+# REPORT_TYPES_OVERRIDES_PATH below for where a guardian's dashboard edit actually lands); a
+# release deploy rsyncs the git checkout straight over this file, so anything written here would
+# be silently wiped out on the next release.
 REPORT_TYPES_CONFIG_PATH = os.environ.get(
     "REPORT_TYPES_CONFIG_PATH", os.path.join(os.path.dirname(os.path.abspath(__file__)), "report_types.json")
 )
+# Guardian PATCHes (POST /dashboard-api/report-types/<type>) land HERE instead, under the
+# gitignored DATA_DIR (bind-mounted from lockprofile-data/, which deploy_filter_server.sh's rsync
+# already excludes -- see SCREENSHOTS_DIR's comment above for the same protection) so a release
+# deploy can never revert a live edit the way overwriting REPORT_TYPES_CONFIG_PATH itself used to.
+# Sparse: only holds the keys (enabled/customMessage/suspicion) a guardian actually changed for a
+# given type -- see _merged_report_types().
+REPORT_TYPES_OVERRIDES_PATH = os.path.join(DATA_DIR, "report_types_overrides.json")
 
 # Separate secret for the Fleet failing-policy webhook. Fleet's webhook can't send an Authorization
 # header, so that one route authenticates on a `?token=` query secret instead of the Bearer TOKEN
@@ -734,17 +747,57 @@ def _rotate_alerts_if_needed() -> None:
     os.replace(tmp_path, ALERTS_PATH)
 
 
-def _load_report_config() -> dict:
-    """Re-read on every call (not cached) so hand-editing report_types.json takes effect
-    immediately, with no restart -- this file is tiny and events are infrequent enough that the
-    disk read is not worth caching. Missing/malformed file -> empty dict, so `_report_type_enabled`
-    below falls back to its "unlisted type defaults to enabled" behavior rather than this file's
-    absence silently going deaf on every report."""
+def _load_report_types_base() -> dict:
+    """The raw, git-tracked report_types.json, unmerged with any guardian override -- re-read on
+    every call (not cached) so hand-editing the file in git takes effect immediately, with no
+    restart. Missing/malformed file -> the empty shape; callers merge this with
+    _load_report_types_overrides() rather than reading it directly (see _merged_report_types)."""
     try:
         with open(REPORT_TYPES_CONFIG_PATH, "r", encoding="utf-8") as fh:
-            return json.load(fh).get("types", {})
+            data = json.load(fh)
+            return data if isinstance(data, dict) else {"_readme": [], "types": {}}
+    except (OSError, json.JSONDecodeError):
+        return {"_readme": [], "types": {}}
+
+
+def _load_report_types_overrides() -> dict:
+    """{type: {enabled?, customMessage?, suspicion?}} -- see REPORT_TYPES_OVERRIDES_PATH's own
+    comment for why this lives separately from the base file. Missing/malformed -> no overrides,
+    i.e. every type falls back to the base file's shipped defaults."""
+    try:
+        with open(REPORT_TYPES_OVERRIDES_PATH, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+            return data if isinstance(data, dict) else {}
     except (OSError, json.JSONDecodeError):
         return {}
+
+
+def _save_report_types_overrides(data: dict) -> None:
+    os.makedirs(os.path.dirname(REPORT_TYPES_OVERRIDES_PATH), exist_ok=True)
+    tmp_path = REPORT_TYPES_OVERRIDES_PATH + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, indent=2, sort_keys=True)
+    os.replace(tmp_path, REPORT_TYPES_OVERRIDES_PATH)
+
+
+def _merged_report_types() -> dict:
+    """The base file's `types`, each entry overlaid with any guardian edit from the overrides file
+    -- the one view every reader (GET /dashboard-api/report-types, GET /report-config,
+    _report_type_enabled, _send_ntfy_notification's customMessage lookup) should use, instead of
+    ever reading REPORT_TYPES_CONFIG_PATH directly. An override for a type no longer present in
+    the base file (removed from report_types.json since the override was saved) is simply inert."""
+    base = _load_report_types_base()
+    types = {k: dict(v) for k, v in (base.get("types") or {}).items()}
+    for report_type, override in _load_report_types_overrides().items():
+        if report_type in types:
+            types[report_type].update(override)
+    return {"_readme": base.get("_readme", []), "types": types}
+
+
+def _load_report_config() -> dict:
+    """`types` only, merged -- what _report_type_enabled and _send_ntfy_notification's
+    customMessage lookup actually need."""
+    return _merged_report_types().get("types", {})
 
 
 def _report_type_enabled(report_type: str) -> bool:
@@ -755,31 +808,11 @@ def _report_type_enabled(report_type: str) -> bool:
 
 
 def _load_report_types_file() -> dict:
-    """Like _load_report_config, but returns the WHOLE parsed file (including `_readme`), not
-    just `types` -- used by the dashboard's guardian-only read/write below, which needs to
-    preserve `_readme` on save and show `source`/`description` (the plain `/report-config` route
-    -- device-bearer-reachable, see Caddyfile -- deliberately only ever returns the bare
-    `{type: enabled}` map, never this richer shape or a write capability; see the route handler
-    below for why those two must never be merged)."""
-    try:
-        with open(REPORT_TYPES_CONFIG_PATH, "r", encoding="utf-8") as fh:
-            data = json.load(fh)
-            return data if isinstance(data, dict) else {"_readme": [], "types": {}}
-    except (OSError, json.JSONDecodeError):
-        return {"_readme": [], "types": {}}
-
-
-def _save_report_types_file(data: dict) -> None:
-    """Writes in place rather than the tmp-file-then-os.replace pattern used elsewhere in this
-    file (e.g. _prune_and_save_alerts): REPORT_TYPES_CONFIG_PATH is bind-mounted into the
-    container as an individual file (docker-compose.yml), which makes that path itself a mount
-    point -- the kernel rejects rename()'ing a new inode onto an active mount point with EBUSY
-    ("Device or resource busy") no matter how permissive the mount is, so os.replace here can
-    never succeed. Losing rename's atomicity is an acceptable trade for a file this small and
-    infrequently written (one guardian PATCH at a time, under _report_types_lock).
-    """
-    with open(REPORT_TYPES_CONFIG_PATH, "w", encoding="utf-8") as fh:
-        json.dump(data, fh, indent=2, sort_keys=False)
+    """Merged view including `_readme` -- used by the dashboard's guardian-only GET below (the
+    plain `/report-config` route -- device-bearer-reachable, see Caddyfile -- deliberately only
+    ever returns the bare `{type: {enabled, customMessage, suspicion}}` map, never `_readme` or a
+    write capability; see the route handler below for why those two must never be merged)."""
+    return _merged_report_types()
 
 
 REPORT_SUSPICION_LEVELS = ("high", "medium", "low")
@@ -793,52 +826,56 @@ def _update_report_type(report_type: str, updates: dict) -> dict | None:
     `customMessage`'s own comment in report_types.json's schema for where it's consulted) /
     `suspicion` (one of REPORT_SUSPICION_LEVELS -- see that key's own comment in
     report_types.json's schema; caller has already validated it's one of those three values).
-    Returns the updated file (for the response), or None if report_type isn't a known key (caller
-    sends 404)."""
+    Writes only to REPORT_TYPES_OVERRIDES_PATH (see its comment for why) -- never to the git-
+    tracked base file, which a release deploy would just overwrite again. Returns the merged file
+    (for the response), or None if report_type isn't a known key in the base file (caller sends
+    404) -- an override can only edit a type that actually exists, same as before."""
     with _report_types_lock:
-        data = _load_report_types_file()
-        types = data.setdefault("types", {})
-        if report_type not in types:
+        merged = _merged_report_types()
+        if report_type not in merged["types"]:
             return None
+        overrides = _load_report_types_overrides()
+        entry = overrides.setdefault(report_type, {})
         if "enabled" in updates:
-            types[report_type]["enabled"] = updates["enabled"]
+            entry["enabled"] = updates["enabled"]
         if "customMessage" in updates:
-            types[report_type]["customMessage"] = updates["customMessage"]
+            entry["customMessage"] = updates["customMessage"]
         if "suspicion" in updates:
-            types[report_type]["suspicion"] = updates["suspicion"]
-        _save_report_types_file(data)
-        return data
+            entry["suspicion"] = updates["suspicion"]
+        _save_report_types_overrides(overrides)
+        return _merged_report_types()
 
 
 # ─── Dashboard session cookie (custom login, replacing Caddy basic_auth) ───────────────────────
 # Self-verifying token, `<expiry>.<hmac>` -- no server-side session store to lose on a restart or
 # keep in sync across a future second instance. `expiry` is a plain unix timestamp; `hmac` is
-# HMAC-SHA256 of that timestamp keyed on TOKEN (LOCKPROFILE_TOKEN), so a token can only have been
-# minted by this server (which is the only thing that knows TOKEN) and can't be forged or extended
-# by a client tampering with the expiry.
+# HMAC-SHA256 keyed on TOKEN (LOCKPROFILE_TOKEN), so a token can only have been minted by this
+# server and can't be forged or extended by a client tampering with the expiry.
+#
+# THE SIGNED PAYLOAD INCLUDES A DIGEST OF THE CURRENT PIN, and that is not incidental. Two comments
+# in this file (see HANDOFF_TOKEN_PATH and _handle_handoff_set_pin) claimed that changing the PIN
+# "invalidates every existing dashboard session". It did not: the signature was over the expiry
+# alone, keyed on a token no PIN change touches, so every previously-issued cookie stayed valid for
+# the full 30 days. That broke the one-time handoff flow at its whole purpose -- "I have finished
+# setting this up, you take over" left the previous holder logged in -- and made rotating a leaked
+# PIN useless. Binding the signature to the PIN means a change to the PIN changes what verifies,
+# with no session store and no new state file to migrate.
+def _session_pin_binding() -> str:
+    """Kept as a thin alias so existing call sites read unchanged -- the logic lives in
+    session_token.py so it can be unit-tested outside this container. See that module."""
+    return session_token.pin_binding(_guardian_pin_value())
+
+
 def _dashboard_session_create() -> str:
-    expiry = str(int(time.time()) + DASHBOARD_SESSION_MAX_AGE_SECONDS)
-    signature = hmac.new(TOKEN.encode("utf-8"), expiry.encode("utf-8"), hashlib.sha256).hexdigest()
-    return f"{expiry}.{signature}"
+    return session_token.create(TOKEN, _guardian_pin_value())
 
 
 def _dashboard_session_valid(token: str) -> bool:
-    if not token or "." not in token:
-        return False
-    expiry, _, signature = token.partition(".")
-    if not expiry.isdigit() or int(expiry) < time.time():
-        return False
-    expected = hmac.new(TOKEN.encode("utf-8"), expiry.encode("utf-8"), hashlib.sha256).hexdigest()
-    return secrets.compare_digest(signature, expected)
+    return session_token.valid(token, TOKEN, _guardian_pin_value())
 
 
 def _dashboard_cookie_from_headers(headers) -> str | None:
-    raw = headers.get("Cookie", "")
-    for part in raw.split(";"):
-        name, _, value = part.strip().partition("=")
-        if name == "otterling_dashboard_session":
-            return value
-    return None
+    return session_token.cookie_from_header(headers.get("Cookie", ""))
 
 
 def _append_alert(event: dict) -> dict | None:
@@ -2640,7 +2677,38 @@ class Handler(BaseHTTPRequestHandler):
     # response (any response, including an error), False only for "not a dashboard-api path I
     # recognize" so the caller's own 404 fallback fires -- callers must not send anything themselves
     # after a True return.
+    def _dashboard_access_denied(self, method: str, path: str) -> bool:
+        """True (and a 403 already sent) when this caller may not use this route.
+
+        Every /dashboard-api/* verb funnels through _handle_dashboard_route, so this is the single
+        place the device-vs-guardian boundary needs to hold. It used to live only in the Caddyfile's
+        path allowlist, which meant anything reaching :8091 by another route held full guardian
+        authority using a bearer token extracted from a phone. See route_policy.py.
+
+        A browser request arrives with BOTH the Caddy-injected bearer and the guardian's session
+        cookie, so checking the cookie here does not break the dashboard; a device request has the
+        bearer and no cookie, and is confined to route_policy's explicit device list.
+        """
+        if not route_policy.governs(path):
+            return False
+        if route_policy.required_access(method, path) == route_policy.DEVICE_BEARER_OK:
+            return False
+        cookie = _dashboard_cookie_from_headers(self.headers)
+        if cookie and _dashboard_session_valid(cookie):
+            return False
+        print(
+            f"[lockprofile] denied {method} {path}: guardian session required, "
+            f"device bearer is not sufficient",
+            flush=True,
+        )
+        self._send_json(403, {
+            "error": "This route requires a guardian dashboard login, not a device token.",
+        })
+        return True
+
     def _handle_dashboard_route(self, method: str, path: str, parsed, body: dict | None) -> bool:
+        if self._dashboard_access_denied(method, path):
+            return True
         if path == "/dashboard-api/devices" and method == "GET":
             devices = [{"device_id": k, **v} for k, v in _list_known_device_ids().items()]
             self._send_json(200, {"devices": devices})
@@ -2682,7 +2750,19 @@ class Handler(BaseHTTPRequestHandler):
         # Devices verify a guess via POST .../pin/verify below instead, which never reveals the
         # actual value.
         if path == "/dashboard-api/pin" and method == "GET":
-            self._send_json(200, _load_guardian_pin())
+            # Returns whether a PIN is configured and when it changed -- never the value.
+            #
+            # This used to return the plaintext PIN so the dashboard could display and copy it.
+            # That made one HTTP GET, authenticated by a token extracted from any shipped client,
+            # sufficient to learn the secret that unlocks phone Settings, this dashboard and
+            # /review. A guardian who has forgotten it can set a new one (POST below) or use the
+            # one-time handoff link; neither needs the old value, so nothing legitimate required
+            # this endpoint to reveal it.
+            record = _load_guardian_pin()
+            self._send_json(200, {
+                "configured": bool(record.get("pin")),
+                "updatedAt": record.get("updatedAt"),
+            })
             return True
 
         if path == "/dashboard-api/pin" and method == "POST":
@@ -2778,7 +2858,14 @@ class Handler(BaseHTTPRequestHandler):
             if not name:
                 self._send_json(400, {"error": "name required"})
                 return True
-            requires_proof = bool((body or {}).get("requiresProof", False))
+            # Defaults TRUE. A completion report is otherwise an unverifiable claim made with a
+            # bearer token that ships inside the APK -- see HABIT_PROOFS_DIR's comment, which
+            # correctly calls that a "zero-evidence bypass" and names requiresProof as the
+            # mitigation. A mitigation that is off unless the guardian finds the toggle means the
+            # default configuration is the bypassable one, and a guardian gating an app behind a
+            # habit gets no warning. Opting OUT is still one field away for habits where proof is
+            # impractical.
+            requires_proof = bool((body or {}).get("requiresProof", True))
             with _habits_lock:
                 habits = _load_habits()
                 habits.append({"id": uuid.uuid4().hex, "name": name, "requiresProof": requires_proof})
@@ -2810,7 +2897,9 @@ class Handler(BaseHTTPRequestHandler):
                 for name in habitshare_names:
                     if name.lower() in existing_lower:
                         continue
-                    habits.append({"id": uuid.uuid4().hex, "name": name, "requiresProof": False})
+                    # Same default-on reasoning as the manual add path above. HabitShare-imported
+                    # habits are ordinary habits once here and get the same bar.
+                    habits.append({"id": uuid.uuid4().hex, "name": name, "requiresProof": True})
                     existing_lower.add(name.lower())
                     imported += 1
                 if imported:
@@ -3331,6 +3420,16 @@ class Handler(BaseHTTPRequestHandler):
         # and _store_screenshot). Bearer-gated like /device-logs/view/* above -- deliberately NOT
         # following /review-data/*'s newer unauthenticated stance, since these are more sensitive
         # images than diagnostic log text.
+        # Guardian-only, enforced here as well as in the Caddyfile: these are the most sensitive
+        # objects this service stores (captured screenshots flagged as adult content), and the
+        # bearer that reaches this route ships inside the phone that produced them.
+        if parsed.path.startswith("/screenshot-review/"):
+            cookie = _dashboard_cookie_from_headers(self.headers)
+            if not (cookie and _dashboard_session_valid(cookie)):
+                return self._send_json(403, {
+                    "error": "Screenshot review requires a guardian dashboard login.",
+                })
+
         if parsed.path == "/screenshot-review/list":
             return self._send_json(200, {"devices": _list_screenshots()})
 

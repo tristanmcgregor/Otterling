@@ -219,6 +219,13 @@ access to the machine.
   on-device can dodge this by hardcoding its own encrypted resolver. QUIC (UDP/443) is dropped
   by the phone's VPN entirely while the proxy is enabled, forcing HTTPS traffic onto TCP so it
   actually goes through mitmproxy instead of bypassing it over HTTP/3.
+- `report_types.json` only ships each report type's *default* enabled/customMessage/suspicion --
+  the dashboard's Report Types panel writes a guardian's actual edits to a separate,
+  gitignored/not-deployed file under `DATA_DIR` (`REPORT_TYPES_OVERRIDES_PATH` in
+  `lockprofile_service.py`) instead. A release deploy overwrites `report_types.json` wholesale
+  from git, so writing guardian edits there directly used to mean every deploy silently reverted
+  them; the override file survives deploys, so hand-editing `report_types.json` in git only
+  changes what a type falls back to for a guardian who's never touched it in the dashboard.
 - Out of scope for this pass: on-device NSFW ML/image blanking (researched, not built -- see
   [`VISUAL_FILTERING.md`](VISUAL_FILTERING.md)), a macOS Network Extension / system-wide proxy
   equivalent (macOS enforcement stays DNS + hosts + pf, see `macos/FocusLock/README.md`), and

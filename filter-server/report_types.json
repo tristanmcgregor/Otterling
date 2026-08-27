@@ -17,7 +17,12 @@
     "added -- see AccountabilityPartnerSection.kt) explains what each level means so this tag alone",
     "is enough context on every later message.",
     "No restart needed after editing -- lockprofile_service.py re-reads this file on every event,",
-    "and the phone re-fetches it once per MacTamperPollWorker cycle (roughly every 15 minutes)."
+    "and the phone re-fetches it once per MacTamperPollWorker cycle (roughly every 15 minutes).",
+    "The values below are just the SHIPPED DEFAULTS -- a guardian's dashboard edit (Report Types",
+    "panel: enabled/customMessage/suspicion) is layered on top from a separate file under DATA_DIR",
+    "(REPORT_TYPES_OVERRIDES_PATH, gitignored/not deployed) instead of being written back here, so",
+    "a release deploy overwriting this file from git can never revert a live edit. Hand-editing a",
+    "value here only changes what a type falls back to for a guardian who's never touched it."
   ],
   "types": {
     "lock_profile_removed": {
