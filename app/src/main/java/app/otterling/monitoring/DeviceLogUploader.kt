@@ -25,6 +25,11 @@ import org.json.JSONObject
  */
 object DeviceLogUploader {
     suspend fun upload(context: Context): Result<Unit> = withContext(Dispatchers.IO) {
+        // Only autoExemptCount() (a plain SharedPreferences read) is called below -- never
+        // recordSuspectedFailure -- so alertScope is never actually launched into; this
+        // withContext's own scope is just a harmless, correctly-shaped value to satisfy the
+        // constructor.
+        val ioScope = this
         runCatching {
             val settings = MacTamperPollSettings(context)
             check(settings.isConfigured()) { "Server token not configured (see Mac tamper alerts settings)" }
@@ -35,7 +40,7 @@ object DeviceLogUploader {
             val deviceId = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
                 ?: "unknown-device"
             val exemptManager = MitmExemptManager(context)
-            val tracker = PinningFailureTracker(context)
+            val tracker = PinningFailureTracker(context, ioScope)
 
             val header = buildString {
                 appendLine("device_id=$deviceId")

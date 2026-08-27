@@ -51,7 +51,7 @@ fun VpnFilterSection(context: Context) {
     val vpnManager = remember { VpnFilterManager(context) }
     val blocklistManager = remember { DomainBlocklistManager(context) }
     val exemptManager = remember { MitmExemptManager(context) }
-    val pinningFailureTracker = remember { PinningFailureTracker(context) }
+    val pinningFailureTracker = remember { PinningFailureTracker(context, coroutineScope) }
     val cloudFilterSettings = remember { CloudFilterSettings(context) }
 
     var refreshTrigger by remember { mutableIntStateOf(0) }
