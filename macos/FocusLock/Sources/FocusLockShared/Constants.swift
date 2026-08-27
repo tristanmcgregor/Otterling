@@ -162,6 +162,39 @@ public enum FocusLockConstants {
         "com.apple.WebKit.WebContent",  // Safari renderer process, seen as frontmost in some setups
     ]
 
+    /// How often `FocusLockScanner`'s `ScreenshotMonitor` captures the frontmost app and uploads it
+    /// to `/screenshot-classify` for NSFW classification -- the Mac equivalent of the phone's
+    /// `visualFilterIntervalSeconds` loop in `FocusGuardAccessibilityService`. No dashboard-tunable
+    /// override yet (unlike the phone): this is a fixed constant for the same reason
+    /// `scannerScanInterval` above has no dashboard toggle either -- `FocusLockScanner` doesn't poll
+    /// `DashboardConfigSync`'s per-device settings today. A future pass could wire one in.
+    public static let screenshotScanInterval: Double = 30
+
+    /// Matches the phone's `SCREENSHOT_MAX_DIMENSION`/`SCREENSHOT_JPEG_QUALITY` (see
+    /// `FocusGuardAccessibilityService.kt`) -- plenty of resolution for a vision/ONNX classifier to
+    /// judge "is this NSFW", drastically cuts upload size vs. full Retina display resolution.
+    public static let screenshotMaxDimension: Double = 720
+    /// `NSBitmapImageRep`'s `.compressionFactor` is 0...1 (opposite convention from Android's
+    /// 0...100 JPEG quality) -- 0.8 here is the same "80%" the phone uses.
+    public static let screenshotJPEGCompressionFactor: Double = 0.8
+
+    /// Own bundle IDs + the lock screen -- screenshotting our own Settings UI or a locked screen is
+    /// wasted uploads and a mild privacy smell, matching the phone's `screenshotSkipPackages` (own
+    /// package + launcher/systemui/keyguard).
+    public static let screenshotSkipBundleIdentifiers: Set<String> = [
+        "app.otterling",
+        "app.otterling.scanner",
+        "app.otterling.watchdog",
+        "com.apple.loginwindow",
+    ]
+
+    /// Matches the phone's `DEFAULT_NSFW_BLOCK_MILLIS`/`MIN_NSFW_BLOCK_MILLIS` -- how long
+    /// `ScreenshotMonitor` keeps force-quitting an app after an "nsfw" verdict when the server
+    /// response doesn't include its own `blockUntilMillis` (or as a floor when it does, to survive
+    /// phone/Mac clock skew).
+    public static let defaultNsfwBlockSeconds: Double = 15 * 60
+    public static let minNsfwBlockSeconds: Double = 60
+
     /// This build's version -- bump by hand each release, matching `CFBundleShortVersionString`
     /// in `Scripts/build_app.sh` (kept in sync manually, not code-generated -- there's no
     /// Gradle-style single-source-of-truth build system here, and duplicating one integer by hand

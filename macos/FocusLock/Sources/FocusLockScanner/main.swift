@@ -120,8 +120,11 @@ enum Scanner {
 
 // A LaunchAgent process needs a live run loop for URLSession callbacks (TamperReporter) and the
 // scan timer. RunAtLoad + KeepAlive in the plist keeps it running; this just paces the scans.
+// ScreenshotMonitor.tick() throttles its own (much slower) capture cadence internally -- see that
+// file's `screenshotScanInterval` check -- so it's safe to call on every trigger-word scan tick.
 let timer = Timer.scheduledTimer(withTimeInterval: FocusLockConstants.scannerScanInterval, repeats: true) { _ in
     Scanner.tick()
+    ScreenshotMonitor.tick()
 }
 timer.tolerance = 0.5
 RunLoop.main.add(timer, forMode: .common)

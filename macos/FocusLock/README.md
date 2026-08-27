@@ -82,6 +82,20 @@ assuming otherwise.
   A narrow `pf` anchor blocks DNS-over-TLS and known public DoH resolver IPs (and explicitly
   allows the cloud filter host's own resolved IPs on :53) so a browser can't sidestep either layer
   with its own encrypted DNS.
+  3. **Screenshot NSFW capture**: `FocusLockScanner` (see below) periodically captures whatever's
+     on screen and uploads it to the cloud filter server's `/screenshot-classify` -- the exact same
+     route and server-side classifier the Android app already uses (see
+     `filter-server/nsfw_image_classifier.py`/`onnx_nsfw_pipeline.py`), so an "nsfw" verdict
+     force-quits the offending app and keeps re-quitting it for ~15 minutes if relaunched. Requires
+     Screen Recording permission (System Settings > Privacy & Security > Screen Recording, granted
+     to Otterling); the scanner keeps re-checking so this starts working the moment it's granted,
+     no restart needed. Catches content DNS/`pf` filtering can't -- images inside an app's own
+     traffic that already passed through an allowed domain, or content in an app that doesn't use
+     the network filtering path at all.
+- **Trigger-word scanning**: the same `FocusLockScanner` LaunchAgent also walks the frontmost
+  browser's accessibility tree for on-screen trigger words (report-only, never blocks) -- the Mac
+  equivalent of the phone's `FocusGuardAccessibilityService` trigger-word scan. Requires
+  Accessibility permission, separate from Screen Recording above.
 - **App blocking** scans running processes every few seconds (via `libproc`) and kills anything
   matching a blocked executable name -- continuously, for as long as it's on the list.
 - **App protection** (optional, not required for content filtering) is the inverse of app

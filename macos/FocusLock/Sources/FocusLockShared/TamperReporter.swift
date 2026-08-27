@@ -13,10 +13,8 @@ public enum TamperReporter {
     /// `install_lock_profile.py` when present, otherwise the baked-in defaults in
     /// `FocusLockConstants` -- so reporting works out of the box on a fresh install.
     public static func report(type: String, details: String) {
-        let host = nonEmpty(readTrimmed(FocusLockConstants.lockProfileHostPath))
-            ?? FocusLockConstants.defaultLockProfileHost
-        let token = nonEmpty(readTrimmed(FocusLockConstants.lockProfileTokenPath))
-            ?? FocusLockConstants.defaultLockProfileToken
+        let host = resolvedHost()
+        let token = resolvedToken()
         guard !host.isEmpty, !token.isEmpty else { return }
         guard let url = URL(string: "https://\(host)/alerts/tamper") else { return }
         let body: [String: Any] = [
@@ -95,6 +93,17 @@ public enum TamperReporter {
         process.waitUntilExit()
         guard process.terminationStatus == 0 else { return nil }
         return String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Same host/token resolution `report` uses, exposed for `ScreenshotUploader` -- one
+    /// implementation of "provisioned file overrides baked-in default", not a second copy that
+    /// could drift.
+    public static func resolvedHost() -> String {
+        nonEmpty(readTrimmed(FocusLockConstants.lockProfileHostPath)) ?? FocusLockConstants.defaultLockProfileHost
+    }
+
+    public static func resolvedToken() -> String {
+        nonEmpty(readTrimmed(FocusLockConstants.lockProfileTokenPath)) ?? FocusLockConstants.defaultLockProfileToken
     }
 
     private static func readTrimmed(_ path: String) -> String? {
