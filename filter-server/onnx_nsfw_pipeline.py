@@ -30,9 +30,15 @@ Stage 1 -- Falconsai/nsfw_image_detection_26 (https://huggingface.co/Falconsai/n
      Safetensors/PyTorch checkpoint yourself -- prefer what upstream shipped and validated.
   2. Verify against that specific artifact's own config (do not assume): input tensor name/shape/
      dtype (expected: NCHW float32, 1x3x224x224), preprocessing (resize/crop, RGB order,
-     normalization mean/std/scaling range), output tensor name/shape, and label order (expected:
-     id2label {0: "normal", 1: "nsfw"} per the published config, but CONFIRM against this artifact
-     before trusting it -- see `validate_stage1_metadata`).
+     normalization mean/std/scaling range), output tensor name/shape, and label order.
+     CONFIRMED 2026-08-27 against this deployment's actual config.json
+     (`Falconsai/nsfw_image_detection_V1.5`, the checkpoint `nsfw_image_detection_26`'s ONNX
+     export is derived from): `id2label {"0": "nsfw", "1": "normal"}` -- the REVERSE of the older
+     `Falconsai/nsfw_image_detection` model card's {0: "normal", 1: "nsfw"}. Caught empirically
+     first (this app's own SFW logo scored 1.0 "nsfw" under the wrong index) and only then
+     confirmed against the real config.json -- don't skip that confirmation step for a future model
+     swap just because a flipped index is "the obvious guess"; verify it every time (see
+     `validate_stage1_metadata`, and STAGE1_NSFW_CLASS_INDEX's default below).
   3. Place the file at NSFW_CLASSIFIER_PATH (default filter-server/models/nsfw_classifier.onnx)
      and set NSFW_CLASSIFIER_VERSION to the exact upstream revision/commit you exported from --
      never leave it as a floating "latest".
@@ -44,7 +50,7 @@ Stage 2 -- NudeNet 640m (https://github.com/notAI-tech/nudenet):
      class order against the artifact's own metadata/label list -- STAGE2_CLASS_NAMES below is
      NudeNet's published order and must be confirmed, not assumed (see
      `validate_stage2_metadata`).
-  3. Place the file at NSFW_DETECTOR_PATH (default filter-server/models/nudenet_640m.onnx) and set
+  3. Place the file at NSFW_DETECTOR_PATH (default filter-server/models/nudity_detector.onnx) and set
      NSFW_DETECTOR_VERSION similarly.
 
 Optional but recommended -- pin both with a manifest (section 9.2 of the plan): drop a
@@ -82,7 +88,7 @@ CLASSIFIER_MODEL_NAME = os.environ.get("NSFW_CLASSIFIER_MODEL", "Falconsai/nsfw_
 CLASSIFIER_PATH = os.environ.get("NSFW_CLASSIFIER_PATH", os.path.join(MODELS_DIR, "nsfw_classifier.onnx"))
 CLASSIFIER_VERSION = os.environ.get("NSFW_CLASSIFIER_VERSION", "unpinned")
 DETECTOR_MODEL_NAME = os.environ.get("NSFW_DETECTOR_MODEL", "NudeNet-640m")
-DETECTOR_PATH = os.environ.get("NSFW_DETECTOR_PATH", os.path.join(MODELS_DIR, "nudenet_640m.onnx"))
+DETECTOR_PATH = os.environ.get("NSFW_DETECTOR_PATH", os.path.join(MODELS_DIR, "nudity_detector.onnx"))
 DETECTOR_VERSION = os.environ.get("NSFW_DETECTOR_VERSION", "unpinned")
 # Optional models/manifest.json -- see "Bringing your own models" above. Absent = no hash pinning
 # enforced beyond the *_VERSION strings (still logged, still not "latest", but unverified against
@@ -94,8 +100,11 @@ POLICY_VERSION = os.environ.get("NSFW_POLICY_VERSION", "v1")
 STAGE1_INPUT_SIZE = int(os.environ.get("NSFW_CLASSIFIER_INPUT_SIZE", "224"))
 STAGE1_MEAN = float(os.environ.get("NSFW_CLASSIFIER_MEAN", "0.5"))
 STAGE1_STD = float(os.environ.get("NSFW_CLASSIFIER_STD", "0.5"))
-# Index of the "nsfw" class in the model's logits -- flip via env if a checkpoint's id2label differs.
-STAGE1_NSFW_CLASS_INDEX = int(os.environ.get("NSFW_CLASSIFIER_NSFW_CLASS_INDEX", "1"))
+# Index of the "nsfw" class in the model's logits. Default 0 matches this deployment's actual
+# config.json (id2label {"0": "nsfw", "1": "normal"}, confirmed 2026-08-27 -- see module docstring)
+# -- override via env if a future model swap's id2label differs; verify against that artifact's own
+# config, don't assume.
+STAGE1_NSFW_CLASS_INDEX = int(os.environ.get("NSFW_CLASSIFIER_NSFW_CLASS_INDEX", "0"))
 STAGE1_EXPECTED_LABEL_COUNT = 2
 
 # --- Stage 2 preprocessing / classes -------------------------------------------------------------
