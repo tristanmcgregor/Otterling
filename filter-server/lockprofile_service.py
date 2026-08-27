@@ -101,6 +101,7 @@ import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import nsfw_image_classifier
+import onnx_nsfw_pipeline
 import route_policy
 import session_token
 
@@ -3552,6 +3553,10 @@ def main() -> None:
     if not TOKEN:
         raise SystemExit("LOCKPROFILE_TOKEN must be set -- refusing to start unauthenticated")
     _migrate_legacy_device_rules()
+    # Load/validate the ONNX NSFW models once here, not on a request thread (section 8.3/15.1 of
+    # the migration plan) -- a no-op today until real model files are dropped under ./models/, in
+    # which case this just logs "not ready" and nsfw_image_classifier keeps using claude -p.
+    onnx_nsfw_pipeline.initialize()
     server = ThreadingHTTPServer((LISTEN_HOST, LISTEN_PORT), Handler)
     print(f"[lockprofile] listening on {LISTEN_HOST}:{LISTEN_PORT}", flush=True)
     server.serve_forever()

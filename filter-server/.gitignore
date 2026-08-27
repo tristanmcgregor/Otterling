@@ -4,5 +4,11 @@
 
 # Converted ONNX model weights for onnx_nsfw_pipeline.py -- binary, not source, and gated/licensed
 # per their own model cards (see that module's "Bringing your own models" doc). Mounted read-only
-# into the lockprofile container by docker-compose.yml.
-/models/
+# into the lockprofile container by docker-compose.yml. The manifest *template* (not real hashes)
+# stays tracked so the schema ships in git even though the directory itself doesn't.
+/models/*
+!/models/manifest.example.json
+
+# Golden integration images for tests/test_golden_screenshots.py -- labeled NSFW/borderline
+# imagery has no business in git history. See that file's docstring for the expected layout.
+/tests/golden_images/

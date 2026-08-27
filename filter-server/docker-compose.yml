@@ -236,19 +236,24 @@ services:
       # dns_classify_mux.py) -- see mitmproxy.Dockerfile's comment for why not ANTHROPIC_API_KEY.
       # Screenshot classification fails open (no block) if unset.
       - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
-      # onnx_nsfw_pipeline.py: pinned model revisions/hashes (section 12 -- never "latest") and
-      # calibrated thresholds. All optional -- blank/unset means the pipeline stays unavailable
-      # (Stage 1 path) or the placeholder defaults documented in that module (thresholds), until an
-      # operator has actually run the section 7/8 benchmark and calibration.
-      - NSFW_STAGE1_MODEL_VERSION=${NSFW_STAGE1_MODEL_VERSION:-unpinned}
-      - NSFW_STAGE2_MODEL_VERSION=${NSFW_STAGE2_MODEL_VERSION:-unpinned}
+      # onnx_nsfw_pipeline.py: both stages required for the pipeline to be READY (section 8.1) --
+      # disable either to force the claude -p fallback regardless of what's on disk.
+      - NSFW_ONNX_ENABLED=${NSFW_ONNX_ENABLED:-true}
+      - NSFW_CLASSIFIER_ENABLED=${NSFW_CLASSIFIER_ENABLED:-true}
+      - NSFW_DETECTOR_ENABLED=${NSFW_DETECTOR_ENABLED:-true}
+      # Pinned model revisions (section 9.2/12 -- never "latest") -- optional, defaults to
+      # "unpinned" (loud in logs/diagnostics, not a production-ready state) until set.
+      - NSFW_CLASSIFIER_VERSION=${NSFW_CLASSIFIER_VERSION:-unpinned}
+      - NSFW_DETECTOR_VERSION=${NSFW_DETECTOR_VERSION:-unpinned}
       - NSFW_POLICY_VERSION=${NSFW_POLICY_VERSION:-v1}
       # Numeric -- must never be passed as an empty string (onnx_nsfw_pipeline.py does a bare
       # float() conversion with no blank-string handling), so these always fall back to that
-      # module's own placeholder defaults rather than ":-" to an empty value.
-      - NSFW_HIGH_RISK_THRESHOLD=${NSFW_HIGH_RISK_THRESHOLD:-0.9}
-      - NSFW_REVIEW_THRESHOLD=${NSFW_REVIEW_THRESHOLD:-0.5}
-      - NSFW_STAGE2_CONFIDENCE_THRESHOLD=${NSFW_STAGE2_CONFIDENCE_THRESHOLD:-0.6}
+      # module's own placeholder defaults rather than ":-" to an empty value. Calibrate against a
+      # real golden/benchmark set (plan sections 7/14) before trusting non-default values.
+      - NSFW_STAGE1_HIGH_THRESHOLD=${NSFW_STAGE1_HIGH_THRESHOLD:-0.95}
+      - NSFW_STAGE2_STRONG_THRESHOLD=${NSFW_STAGE2_STRONG_THRESHOLD:-0.70}
+      - NSFW_STAGE2_GENERAL_THRESHOLD=${NSFW_STAGE2_GENERAL_THRESHOLD:-0.50}
+      - NSFW_UNCERTAIN_POLICY=${NSFW_UNCERTAIN_POLICY:-block}
       # Optional second subscription's token -- ai_classifier.py retries against it once if
       # the primary account's token fails (e.g. its usage/session limit is hit). Unset = no
       # fallback, same single-token behavior as before this existed.

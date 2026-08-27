@@ -1,0 +1,19 @@
+{
+  "_comment": "Template only -- copy to models/manifest.json and fill in the real hashes after you place the actual .onnx artifacts in this directory. See onnx_nsfw_pipeline.py's 'Bringing your own models' doc. onnx_nsfw_pipeline.initialize() verifies each configured model file's SHA-256 against this manifest before loading, and fails closed (pipeline stays NOT READY, Claude fallback stays active) on a mismatch -- this is what catches an accidental or unauthorized model swap silently changing moderation behavior. Compute a hash with: shasum -a 256 models/nsfw_classifier.onnx",
+  "stage1": {
+    "name": "Falconsai/nsfw_image_detection_26",
+    "revision": "PINNED_REVISION",
+    "file": "nsfw_classifier.onnx",
+    "sha256": "REPLACE_WITH_REAL_SHA256",
+    "license": "REPLACE_WITH_LICENSE_NAME",
+    "export_format": "onnx"
+  },
+  "stage2": {
+    "name": "NudeNet-640m",
+    "revision": "PINNED_REVISION",
+    "file": "nudenet_640m.onnx",
+    "sha256": "REPLACE_WITH_REAL_SHA256",
+    "license": "REPLACE_WITH_LICENSE_NAME",
+    "export_format": "onnx"
+  }
+}
