@@ -5,7 +5,8 @@ bypass apps, blocked websites, habit rules, app time budgets). Served by the `up
 container at `https://<UPDATE_HOST>/dashboard` (HTTP Basic Auth — see `.env.example`'s
 `DASHBOARD_USER`/`DASHBOARD_PASSWORD_HASH`, separate credentials from `/review`'s).
 
-Originally generated from a Figma export (`Complete User Prompt (1)/`), then rewired to real
+Originally generated from a Figma export
+(<https://www.figma.com/design/yODRSUjtA32xeTJ8gfDQux/Complete-User-Prompt>), then rewired to real
 data — every screen except the three phone-preview screens below reads/writes through
 `/dashboard-api/*`, backed by `lockprofile_service.py`'s "Dashboard device settings" section.
 

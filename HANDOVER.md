@@ -50,7 +50,10 @@ docker compose logs --tail=5 lockprofile  # should show it listening; "FCM push 
 ```
 - **Fleet** (fleet.bartholomew.help): the tamper policy exists and the user's Mac is enrolled and checking in.
 - **Alert path**: `/alerts/tamper` (Bearer `LOCKPROFILE_TOKEN`) and `/alerts/fleet-webhook` (query secret) both live; failing events reach the partner's phone by SMS and (if subscribed) ntfy.
-- **Anthropic credits**: the API key in `/var/lib/otterling/ci/secrets.env` powers BOTH the release AI-review gate AND the live NSFW AI classifier (`ai_classifier.py`). If it's out of credits, the classifier **fails open** (stops AI-blocking) and releases can't be reviewed. Keep it funded.
+- **Anthropic auth**: these are now two *separate* credentials, corrected 2026-08-27.
+  - The **release AI-review gate** uses the API key in `/var/lib/otterling/ci/secrets.env`. If it runs out of credits, releases can't be reviewed.
+  - The **live content classifiers** (`ai_classifier.py`, `nsfw_image_classifier.py`) use `CLAUDE_CODE_OAUTH_TOKEN` (a subscription token from `claude setup-token`, set in `filter-server/.env`). `ai_classifier.py` deliberately *strips* `ANTHROPIC_API_KEY` from the subprocess environment, because it outranks the OAuth token in Claude Code's credential precedence and would silently route back to the metered API. So funding the API key does **not** keep the classifiers running, and vice versa -- check both.
+  - Either way the classifiers **fail open** (stop AI-blocking, traffic still gets blocklist + DNS filtering) if their credential is missing or expired. The OAuth token expires periodically and must be regenerated; there is no alert for this, so it is worth checking when AI blocking seems to have quietly stopped.
 
 ## C. Release pipeline note
 
