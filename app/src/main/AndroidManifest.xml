@@ -17,6 +17,17 @@
         android:name="android.permission.QUERY_ALL_PACKAGES"
         tools:ignore="QueryAllPackagesPermission" />
 
+    <!-- largeHeap: this process runs a VPN packet relay, an accessibility service that periodically
+         captures/downscales/JPEG-compresses full-resolution screenshots, an on-device MediaPipe
+         image embedder, and Room -- all at once, in the background, indefinitely. Without this, the
+         default per-app heap growth limit on most devices is 256MB (see OtterlingApplication's
+         crash handler picking up "OutOfMemoryError ... target footprint 268435456, growth limit
+         268435456"); a normal peak (e.g. a screenshot capture landing while the VPN relay is busy)
+         can exhaust that and take the whole app down. This raises the ceiling to whatever the
+         device grants a large-heap app (device-dependent, generally 2-4x normal) -- it doesn't fix
+         an actual unbounded leak if one exists, but it removes this specific crash for legitimate
+         peak usage, which is what OtterlingApplication's crash log (message only, no stack trace
+         surfaced off-device -- see its own doc comment) gave no evidence of being. -->
     <application
         android:name=".OtterlingApplication"
         android:allowBackup="false"
@@ -24,6 +35,7 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:label="@string/app_name"
         android:supportsRtl="true"
+        android:largeHeap="true"
         android:theme="@style/Theme.Otterling">
         <activity
             android:name=".MainActivity"

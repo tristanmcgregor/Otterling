@@ -194,6 +194,12 @@
       "suspicion": "low",
       "description": "Reserved for a future habit-based unlock feature -- not currently triggered anywhere."
     },
+    "APP_CRASH": {
+      "enabled": true,
+      "source": "android",
+      "suspicion": "medium",
+      "description": "Otterling crashed and was restarted (OtterlingApplication's uncaught-exception handler) -- could be an ordinary bug, but a suspiciously well-timed one is worth asking about."
+    },
     "ACCESSIBILITY_DISABLED": {
       "enabled": true,
       "source": "android",

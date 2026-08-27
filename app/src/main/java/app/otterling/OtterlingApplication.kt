@@ -54,9 +54,15 @@ class OtterlingApplication : Application() {
         runCatching { file.delete() }
         if (content.isNullOrBlank()) return
         // First line is the timestamp; the exception's toString() (class + message) is the next
-        // one -- plenty to identify a recurring crash from the guardian dashboard without
-        // dumping a full stack trace into an SMS-length alert.
-        val summary = content.lineSequence().drop(1).firstOrNull()?.take(200) ?: "unknown error"
+        // one -- plenty to identify *what* crashed. On its own that's not enough to fix a crash
+        // like OutOfMemoryError, whose message never says *where* -- so this also hunts for the
+        // first stack frame inside our own code (an "at app.otterling..." line) and appends it,
+        // still short enough for an SMS-length alert but now enough to point at the actual call
+        // site next time, instead of needing a fresh repro with a debugger attached.
+        val lines = content.lineSequence().drop(1)
+        val exceptionLine = lines.firstOrNull()?.take(200) ?: "unknown error"
+        val ownFrame = lines.firstOrNull { it.trimStart().startsWith("at app.otterling") }?.trim()
+        val summary = if (ownFrame != null) "$exceptionLine ($ownFrame)".take(300) else exceptionLine
         appScope.launch {
             runCatching {
                 AlertReporter(this@OtterlingApplication).report(
