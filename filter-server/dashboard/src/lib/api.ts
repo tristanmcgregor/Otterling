@@ -401,7 +401,12 @@ export const api = {
 
   // One shared PIN for the whole fleet, not per-device -- every phone syncs the same value from
   // here (see lockprofile_service.py's GUARDIAN_PIN_PATH).
-  getPin: () => request<{ pin: string | null; updatedAt: number | null }>("/pin"),
+  // Returns only whether a PIN is configured -- never the value. The endpoint used to return the
+  // plaintext PIN so this page could display it, which made one authenticated GET enough to learn
+  // the secret that unlocks phone Settings, this dashboard and /review, using a bearer token that
+  // ships inside every client binary. Nothing here ever rendered the value, so no capability was
+  // lost by redacting it.
+  getPin: () => request<{ configured: boolean; updatedAt: number | null }>("/pin"),
   setPin: (pin: string) =>
     request<{ pin: string; updatedAt: number }>("/pin", {
       method: "POST",

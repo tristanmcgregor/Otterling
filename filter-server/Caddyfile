@@ -116,7 +116,11 @@
 	handle /screenshot-classify {
 		reverse_proxy 127.0.0.1:8091
 	}
-	handle_path /review* {
+	# Explicit /review/* rather than a bare /review* wildcard, which overlapped the
+	# /review-data/* handler above. Caddy's specificity ordering resolved that correctly, but two
+	# routes overlapping by accident is a bad thing to leave load-bearing.
+	redir /review /review/ 308
+	handle_path /review/* {
 		root * /srv/review-dashboard
 		file_server
 	}
@@ -180,14 +184,21 @@
 		# through here (see those files); every guardian-authoring route -- PIN POST, settings
 		# PATCH, add/remove endpoints, device removal, poll-now -- still requires the browser
 		# session cookie via forward_auth below, same as before this device bypass existed at all.
-		# NOTE: /dashboard-api/pin (the raw plaintext PIN) is deliberately NOT in this GET
-		# allowlist -- see GUARDIAN_PIN_PATH's comment in lockprofile_service.py. Only
-		# /pin/exists (a boolean, no secret) and /pin/verify (POST, one guess in/correct-or-not
-		# out) are device-reachable. /habitshare-account GET IS the full credential (unlike
-		# /pin) -- see HABITSHARE_ACCOUNT_PATH's comment for why that's fine here: it's an
-		# unrelated third-party account, not a gate anything Otterling enforces depends on.
+		# NOTE: /dashboard-api/pin is deliberately NOT in this GET allowlist. It no longer
+		# returns the PIN value at all (see lockprofile_service.py -- it returns
+		# {configured, updatedAt}), but it stays guardian-only regardless. Only /pin/exists (a
+		# boolean) and /pin/verify (POST, one guess in / correct-or-not out) are device-reachable.
+		#
+		# /habitshare-account was removed from this list: it returns a third-party username AND
+		# password in plaintext, and no device code path fetches it, so device access bought
+		# nothing and cost a credential handed to the person being restrained.
+		#
+		# THIS LIST IS NO LONGER THE ONLY ENFORCEMENT. lockprofile_service.py now checks the same
+		# split itself via route_policy.py, so a request reaching :8091 by any other route is
+		# still confined. Keep the two in sync -- route_policy.py is the authority, and
+		# tests/test_route_policy.py pins its contents.
 		@dashboardApiDeviceGet {
-			path /dashboard-api/devices/*/settings /dashboard-api/pin/exists /dashboard-api/habits /dashboard-api/habitshare-account
+			path /dashboard-api/devices/*/settings /dashboard-api/pin/exists /dashboard-api/habits
 			method GET
 			header Authorization *
 		}
@@ -294,7 +305,11 @@ http://192.168.0.254 {
 	handle /screenshot-classify {
 		reverse_proxy 127.0.0.1:8091
 	}
-	handle_path /review* {
+	# Explicit /review/* rather than a bare /review* wildcard, which overlapped the
+	# /review-data/* handler above. Caddy's specificity ordering resolved that correctly, but two
+	# routes overlapping by accident is a bad thing to leave load-bearing.
+	redir /review /review/ 308
+	handle_path /review/* {
 		root * /srv/review-dashboard
 		file_server
 	}
@@ -324,14 +339,21 @@ http://192.168.0.254 {
 	# route{} and why the bearer-passthrough check has to run before forward_auth -- including why
 	# it's a tight path+method allowlist rather than "any request with an Authorization header".
 	route {
-		# NOTE: /dashboard-api/pin (the raw plaintext PIN) is deliberately NOT in this GET
-		# allowlist -- see GUARDIAN_PIN_PATH's comment in lockprofile_service.py. Only
-		# /pin/exists (a boolean, no secret) and /pin/verify (POST, one guess in/correct-or-not
-		# out) are device-reachable. /habitshare-account GET IS the full credential (unlike
-		# /pin) -- see HABITSHARE_ACCOUNT_PATH's comment for why that's fine here: it's an
-		# unrelated third-party account, not a gate anything Otterling enforces depends on.
+		# NOTE: /dashboard-api/pin is deliberately NOT in this GET allowlist. It no longer
+		# returns the PIN value at all (see lockprofile_service.py -- it returns
+		# {configured, updatedAt}), but it stays guardian-only regardless. Only /pin/exists (a
+		# boolean) and /pin/verify (POST, one guess in / correct-or-not out) are device-reachable.
+		#
+		# /habitshare-account was removed from this list: it returns a third-party username AND
+		# password in plaintext, and no device code path fetches it, so device access bought
+		# nothing and cost a credential handed to the person being restrained.
+		#
+		# THIS LIST IS NO LONGER THE ONLY ENFORCEMENT. lockprofile_service.py now checks the same
+		# split itself via route_policy.py, so a request reaching :8091 by any other route is
+		# still confined. Keep the two in sync -- route_policy.py is the authority, and
+		# tests/test_route_policy.py pins its contents.
 		@dashboardApiDeviceGet {
-			path /dashboard-api/devices/*/settings /dashboard-api/pin/exists /dashboard-api/habits /dashboard-api/habitshare-account
+			path /dashboard-api/devices/*/settings /dashboard-api/pin/exists /dashboard-api/habits
 			method GET
 			header Authorization *
 		}
