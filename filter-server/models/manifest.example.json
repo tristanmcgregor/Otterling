@@ -11,7 +11,7 @@
   "stage2": {
     "name": "NudeNet-640m",
     "revision": "PINNED_REVISION",
-    "file": "nudenet_640m.onnx",
+    "file": "nudity_detector.onnx",
     "sha256": "REPLACE_WITH_REAL_SHA256",
     "license": "REPLACE_WITH_LICENSE_NAME",
     "export_format": "onnx"
