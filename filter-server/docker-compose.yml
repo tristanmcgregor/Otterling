@@ -168,11 +168,14 @@ services:
     command: python3 dns_classify_mux.py
 
   lockprofile:
-    # Built from lockprofile.Dockerfile (stock python:3.12-slim + onnxruntime/numpy/Pillow) --
-    # see that Dockerfile's header comment. Image is tagged and built via `docker compose build`;
-    # deploy_filter_server.sh runs `up -d --no-build` so a normal deploy reuses the already-built
-    # tag rather than rebuilding on every push.
-    image: otterling-lockprofile:latest
+    # Built from lockprofile.Dockerfile (stock python:3.12-slim + the Claude Code CLI + an
+    # unprivileged claude-runner account) -- see that Dockerfile's header comment. The CLI is kept
+    # available in this image for other AI-assisted functionality, even though
+    # nsfw_image_classifier.py's screenshot classifier (POST /screenshot-classify) no longer uses
+    # it -- that runs on onnx_nsfw_pipeline.py alone now. Image is tagged and built via
+    # `docker compose build`; deploy_filter_server.sh runs `up -d --no-build` so a normal deploy
+    # reuses the already-built tag rather than rebuilding on every push.
+    image: otterling-lockprofile-claude:latest
     build:
       context: .
       dockerfile: lockprofile.Dockerfile
@@ -191,6 +194,11 @@ services:
       # /data below) instead, specifically so a deploy can never revert it the way it used to.
       - ./report_types.json:/opt/otterling/report_types.json
       - ./lockprofile-data:/data
+      # Shared subprocess-invocation helper for the `claude -p` CLI call (env-stripping,
+      # CLAUDE_RUNNER_USER privilege drop) -- same file dns_classify_mux.py/mitm_nsfw_addon.py
+      # already mount. Not imported by nsfw_image_classifier.py (ONNX-only, no Claude fallback);
+      # kept mounted here for other AI-assisted functionality this container may add.
+      - ./ai_classifier.py:/opt/otterling/ai_classifier.py:ro
       - ./nsfw_image_classifier.py:/opt/otterling/nsfw_image_classifier.py:ro
       - ./onnx_nsfw_pipeline.py:/opt/otterling/onnx_nsfw_pipeline.py:ro
       # Empty until an operator drops converted .onnx files in per onnx_nsfw_pipeline.py's
