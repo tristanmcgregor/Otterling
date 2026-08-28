@@ -187,6 +187,15 @@ services:
       - "127.0.0.1:${LOCKPROFILE_PORT:-8091}:8091/tcp"
     volumes:
       - ./lockprofile_service.py:/opt/otterling/lockprofile_service.py:ro
+      # Device/guardian route-split policy lockprofile_service.py imports and enforces on every
+      # request (see its _authorized() / route_policy.governs() calls) -- missing this mount is a
+      # straight ModuleNotFoundError on import, crash-looping the whole container (and therefore
+      # every route on it, not just dashboard-api) before it can even bind LISTEN_PORT.
+      - ./route_policy.py:/opt/otterling/route_policy.py:ro
+      # Dashboard-session cookie minting/verification lockprofile_service.py imports (see
+      # /dashboard-auth/*, PIN-bound sessions) -- same "missing mount = ModuleNotFoundError at
+      # import time = whole container crash-loops" risk as route_policy.py above.
+      - ./session_token.py:/opt/otterling/session_token.py:ro
       # Read-write (though lockprofile_service.py no longer actually writes here -- see
       # REPORT_TYPES_OVERRIDES_PATH's comment there): ships each type's *default*
       # enabled/customMessage/suspicion. Git-tracked, so a release deploy overwrites it wholesale
