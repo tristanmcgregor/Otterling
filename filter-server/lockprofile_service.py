@@ -1208,7 +1208,7 @@ SCREENSHOT_REVIEW_HTML = """<!doctype html>
 </head>
 <body>
   <h1>Screenshot NSFW review</h1>
-  <div class="subtitle">Every device's classification activity and any screenshots flagged as NSFW -- see <code>filter-server/VISUAL_FILTERING.md</code>.</div>
+  <div class="subtitle">Every device's screenshot classification activity, and any screenshots flagged as NSFW.</div>
 
   <div id="error-banner" class="error-banner"></div>
   <div id="devices">Loading…</div>
