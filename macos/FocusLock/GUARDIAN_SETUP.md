@@ -19,6 +19,7 @@ This doc is the one-time setup to get there, plus the honest limits of the model
 The Guardian sets and resets this password manually here in System Settings, and sets the phone
 app's PIN by typing it in on the device directly.
 
+
 ## 2. Demote your own account to Standard
 
 1. **System Settings > Users & Groups**, select your account.
