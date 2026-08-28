@@ -58,7 +58,7 @@ INSTALL_PATH="/Applications/${APP_NAME}.app"
 # Must match FocusLockConstants.appVersionCode in Sources/FocusLockShared/Constants.swift -- kept
 # in sync by hand (see that constant's doc comment); UpdateManager compares against the Swift
 # constant, not this plist value, but they should always read the same to a human checking either.
-APP_VERSION="1"
+APP_VERSION="0.2"
 
 echo "==> Building with SwiftPM"
 swift build --package-path "$PROJECT_DIR"

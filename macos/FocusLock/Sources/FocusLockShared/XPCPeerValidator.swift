@@ -16,7 +16,7 @@ import Security
 /// HOW: the peer's pid is resolved to a `SecCode` and checked against a code requirement pinning
 /// (a) an Apple-issued signing chain, (b) this build's Team ID, and (c) one of our own signing
 /// identifiers. Verified against the real installed binaries -- `app.otterling` for the GUI app
-/// bundle and `otterlingctl` for the CLI, both Team `D4XJKWV7GY`, with `certificate
+/// bundle and `otterlingctl` for the CLI, both Team `FocusLockConstants.pinnedUpdateTeamID`, with `certificate
 /// leaf[subject.OU]` carrying the Team ID (NOT the parenthesized suffix in the certificate's
 /// common name -- see `FocusLockConstants.pinnedUpdateTeamID`'s doc comment for the two differing
 /// on this project's own certificate).
