@@ -166,9 +166,9 @@ public final class FocusLockXPCClient {
         }, onError: nil)
     }
 
-    public func installAvailableUpdate(passcode: String) async -> UpdateInstallResult {
+    public func installAvailableUpdate() async -> UpdateInstallResult {
         await withXPCContinuation({ resume, onError in
-            proxy(errorHandler: onError).installAvailableUpdate(passcode: passcode) { data in
+            proxy(errorHandler: onError).installAvailableUpdate { data in
                 resume(FocusLockCodec.decode(UpdateInstallResult.self, from: data) ?? .rejected("Malformed reply"))
             }
         }, onError: .rejected("Could not reach FocusLockHelperd"))

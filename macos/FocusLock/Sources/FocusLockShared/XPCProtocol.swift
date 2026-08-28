@@ -75,10 +75,11 @@ import Foundation
     /// replying (enough time for this reply to actually reach the caller first). Reply is an
     /// encoded `UpdateInstallResult`.
     ///
-    /// Passcode-gated, applied immediately: an update only ever moves the install forward to a
-    /// build the pinned Team ID vouches for. The gate is here because installing swaps the running
-    /// bundle and restarts both daemons, which is too close to the tamper surface to leave open.
-    func installAvailableUpdate(passcode: String, reply: @escaping (Data) -> Void)
+    /// Not passcode/admin-gated -- unlike the other state-changing calls, installing doesn't reduce
+    /// protection: UpdateManager's own trust chain (SHA-256 + pinned codesign Team ID + AI-review
+    /// attestation) is what actually decides what code can run here, so any account whose process
+    /// can reach this XPC service (see `XPCPeerValidator`) can trigger it.
+    func installAvailableUpdate(reply: @escaping (Data) -> Void)
 
     /// The privilege-elevation broker for once the Guardian's own macOS account is Standard (no
     /// direct sudo) -- see `SudoBroker.swift`'s doc comment for the full decision pipeline. No

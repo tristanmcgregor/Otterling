@@ -36,7 +36,7 @@ func printUsage() {
       otterlingctl clear-passcode                         (passcode)
 
       otterlingctl check-update
-      otterlingctl install-update                         (passcode)
+      otterlingctl install-update
 
       otterlingctl killswitch                              (emergency stop for the WHOLE app: clears
                                                             DNS/proxy/pf, stops the trigger-word
@@ -346,7 +346,7 @@ Task {
         }
 
     case "install-update":
-        switch await client.installAvailableUpdate(passcode: passcodeIfConfigured(await client.getStatus())) {
+        switch await client.installAvailableUpdate() {
         case .installedPendingRestart(let manifest):
             print("Installed \(manifest.versionName). Restarting the filter daemon now.")
         case .rejected(let reason):

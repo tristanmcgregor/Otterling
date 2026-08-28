@@ -248,12 +248,12 @@ final class FocusLockViewModel: NSObject, ObservableObject, UNUserNotificationCe
         }
     }
 
-    func installAvailableUpdate(passcode: String) {
+    func installAvailableUpdate() {
         guard pendingUpdateManifest != nil else { return }
         updateInstalling = true
         updateStatusText = "Downloading and verifying..."
         Task {
-            switch await client.installAvailableUpdate(passcode: passcode) {
+            switch await client.installAvailableUpdate() {
             case .installedPendingRestart(let manifest):
                 updateStatusText = "Installed \(manifest.versionName) -- restarting the filter daemon now."
                 updateAvailable = false

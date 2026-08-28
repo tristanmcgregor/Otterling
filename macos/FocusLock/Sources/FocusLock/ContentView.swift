@@ -500,9 +500,7 @@ struct ContentView: View {
                     .buttonStyle(OtterOutlined())
                     .disabled(viewModel.updateChecking || viewModel.updateInstalling)
                 if viewModel.updateAvailable {
-                    Button("Install update") {
-                        pendingPasscodeAction = { passcode in viewModel.installAvailableUpdate(passcode: passcode) }
-                    }
+                    Button("Install update") { viewModel.installAvailableUpdate() }
                         .buttonStyle(OtterFilled())
                         .disabled(viewModel.updateInstalling)
                 }

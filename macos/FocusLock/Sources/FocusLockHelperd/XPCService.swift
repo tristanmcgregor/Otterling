@@ -397,13 +397,14 @@ final class XPCService: NSObject, FocusLockXPCProtocol {
         }
     }
 
-    func installAvailableUpdate(passcode: String, reply: @escaping (Data) -> Void) {
-        // Installing (as opposed to just checking) restarts the daemon/watchdog and swaps the
-        // running app bundle -- gated the same as the other state-changing "remove/disable" calls.
-        if let denial = authorize(passcode: passcode, action: "install an update") {
-            reply(FocusLockCodec.encode(UpdateInstallResult.rejected(denial)))
-            return
-        }
+    func installAvailableUpdate(reply: @escaping (Data) -> Void) {
+        // Unlike the other state-changing calls (remove/disable), installing an update doesn't
+        // reduce protection -- UpdateManager's own trust chain (SHA-256 + pinned codesign Team ID +
+        // AI-review attestation) is what's actually gating what code can run here, independent of
+        // who's asking. So this deliberately skips `authorize()`: no admin-group requirement, no
+        // Guardian passcode -- any account whose process can reach this XPC service at all (see
+        // XPCPeerValidator, the actual security boundary here) can install an already-verified
+        // update.
         DispatchQueue.global().async {
             let host = self.stateStore.snapshot().cloudFilterHost
             // Never trusts a manifest the caller might supply -- re-checks against the real host.
