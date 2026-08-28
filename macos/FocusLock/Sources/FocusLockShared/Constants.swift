@@ -84,6 +84,20 @@ public enum FocusLockConstants {
     /// `Scripts/setup_mac_proxy.command`. Absent by default -> proxy enforcement stays inert.
     public static let proxyPasswordPath = "\(stateDirectory)/proxy_password"
 
+    /// World-readable (0644) copy of the mitmproxy CA cert, written next to state.json by
+    /// `Scripts/setup_mac_proxy.command`. `security add-trusted-cert` puts the same cert in the
+    /// System keychain, which is enough for GUI apps/browsers on macOS (they validate through
+    /// Security.framework) but NOT for Node/Python/Go CLI tools -- `curl`, `npm`, `pip`, and
+    /// critically the `claude` CLI itself all carry their own bundled root store (or, for Node,
+    /// read `NODE_EXTRA_CA_CERTS` instead of the Keychain) and have no idea this CA exists. Without
+    /// this file and `ShellProxyEnvManager` pointing those tools at it, turning on
+    /// `enable-proxy --force` makes every such CLI tool fail TLS verification against mitmproxy's
+    /// leaf certs -- indistinguishable, from the user's seat, from "network blocked" -- even though
+    /// browsers on the same Mac work fine. World-readable is required (not root-only, unlike
+    /// `proxyPasswordPath`): the console user's own CLI tools must be able to read it, and it's a
+    /// public certificate, not a secret (see filter-server/ca/README.md).
+    public static let proxyCACertPath = "\(stateDirectory)/proxy_ca.pem"
+
     /// PayloadIdentifier of the lock profile `Scripts/install_lock_profile.py` installs (matches
     /// `PROFILE_IDENTIFIER` in `filter-server/lockprofile_service.py`). A tamper *tripwire*, not a
     /// removal lock -- see GUARDIAN_SETUP.md §6. `LockProfileGuard` polls for this identifier's

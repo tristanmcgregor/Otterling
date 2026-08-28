@@ -129,7 +129,11 @@ def hand_off_to_system_settings(profile_bytes: bytes) -> None:
 
 
 def save_credentials(host: str, token: str) -> None:
-    os.makedirs(STATE_DIR, exist_ok=True, mode=0o700)
+    # 0o711, not 0o700: STATE_DIR also holds proxy_ca.pem (deliberately world-readable -- see
+    # Constants.swift's proxyCACertPath doc comment), which a non-root process can't reach at all
+    # if it can't even traverse into the directory. `--x` for group/other grants exactly
+    # traverse-by-known-name, not directory listing; this file's own 0o600 below is unaffected.
+    os.makedirs(STATE_DIR, exist_ok=True, mode=0o711)
     with open(TOKEN_PATH, "w", encoding="utf-8") as fh:
         fh.write(token)
     os.chmod(TOKEN_PATH, 0o600)

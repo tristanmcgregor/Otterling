@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import FocusLockShared
 
 /// Most CLI tools (the `claude` CLI, npm, pip, plain `curl` without `-x`, etc.) don't read macOS's
 /// system-wide Network proxy settings the way GUI apps/browsers do -- Node/Python/Go tooling
@@ -10,12 +11,22 @@ import Foundation
 /// startup files in sync with the exact same target/credentials `ProxyEnforcer` already uses for
 /// the system-wide GUI proxy setting, so opening a fresh terminal picks it up automatically.
 ///
+/// Getting routed through the proxy is only half of it: mitmproxy then MITMs the TLS connection
+/// and presents a leaf cert signed by its own CA. `setup_mac_proxy.command` trusts that CA in the
+/// System keychain, which covers GUI apps/browsers, but Node/Python-based CLI tools -- Claude Code
+/// among them -- validate against their own bundled root store instead (or, for Node, an
+/// `NODE_EXTRA_CA_CERTS` env var) and know nothing about the System keychain. Without also pointing
+/// those tools at `FocusLockConstants.proxyCACertPath`, every such tool fails TLS verification the
+/// moment force-through is on, which looks exactly like "the network is blocked" even though the
+/// system proxy setup is completely correct and browsers on the same Mac work fine.
+///
 /// Trade-off, confirmed accepted rather than silently assumed: this puts the proxy password in
 /// plaintext inside the user's shell startup files, which get sourced into every terminal
 /// session's environment -- a meaningfully wider exposure than the root-owned `proxy_password`
 /// file `ProxyEnforcer` reads from, since any process the user runs afterward could read it back
 /// out via its own environment. Accepted for the convenience of CLI tools (Claude Code among them)
-/// working automatically under firewall force-through.
+/// working automatically under firewall force-through. The CA cert path carries no equivalent
+/// secrecy trade-off -- it's a public certificate, not a credential (see filter-server/ca/README.md).
 ///
 /// Same "reapply every tick, only writing when something actually changed" pattern as every other
 /// enforcement in this daemon, not a one-time install step -- see `EnforcementLoop`'s call site.
@@ -51,7 +62,18 @@ enum ShellProxyEnvManager {
             // ever changes to include a reserved character like ':' or '@'.
             let encodedPassword = password.addingPercentEncoding(withAllowedCharacters: .urlPasswordAllowed) ?? password
             let proxyURL = "http://\(user):\(encodedPassword)@\(host):\(port)"
-            let block = "\(beginMarker)\nexport HTTPS_PROXY=\"\(proxyURL)\"\nexport HTTP_PROXY=\"\(proxyURL)\"\n\(endMarker)\n"
+            var lines = "export HTTPS_PROXY=\"\(proxyURL)\"\nexport HTTP_PROXY=\"\(proxyURL)\"\n"
+            // Only advertise the CA if setup_mac_proxy.command actually provisioned it -- an env
+            // var pointing at a missing file is worse than not setting it (some TLS stacks treat a
+            // present-but-unreadable/unparseable CA bundle as "trust nothing" rather than falling
+            // back to their default root store).
+            if FileManager.default.fileExists(atPath: FocusLockConstants.proxyCACertPath) {
+                let caPath = FocusLockConstants.proxyCACertPath
+                lines += "export NODE_EXTRA_CA_CERTS=\"\(caPath)\"\n"
+                lines += "export SSL_CERT_FILE=\"\(caPath)\"\n"
+                lines += "export REQUESTS_CA_BUNDLE=\"\(caPath)\"\n"
+            }
+            let block = "\(beginMarker)\n\(lines)\(endMarker)\n"
             desired = withoutBlock.isEmpty || withoutBlock.hasSuffix("\n") ? withoutBlock + block : withoutBlock + "\n" + block
         } else {
             desired = withoutBlock

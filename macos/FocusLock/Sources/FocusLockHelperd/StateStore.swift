@@ -19,10 +19,17 @@ final class StateStore {
     private static func ensureDirectory(for fileURL: URL) {
         let dir = fileURL.deletingLastPathComponent()
         if !FileManager.default.fileExists(atPath: dir.path) {
+            // 0711, not 0700: this directory also holds `proxyCACertPath`, a deliberately
+            // world-READABLE file (see its doc comment) that the console user's own shell/CLI
+            // tools must open directly by path. `--x` for group/other grants exactly that --
+            // traverse-to-a-known-name -- without granting `r` (no directory listing, so anyone
+            // stuck at 0700 can't enumerate what else lives in here). Individual files still carry
+            // their own restrictive mode (state.json, proxy_password, etc. stay 0600) -- this only
+            // changes whether the directory itself is a wall or a locked door with named keys.
             try? FileManager.default.createDirectory(
                 at: dir,
                 withIntermediateDirectories: true,
-                attributes: [.posixPermissions: 0o700]
+                attributes: [.posixPermissions: 0o711]
             )
         }
     }
