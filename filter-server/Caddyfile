@@ -32,6 +32,11 @@
 		# network_mode: host — webhook listens on the host, not host.docker.internal.
 		reverse_proxy 127.0.0.1:9070
 	}
+	# macOS build-agent poll/upload routes -- see webhook_server.py's module doc comment. Same
+	# process/port as /hooks/github above, just a different path prefix on the same listener.
+	handle /ci/* {
+		reverse_proxy 127.0.0.1:9070
+	}
 	handle_path /updates/* {
 		root * /srv/updates
 		file_server
@@ -250,6 +255,9 @@ http://192.168.0.254 {
 	bind 0.0.0.0
 
 	handle /hooks/github* {
+		reverse_proxy 127.0.0.1:9070
+	}
+	handle /ci/* {
 		reverse_proxy 127.0.0.1:9070
 	}
 	handle_path /updates/* {
