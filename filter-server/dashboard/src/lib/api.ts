@@ -33,6 +33,16 @@ export interface BlockedWebsite {
   addedAt: number;
 }
 
+// Android-only -- see AccountabilityPartnerSettings.kt/AccountabilityPartnerSync.kt. The phone
+// reconciles this against its own on-device list on its existing ~15-minute settings poll: adding
+// one here gets it added on-device (with the usual welcome SMS), removing one here gets it removed
+// on-device (with the usual removal SMS) -- same add/remove semantics as the phone's own in-app
+// Accountability Partners section, just triggerable remotely too.
+export interface AccountabilityPartner {
+  phone: string;
+  addedAt: number;
+}
+
 // Global, shared across every device (see lockprofile_service.py's HABITS_PATH) -- a rule on
 // ANY device can reference a habit verified on a different one. doneToday/hasProof/verifiedAt are
 // computed server-side from whichever device most recently reported this habit's completion.
@@ -160,6 +170,8 @@ export interface DeviceSettings {
   vpnFilter: { enabled: boolean };
   vpnBypassApps: BypassApp[];
   blockedWebsites: BlockedWebsite[];
+  // Android-only -- see AccountabilityPartner's doc comment above.
+  accountabilityPartners: AccountabilityPartner[];
   frictionDelay: { enabled: boolean; seconds: number };
   // habits/rules are NOT stored here -- both are global libraries (see api.getHabits() and
   // api.listRules() below). rules IS still included in every settings fetch, though: it's the
@@ -268,6 +280,17 @@ export const api = {
   removeWebsite: (deviceId: string, domain: string) =>
     request<{ blockedWebsites: BlockedWebsite[] }>(
       `/devices/${enc(deviceId)}/websites/${enc(domain)}`,
+      { method: "DELETE" }
+    ),
+
+  addPartner: (deviceId: string, phone: string) =>
+    request<{ accountabilityPartners: AccountabilityPartner[] }>(
+      `/devices/${enc(deviceId)}/partners`,
+      { method: "POST", body: JSON.stringify({ phone }) }
+    ),
+  removePartner: (deviceId: string, phone: string) =>
+    request<{ accountabilityPartners: AccountabilityPartner[] }>(
+      `/devices/${enc(deviceId)}/partners/${enc(phone)}`,
       { method: "DELETE" }
     ),
 

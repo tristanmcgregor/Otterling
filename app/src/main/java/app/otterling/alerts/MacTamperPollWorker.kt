@@ -51,6 +51,14 @@ class MacTamperPollWorker(context: Context, params: WorkerParameters) : Coroutin
         ReportConfigStore(applicationContext).refresh()
         // Same best-effort piggyback as ReportConfigStore above -- see SERVER_DRIVEN_CONFIG_PLAN.md.
         DashboardConfigStore(applicationContext).refresh()
+        // Reconciles this device's accountability-partner list against whatever the dashboard's
+        // Accountability screen says it should be -- must run right after the refresh() above so
+        // it sees this poll's snapshot, not a stale one. Best-effort, same as its neighbors here.
+        try {
+            AccountabilityPartnerSync(applicationContext).reconcile()
+        } catch (error: Exception) {
+            Log.w(TAG, "accountability partner sync failed", error)
+        }
         // Same best-effort piggyback -- see DashboardConfigStore.refreshPinExists's doc comment
         // for why this is a separate call rather than folded into refresh()'s cached snapshot.
         DashboardConfigStore(applicationContext).refreshPinExists()

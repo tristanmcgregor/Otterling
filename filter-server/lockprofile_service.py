@@ -124,6 +124,11 @@ LOGS_DIR = os.path.join(DATA_DIR, "logs")
 # _store_screenshot below. Under DATA_DIR (not a new top-level path) so it inherits
 # deploy_filter_server.sh's existing `--exclude 'lockprofile-data/'` rsync protection for free.
 SCREENSHOTS_DIR = os.path.join(DATA_DIR, "screenshots")
+# Lightweight per-device activity counters (total/safe/nsfw/error/skipped classifications, last
+# result) for every POST /screenshot-classify call -- unlike SCREENSHOTS_DIR, this tracks every
+# call, not just positive (NSFW) ones, and never stores image bytes. Backs the "is this actually
+# running" view in /screenshot-review/list -- see _record_screenshot_classification below.
+SCREENSHOT_STATS_PATH = os.path.join(DATA_DIR, "screenshot_stats.json")
 
 LISTEN_HOST = os.environ.get("LOCKPROFILE_LISTEN_HOST", "0.0.0.0")
 LISTEN_PORT = int(os.environ.get("LOCKPROFILE_LISTEN_PORT", "8091"))
@@ -549,6 +554,7 @@ REMOVED_DEVICES_PATH = os.path.join(DATA_DIR, "removed_devices.json")
 _state_lock = threading.Lock()
 _alerts_lock = threading.Lock()
 _settings_lock = threading.Lock()
+_screenshot_stats_lock = threading.Lock()
 _pin_lock = threading.Lock()
 _habits_lock = threading.Lock()
 _habit_completions_lock = threading.Lock()
@@ -1072,6 +1078,230 @@ def _list_device_logs() -> dict:
     return result
 
 
+# Guardian-facing GUI for GET /screenshot-review/list -- previously that route just returned the
+# raw {"devices": {...}} JSON _list_screenshots() produces, which meant "reviewing screenshots"
+# meant reading unformatted JSON in a browser tab. This is a plain server-rendered page (no
+# Node/build step, same "inline HTML string" approach as this file's other dynamic responses)
+# rather than a static file under a Caddy-mounted directory like dashboard/ or review-dashboard/,
+# since /screenshot-review/* is already a dynamic reverse-proxied route with its own cookie gate,
+# not a static asset mount. It fetches its data from GET /screenshot-review/data (see
+# _screenshot_review_payload) and renders each flagged image via the existing
+# GET /screenshot-review/<device_id>/<filename> route, both of which share this same cookie gate.
+SCREENSHOT_REVIEW_HTML = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Screenshot review</title>
+<meta name="robots" content="noindex, nofollow" />
+<style>
+  :root {
+    color-scheme: dark light;
+    --bg: #0f1115;
+    --panel: #171a21;
+    --panel-border: #262b36;
+    --text: #e6e9ef;
+    --text-dim: #9aa3b2;
+    --mono-bg: #0b0d11;
+    --safe: #3fb950;
+    --nsfw: #f85149;
+    --error: #d29922;
+    --skipped: #6e7681;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --panel-border: #e2e5ea;
+      --text: #1c2128;
+      --text-dim: #57606a;
+      --mono-bg: #f0f1f3;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    padding: 24px;
+    max-width: 1100px;
+    margin-inline: auto;
+  }
+  h1 { font-size: 1.35rem; margin: 0 0 4px; }
+  h2 { font-size: 1rem; margin: 0; }
+  .subtitle { color: var(--text-dim); font-size: 0.85rem; margin-bottom: 20px; }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 12px;
+    padding: 18px 20px;
+    margin-bottom: 16px;
+  }
+  .device-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 10px;
+  }
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 3px 10px;
+    border-radius: 999px;
+    background: var(--mono-bg);
+    border: 1px solid var(--panel-border);
+    font-size: 0.78rem;
+    color: var(--text-dim);
+    margin-right: 6px;
+    margin-bottom: 6px;
+  }
+  .chip.safe { color: var(--safe); }
+  .chip.nsfw { color: var(--nsfw); font-weight: 600; }
+  .chip.error { color: var(--error); }
+  .chip.skipped { color: var(--skipped); }
+  .meta { color: var(--text-dim); font-size: 0.82rem; margin-bottom: 10px; }
+  .gallery {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 12px;
+  }
+  .shot {
+    border: 1px solid var(--panel-border);
+    border-radius: 10px;
+    overflow: hidden;
+    background: var(--mono-bg);
+    text-decoration: none;
+    color: var(--text);
+    display: block;
+  }
+  .shot img {
+    width: 100%;
+    height: 140px;
+    object-fit: cover;
+    display: block;
+    background: var(--panel-border);
+  }
+  .shot-meta {
+    padding: 8px 10px;
+    font-size: 0.72rem;
+    color: var(--text-dim);
+    line-height: 1.5;
+    word-break: break-word;
+  }
+  .shot-meta .pkg { color: var(--text); font-weight: 600; display: block; }
+  .empty { color: var(--text-dim); font-size: 0.9rem; padding: 8px 0; }
+  .error-banner {
+    background: color-mix(in srgb, var(--nsfw) 15%, transparent);
+    border: 1px solid var(--nsfw);
+    color: var(--nsfw);
+    border-radius: 8px;
+    padding: 12px 16px;
+    font-size: 0.85rem;
+    margin-bottom: 16px;
+    display: none;
+  }
+  .refresh-note { color: var(--text-dim); font-size: 0.75rem; text-align: right; }
+</style>
+</head>
+<body>
+  <h1>Screenshot NSFW review</h1>
+  <div class="subtitle">Every device's classification activity and any screenshots flagged as NSFW -- see <code>filter-server/VISUAL_FILTERING.md</code>.</div>
+
+  <div id="error-banner" class="error-banner"></div>
+  <div id="devices">Loading…</div>
+  <div class="refresh-note" id="refresh-note"></div>
+
+<script>
+const POLL_MS = 10000;
+
+function escapeHtml(str) {
+  return String(str ?? "").replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[c]));
+}
+
+function formatTime(ms) {
+  if (!ms) return "never";
+  try { return new Date(ms).toLocaleString(); }
+  catch { return String(ms); }
+}
+
+function formatBytes(n) {
+  if (!n && n !== 0) return "";
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function renderDevice(device) {
+  const stats = device.stats || {};
+  const total = stats.total || 0;
+  const chips = [
+    total ? `<span class="chip">${total} classified</span>` : "",
+    stats.safe ? `<span class="chip safe">${stats.safe} safe</span>` : "",
+    stats.nsfw ? `<span class="chip nsfw">${stats.nsfw} NSFW</span>` : "",
+    stats.error ? `<span class="chip error">${stats.error} errored</span>` : "",
+    stats.skipped ? `<span class="chip skipped">${stats.skipped} skipped</span>` : "",
+  ].filter(Boolean).join("");
+
+  const metaParts = [];
+  if (stats.lastClassifiedAt) metaParts.push(`Last activity ${formatTime(stats.lastClassifiedAt)}`);
+  if (stats.lastPackageName) metaParts.push(`Last app <code>${escapeHtml(stats.lastPackageName)}</code>`);
+  if (stats.lastResult) metaParts.push(`Last result <strong>${escapeHtml(stats.lastResult)}</strong>`);
+
+  const shots = Array.isArray(device.screenshots) ? device.screenshots : [];
+  const gallery = shots.length
+    ? `<div class="gallery">${shots.map((s) => `
+        <a class="shot" href="${escapeHtml(s.url)}" target="_blank" rel="noreferrer">
+          <img loading="lazy" src="${escapeHtml(s.url)}" alt="Flagged screenshot" />
+          <div class="shot-meta">
+            <span class="pkg">${escapeHtml(s.filename)}</span>
+            ${formatTime(s.mtime * 1000)} · ${formatBytes(s.size)}
+          </div>
+        </a>`).join("")}</div>`
+    : '<div class="empty">No screenshots flagged for this device.</div>';
+
+  return `<div class="panel">
+    <div class="device-header">
+      <h2>${escapeHtml(device.deviceId)}</h2>
+    </div>
+    <div>${chips}</div>
+    <div class="meta">${metaParts.join(" · ") || "No classification activity recorded yet."}</div>
+    ${gallery}
+  </div>`;
+}
+
+async function refresh() {
+  const container = document.getElementById("devices");
+  const errorBanner = document.getElementById("error-banner");
+  try {
+    const res = await fetch("/screenshot-review/data", { cache: "no-store" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    const devices = Array.isArray(data.devices) ? data.devices : [];
+    container.innerHTML = devices.length
+      ? devices.map(renderDevice).join("")
+      : '<div class="panel"><div class="empty">No devices have uploaded a screenshot for classification yet.</div></div>';
+    errorBanner.style.display = "none";
+  } catch (error) {
+    errorBanner.textContent = `Could not load screenshot review data: ${error.message || error}`;
+    errorBanner.style.display = "block";
+  }
+  document.getElementById("refresh-note").textContent =
+    `Last checked ${new Date().toLocaleTimeString()} — refreshes every ${POLL_MS / 1000}s`;
+  setTimeout(refresh, POLL_MS);
+}
+
+refresh();
+</script>
+</body>
+</html>
+"""
+
+
 def _store_screenshot(device_id: str, package_name: str, image_bytes: bytes) -> str:
     """Writes an NSFW-flagged screenshot to SCREENSHOTS_DIR/<device_id>/, then prunes to the
     newest MAX_SCREENSHOT_FILES_PER_DEVICE for that device -- see POST /screenshot-classify.
@@ -1120,6 +1350,64 @@ def _list_screenshots() -> dict:
     return result
 
 
+def _load_screenshot_stats() -> dict:
+    try:
+        with open(SCREENSHOT_STATS_PATH, "r", encoding="utf-8") as fh:
+            return json.load(fh)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def _save_screenshot_stats(stats: dict) -> None:
+    os.makedirs(DATA_DIR, exist_ok=True)
+    tmp_path = SCREENSHOT_STATS_PATH + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as fh:
+        json.dump(stats, fh, indent=2, sort_keys=True)
+    os.replace(tmp_path, SCREENSHOT_STATS_PATH)
+
+
+def _record_screenshot_classification(device_id: str, package_name: str, result: str) -> None:
+    """Tracks lightweight per-device activity counters for every POST /screenshot-classify call --
+    unlike _store_screenshot (only ever called for a positive NSFW verdict), this runs for every
+    result (safe/nsfw/error/skipped) and never touches image bytes. This is what lets
+    /screenshot-review/list show the feature is actually receiving and classifying uploads even on
+    a device that has never been flagged."""
+    with _screenshot_stats_lock:
+        stats = _load_screenshot_stats()
+        record = stats.setdefault(device_id, {"total": 0, "safe": 0, "nsfw": 0, "error": 0, "skipped": 0})
+        record[result] = record.get(result, 0) + 1
+        record["total"] = record.get("total", 0) + 1
+        record["lastClassifiedAt"] = int(time.time() * 1000)
+        record["lastResult"] = result
+        record["lastPackageName"] = package_name
+        _save_screenshot_stats(stats)
+
+
+def _screenshot_review_payload() -> dict:
+    """Combines the flagged-screenshot file listing with the activity counters above into what
+    /screenshot-review/data (fetched by the /screenshot-review/list GUI) actually returns."""
+    files_by_device = _list_screenshots()
+    stats = _load_screenshot_stats()
+    devices = []
+    for device_id in sorted(set(files_by_device) | set(stats)):
+        files = sorted(files_by_device.get(device_id, []), key=lambda f: f["mtime"], reverse=True)
+        devices.append({
+            "deviceId": device_id,
+            "stats": stats.get(device_id, {}),
+            "screenshots": [
+                {
+                    "filename": f["filename"],
+                    "size": f["size"],
+                    "mtime": f["mtime"],
+                    "url": f"/screenshot-review/{device_id}/{f['filename']}",
+                }
+                for f in files
+            ],
+        })
+    devices.sort(key=lambda d: d["stats"].get("lastClassifiedAt", 0), reverse=True)
+    return {"devices": devices}
+
+
 # ─── Dashboard device settings (/dashboard-api/*) ──────────────────────────────────────────────
 # Backs the web dashboard at filter-server/dashboard/ (served by Caddy at /dashboard/, see
 # Caddyfile) -- a guardian-facing settings console, distinct from the mac/phone-facing routes
@@ -1145,6 +1433,14 @@ LIST_ENDPOINTS = {
     # (schg-locked), the inverse of blocked-apps. Meaningless for Android, same as protectedApps
     # not appearing in _default_device_settings() below.
     "protected-apps": ("protectedApps", "executableName"),
+    # Android-only -- see AccountabilityPartnerSettings.kt/AccountabilityPartnerSection.kt.
+    # DashboardConfigStore.refresh()'s existing GET .../settings poll picks this list up
+    # (embedded in the same settings blob as blockedWebsites etc.), and the phone reconciles it
+    # against its own on-device list (AccountabilityPartnerSync.kt): a phone-add-only merge, plus
+    # a removal SMS + local removal for any number the dashboard removed. Deliberately NOT in
+    # route_policy.py's DEVICE_BEARER_ROUTES -- same reasoning as websites/bypass-apps, the
+    # phone's own bearer token must not be able to add/remove its own accountability partners.
+    "partners": ("accountabilityPartners", "phone"),
 }
 
 # Mirrors MitmExemptManager.NEVER_EXEMPT_PACKAGES on the Android side (see
@@ -1863,6 +2159,8 @@ def _default_device_settings(device_id: str = "") -> dict:
         "triggerWords": [],
         "blockedApps": [],
         "protectedApps": [],
+        # Android-only -- see LIST_ENDPOINTS' "partners" entry comment.
+        "accountabilityPartners": [],
         # Android-only (screenshot capture + server-side classification, see POST
         # /screenshot-classify) -- default ON, matching every other protection field's
         # default-safe stance. Interval is dashboard-tunable so the capture cadence can change
@@ -2046,6 +2344,16 @@ def _build_list_item(kind: str, body: dict) -> dict | None:
             "bundlePath": bundle_path,
             "addedAt": time.time(),
         }
+    if kind == "partners":
+        phone = (body.get("phone") or "").strip()
+        # Permissive on formatting (spaces/dashes/parens alongside a leading "+" all pass through
+        # to GuardianSmsSender.kt untouched -- this is just enough validation to reject "" or
+        # obvious garbage, not a strict E.164 parser) but requires at least 7 digits, since that's
+        # the shortest a real phone number gets anywhere.
+        digit_count = sum(1 for c in phone if c.isdigit())
+        if not phone or digit_count < 7 or not re.fullmatch(r"[0-9+()\-\s]{7,20}", phone):
+            return None
+        return {"phone": phone, "addedAt": time.time()}
     if kind == "app-budgets":
         app_name = (body.get("appName") or "").strip()
         if not app_name:
@@ -2351,6 +2659,14 @@ class Handler(BaseHTTPRequestHandler):
         payload = json.dumps(body).encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def _send_html(self, code: int, html: str) -> None:
+        payload = html.encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
         self.wfile.write(payload)
@@ -2696,15 +3012,19 @@ class Handler(BaseHTTPRequestHandler):
             # without an app update even if a stale APK keeps uploading.
             settings = _device_settings(device_id)
             if not settings.get("visualFilterEnabled", True):
+                _record_screenshot_classification(device_id, package_name, "skipped")
                 return self._send_json(200, {"status": "ok", "classification": "skipped"})
 
             verdict = nsfw_image_classifier.classify_screenshot(image_bytes)
             if verdict is None:
                 _log(f"[lockprofile] screenshot classification failed/unavailable for {device_id}")
+                _record_screenshot_classification(device_id, package_name, "error")
                 return self._send_json(200, {"status": "ok", "classification": "error"})
             if not verdict:
+                _record_screenshot_classification(device_id, package_name, "safe")
                 return self._send_json(200, {"status": "ok", "classification": "safe"})
 
+            _record_screenshot_classification(device_id, package_name, "nsfw")
             _store_screenshot(device_id, package_name, image_bytes)
             # Alerting the guardian happens on-device (AlertReporter.report(), same local-SMS
             # pipeline as every other Android-detected type like WATCHED_APP/TRIGGER_WORD), not
@@ -3553,7 +3873,10 @@ class Handler(BaseHTTPRequestHandler):
                 })
 
         if parsed.path == "/screenshot-review/list":
-            return self._send_json(200, {"devices": _list_screenshots()})
+            return self._send_html(200, SCREENSHOT_REVIEW_HTML)
+
+        if parsed.path == "/screenshot-review/data":
+            return self._send_json(200, _screenshot_review_payload())
 
         if parsed.path.startswith("/screenshot-review/"):
             remainder = parsed.path[len("/screenshot-review/"):]

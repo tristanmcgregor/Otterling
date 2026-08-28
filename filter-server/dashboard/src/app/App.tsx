@@ -202,7 +202,7 @@ export default function App() {
       );
     }
     if (screen === "Accountability") {
-      return <AccountabilityScreen />;
+      return <AccountabilityScreen deviceId={deviceId} settings={settings} onChanged={reload} />;
     }
     if (!deviceId) {
       return <NoDeviceScreen devices={devices} />;
@@ -1592,27 +1592,45 @@ function GlobalRulesList({
 }
 
 // ─── Accountability ────────────────────────────────────────────────────────────
-// Fleet-wide, not scoped to whichever device is selected — everything about accountability
-// partners that isn't the phone number list itself (that's on-device only, see
-// AccountabilityPartnerSection.kt): the wording of the one-time welcome text they get, and Reports
-// (every kind of alert/report Otterling can send them, formerly a subsection of Global Settings).
-function AccountabilityScreen() {
+// Partners (this device's phone-number list) is device-scoped -- see AccountabilityPartner's doc
+// comment in lib/api.ts for how a dashboard add/remove reconciles onto the phone itself. Welcome
+// Message and Reports below stay fleet-wide: one welcome text and one report-type enablement list
+// shared by every device, not per-device settings.
+function AccountabilityScreen({
+  deviceId, settings, onChanged,
+}: {
+  deviceId: string;
+  settings: DeviceSettings | null;
+  onChanged: () => void;
+}) {
   return (
     <div className="p-7 max-w-[900px] space-y-6">
       <div>
         <h1 className="text-xl font-bold">Accountability</h1>
         <p className="text-sm text-on-surface-variant mt-0.5">
-          What accountability partners see and hear from Otterling — the one-time welcome text
-          they get, and every kind of report/alert that can follow it.
+          What accountability partners see and hear from Otterling — who gets alerted, the
+          one-time welcome text they get, and every kind of report/alert that can follow it.
         </p>
+      </div>
+
+      <div className="space-y-3">
+        <SectionLabel>Partners</SectionLabel>
+        <p className="text-xs text-on-surface-variant -mt-1">
+          Phone numbers for the currently selected device ({settings?.device_name || deviceId || "no device selected"}).
+          Adding one here sends it the welcome text below, same as adding it in the phone's own
+          Settings; removing one here sends the removal text and stops further alerts. Takes
+          effect on the phone within ~15 minutes (its next settings poll).
+        </p>
+        <AccountabilityPartnersPanel deviceId={deviceId} settings={settings} onChanged={onChanged} />
       </div>
 
       <div className="space-y-3">
         <SectionLabel>Welcome Message</SectionLabel>
         <p className="text-xs text-on-surface-variant -mt-1">
           Sent once, automatically, the first time a phone number is added as an accountability
-          partner (from the phone's own Settings). Explains what the SMS suspicion tags mean, so
-          a partner isn't guessing the first time a real alert arrives.
+          partner (from either the phone's own Settings or the Partners list above). Explains what
+          the SMS suspicion tags mean, so a partner isn't guessing the first time a real alert
+          arrives.
         </p>
         <WelcomeMessagePanel />
       </div>
@@ -1631,6 +1649,44 @@ function AccountabilityScreen() {
         <ReportTypesPanel />
       </div>
     </div>
+  );
+}
+
+function AccountabilityPartnersPanel({
+  deviceId, settings, onChanged,
+}: {
+  deviceId: string;
+  settings: DeviceSettings | null;
+  onChanged: () => void;
+}) {
+  if (!deviceId) {
+    return (
+      <Card className="rounded-2xl">
+        <p className="text-xs text-on-surface-variant">
+          Select a device (top of the sidebar) to manage its accountability partners.
+        </p>
+      </Card>
+    );
+  }
+  if (!settings) return <p className="text-xs text-on-surface-variant">Loading…</p>;
+  if (settings.platform !== "android") {
+    return (
+      <Card className="rounded-2xl">
+        <p className="text-xs text-on-surface-variant">
+          Accountability partners are an Android-only feature (SMS is sent from the phone's own SIM).
+        </p>
+      </Card>
+    );
+  }
+  return (
+    <Card className="rounded-2xl">
+      <TagList
+        items={settings.accountabilityPartners.map((p) => ({ id: p.phone, label: p.phone }))}
+        placeholder="+61..."
+        onAdd={(phone) => api.addPartner(deviceId, phone).then(onChanged)}
+        onRemove={(phone) => api.removePartner(deviceId, phone).then(onChanged)}
+      />
+    </Card>
   );
 }
 
