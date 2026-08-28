@@ -219,6 +219,11 @@ _stage1_session = None
 _stage2_session = None
 _ready = False
 _init_attempted = False
+# Human-readable reason the pipeline is NOT READY -- set at every `return False` branch in
+# initialize() below, read by nsfw_image_classifier.classify_screenshot() so a screenshot that
+# errors because of this (vs. a runtime classify() exception) gets a real reason attached instead
+# of just "unavailable". Stays whatever it was last set to; only meaningful when _ready is False.
+_not_ready_reason = "not initialized"
 
 
 def _sha256(path: str) -> str:
@@ -313,16 +318,20 @@ def initialize() -> bool:
     Returns True iff the pipeline is READY (both stages loaded and validated); False otherwise --
     never raises, since "models not ready yet" must never crash the server or block startup -- it
     just leaves screenshot classification unavailable."""
-    global _stage1_session, _stage2_session, _ready, _init_attempted
+    global _stage1_session, _stage2_session, _ready, _init_attempted, _not_ready_reason
     _init_attempted = True
     _ready = False
 
     if not ONNX_ENABLED:
-        log.info("ONNX NSFW pipeline disabled via NSFW_ONNX_ENABLED")
+        _not_ready_reason = "ONNX pipeline disabled via NSFW_ONNX_ENABLED"
+        log.info(_not_ready_reason)
         return False
     if not (CLASSIFIER_ENABLED and DETECTOR_ENABLED):
-        log.info("ONNX NSFW pipeline disabled: classifier_enabled=%s detector_enabled=%s -- "
-                  "both stages are required (section 8.1)", CLASSIFIER_ENABLED, DETECTOR_ENABLED)
+        _not_ready_reason = (
+            f"ONNX pipeline disabled: classifier_enabled={CLASSIFIER_ENABLED} "
+            f"detector_enabled={DETECTOR_ENABLED} -- both stages are required (section 8.1)"
+        )
+        log.info(_not_ready_reason)
         return False
 
     try:
@@ -330,14 +339,17 @@ def initialize() -> bool:
         import numpy  # noqa: F401
         from PIL import Image  # noqa: F401
     except ImportError as error:
-        log.info("ONNX NSFW pipeline unavailable: missing dependency (%s)", error)
+        _not_ready_reason = f"missing dependency: {error}"
+        log.info("ONNX NSFW pipeline unavailable: %s", _not_ready_reason)
         return False
 
     if not os.path.isfile(CLASSIFIER_PATH):
-        log.info("ONNX NSFW pipeline not ready: no Stage 1 model at %s", CLASSIFIER_PATH)
+        _not_ready_reason = f"no Stage 1 model at {CLASSIFIER_PATH}"
+        log.info("ONNX NSFW pipeline not ready: %s", _not_ready_reason)
         return False
     if not os.path.isfile(DETECTOR_PATH):
-        log.info("ONNX NSFW pipeline not ready: no Stage 2 model at %s", DETECTOR_PATH)
+        _not_ready_reason = f"no Stage 2 model at {DETECTOR_PATH}"
+        log.info("ONNX NSFW pipeline not ready: %s", _not_ready_reason)
         return False
 
     import onnxruntime
@@ -352,9 +364,11 @@ def initialize() -> bool:
         stage2 = onnxruntime.InferenceSession(DETECTOR_PATH, providers=["CPUExecutionProvider"])
         validate_stage2_metadata(stage2)
     except ModelValidationError as error:
+        _not_ready_reason = f"metadata/manifest validation failed: {error}"
         log.error("ONNX NSFW pipeline failed metadata/manifest validation, staying NOT READY: %s", error)
         return False
     except Exception as error:
+        _not_ready_reason = f"failed to load: {error}"
         log.error("ONNX NSFW pipeline failed to load, staying NOT READY: %s", error)
         return False
 
@@ -366,6 +380,13 @@ def initialize() -> bool:
         CLASSIFIER_MODEL_NAME, CLASSIFIER_VERSION, DETECTOR_MODEL_NAME, DETECTOR_VERSION,
     )
     return True
+
+
+def not_ready_reason() -> str:
+    """Human-readable reason the pipeline is currently NOT READY -- see _not_ready_reason's
+    comment. Meaningless (may be stale or the "not initialized" default) if available() is True;
+    callers must check that first."""
+    return _not_ready_reason
 
 
 def available() -> bool:

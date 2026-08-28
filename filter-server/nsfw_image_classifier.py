@@ -22,11 +22,13 @@ _REPEATED_FAILURE_LOG_THRESHOLD = 20
 _consecutive_pipeline_failures = 0
 
 
-def classify_screenshot(image_bytes: bytes) -> bool | None:
-    """Returns True if the screenshot is NSFW (should block + alert), False if safe, None if the
-    pipeline itself is unavailable or classification failed -- callers must fail *open* on None
-    (discard the image, don't block, don't alert) so an outage of this classifier can never itself
-    count as a false positive, matching ai_classifier.classify_with_ai's contract.
+def classify_screenshot(image_bytes: bytes) -> tuple[bool | None, str | None]:
+    """Returns (verdict, error_reason). verdict is True if the screenshot is NSFW (should block +
+    alert), False if safe, None if the pipeline itself is unavailable or classification failed --
+    callers must fail *open* on None (discard the image, don't block, don't alert) so an outage of
+    this classifier can never itself count as a false positive, matching
+    ai_classifier.classify_with_ai's contract. error_reason is a human-readable string whenever
+    verdict is None (surfaced on the dashboard's screenshot review page), and None otherwise.
 
     An internal UNCERTAIN pipeline verdict (section 7.3 -- e.g. one very-high-confidence tile with
     no corroborating region or Stage 2 evidence) resolves to a boolean via
@@ -34,8 +36,9 @@ def classify_screenshot(image_bytes: bytes) -> bool | None:
     evidence, so this never throws that evidence away."""
     global _consecutive_pipeline_failures
     if not onnx_nsfw_pipeline.available():
-        log.warning("ONNX pipeline not available; screenshot classification skipped")
-        return None
+        reason = onnx_nsfw_pipeline.not_ready_reason()
+        log.warning("ONNX pipeline not available; screenshot classification skipped (%s)", reason)
+        return None, reason
 
     try:
         result = onnx_nsfw_pipeline.classify(image_bytes)
@@ -49,17 +52,17 @@ def classify_screenshot(image_bytes: bytes) -> bool | None:
         )
         log.debug("ONNX pipeline diagnostics: %s", json.dumps(result.diagnostics()))
         if result.decision == onnx_nsfw_pipeline.DECISION_BLOCK:
-            return True
+            return True, None
         if result.decision == onnx_nsfw_pipeline.DECISION_ALLOW:
-            return False
+            return False, None
         # UNCERTAIN
         resolved = onnx_nsfw_pipeline.UNCERTAIN_POLICY == "block"
         log.info("ONNX pipeline UNCERTAIN, resolved via NSFW_UNCERTAIN_POLICY=%s -> %s",
                   onnx_nsfw_pipeline.UNCERTAIN_POLICY, resolved)
-        return resolved
+        return resolved, None
     except onnx_nsfw_pipeline.PipelineUnavailableError as error:
         _consecutive_pipeline_failures += 1
         log_fn = (log.error if _consecutive_pipeline_failures % _REPEATED_FAILURE_LOG_THRESHOLD == 0
                   else log.warning)
         log_fn("ONNX pipeline failed (%d consecutive): %s", _consecutive_pipeline_failures, error)
-        return None
+        return None, str(error)

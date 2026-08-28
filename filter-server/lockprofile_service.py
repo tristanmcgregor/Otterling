@@ -1205,6 +1205,7 @@ SCREENSHOT_REVIEW_HTML = """<!doctype html>
     word-break: break-word;
   }
   .shot-meta .pkg { color: var(--text); font-weight: 600; display: block; }
+  .shot-meta .reason { color: var(--error); margin-top: 4px; word-break: break-word; }
   .empty { color: var(--text-dim); font-size: 0.9rem; padding: 8px 0; }
   .error-banner {
     background: color-mix(in srgb, var(--nsfw) 15%, transparent);
@@ -1257,6 +1258,7 @@ function renderGallery(shots, altText, emptyText) {
           <div class="shot-meta">
             <span class="pkg">${escapeHtml(s.filename)}</span>
             ${formatTime(s.mtime * 1000)} · ${formatBytes(s.size)}
+            ${s.reason ? `<div class="reason">${escapeHtml(s.reason)}</div>` : ""}
           </div>
         </a>`).join("")}</div>`;
 }
@@ -1322,12 +1324,19 @@ refresh();
 """
 
 
-def _store_screenshot_in(root_dir: str, max_files: int, device_id: str, package_name: str, image_bytes: bytes) -> str:
+def _store_screenshot_in(
+    root_dir: str, max_files: int, device_id: str, package_name: str, image_bytes: bytes, reason: str | None = None,
+) -> str:
     """Writes a screenshot to root_dir/<device_id>/, then prunes to the newest max_files for that
     device. Shared by _store_screenshot (NSFW evidence, SCREENSHOTS_DIR) and
     _store_error_screenshot (classifier-error samples, SCREENSHOT_ERRORS_DIR) -- see
     POST /screenshot-classify. `package_name` is sanitized the same way _sanitize_installed_apps
-    caps a field, since it becomes part of a filename below."""
+    caps a field, since it becomes part of a filename below.
+
+    `reason`, when given, is written to a same-name `.txt` sidecar (e.g. "foo.jpg" ->
+    "foo.jpg.txt") -- see _list_screenshots_in for how that's read back. Pruning below counts
+    only `.jpg` files toward max_files (a sidecar doesn't count as a second "screenshot") and
+    always removes a pruned image's sidecar alongside it, so the two can never desync."""
     safe_package = "".join(c for c in package_name if c.isalnum() or c in "._-")[:200] or "unknown"
     device_dir = os.path.join(root_dir, device_id)
     os.makedirs(device_dir, exist_ok=True)
@@ -1341,12 +1350,16 @@ def _store_screenshot_in(root_dir: str, max_files: int, device_id: str, package_
         counter += 1
     with open(path, "wb") as fh:
         fh.write(image_bytes)
-    existing = sorted(os.listdir(device_dir))
-    for stale in existing[: max(0, len(existing) - max_files)]:
-        try:
-            os.remove(os.path.join(device_dir, stale))
-        except OSError:
-            pass
+    if reason:
+        with open(path + ".txt", "w", encoding="utf-8") as fh:
+            fh.write(reason[:500])
+    existing_images = sorted(f for f in os.listdir(device_dir) if f.endswith(".jpg"))
+    for stale in existing_images[: max(0, len(existing_images) - max_files)]:
+        for target in (stale, stale + ".txt"):
+            try:
+                os.remove(os.path.join(device_dir, target))
+            except OSError:
+                pass
     return filename
 
 
@@ -1356,16 +1369,20 @@ def _store_screenshot(device_id: str, package_name: str, image_bytes: bytes) -> 
     return _store_screenshot_in(SCREENSHOTS_DIR, MAX_SCREENSHOT_FILES_PER_DEVICE, device_id, package_name, image_bytes)
 
 
-def _store_error_screenshot(device_id: str, package_name: str, image_bytes: bytes) -> str:
-    """Only ever called when classify_screenshot() returns None (pipeline unavailable/exception) --
-    see MAX_ERROR_SCREENSHOT_FILES_PER_DEVICE's comment for why this keeps far fewer than
-    _store_screenshot's NSFW evidence."""
+def _store_error_screenshot(device_id: str, package_name: str, image_bytes: bytes, reason: str | None) -> str:
+    """Only ever called when classify_screenshot() returns a None verdict (pipeline
+    unavailable/exception) -- see MAX_ERROR_SCREENSHOT_FILES_PER_DEVICE's comment for why this
+    keeps far fewer than _store_screenshot's NSFW evidence. `reason` is classify_screenshot()'s
+    error_reason, saved alongside the image so the review page can show why, not just that."""
     return _store_screenshot_in(
-        SCREENSHOT_ERRORS_DIR, MAX_ERROR_SCREENSHOT_FILES_PER_DEVICE, device_id, package_name, image_bytes
+        SCREENSHOT_ERRORS_DIR, MAX_ERROR_SCREENSHOT_FILES_PER_DEVICE, device_id, package_name, image_bytes,
+        reason=reason,
     )
 
 
 def _list_screenshots_in(root_dir: str) -> dict:
+    """`.jpg.txt` sidecars (see _store_screenshot_in's `reason` param) are read into each entry's
+    `reason` key, not listed as their own file -- only SCREENSHOT_ERRORS_DIR ever has any."""
     if not os.path.isdir(root_dir):
         return {}
     result = {}
@@ -1375,12 +1392,20 @@ def _list_screenshots_in(root_dir: str) -> dict:
             continue
         files = []
         for filename in sorted(os.listdir(device_dir)):
+            if not filename.endswith(".jpg"):
+                continue
             path = os.path.join(device_dir, filename)
             try:
                 stat = os.stat(path)
             except OSError:
                 continue
-            files.append({"filename": filename, "size": stat.st_size, "mtime": stat.st_mtime})
+            entry = {"filename": filename, "size": stat.st_size, "mtime": stat.st_mtime}
+            try:
+                with open(path + ".txt", "r", encoding="utf-8") as fh:
+                    entry["reason"] = fh.read().strip()
+            except OSError:
+                pass
+            files.append(entry)
         result[device_id] = files
     return result
 
@@ -1454,6 +1479,7 @@ def _screenshot_review_payload() -> dict:
                     "size": f["size"],
                     "mtime": f["mtime"],
                     "url": f"/screenshot-review/errors/{device_id}/{f['filename']}",
+                    "reason": f.get("reason", ""),
                 }
                 for f in error_files
             ],
@@ -3071,11 +3097,11 @@ class Handler(BaseHTTPRequestHandler):
                 _record_screenshot_classification(device_id, package_name, "skipped")
                 return self._send_json(200, {"status": "ok", "classification": "skipped"})
 
-            verdict = nsfw_image_classifier.classify_screenshot(image_bytes)
+            verdict, error_reason = nsfw_image_classifier.classify_screenshot(image_bytes)
             if verdict is None:
-                _log(f"[lockprofile] screenshot classification failed/unavailable for {device_id}")
+                _log(f"[lockprofile] screenshot classification failed/unavailable for {device_id}: {error_reason}")
                 _record_screenshot_classification(device_id, package_name, "error")
-                _store_error_screenshot(device_id, package_name, image_bytes)
+                _store_error_screenshot(device_id, package_name, image_bytes, error_reason)
                 return self._send_json(200, {"status": "ok", "classification": "error"})
             if not verdict:
                 _record_screenshot_classification(device_id, package_name, "safe")
