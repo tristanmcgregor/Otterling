@@ -124,6 +124,13 @@ LOGS_DIR = os.path.join(DATA_DIR, "logs")
 # _store_screenshot below. Under DATA_DIR (not a new top-level path) so it inherits
 # deploy_filter_server.sh's existing `--exclude 'lockprofile-data/'` rsync protection for free.
 SCREENSHOTS_DIR = os.path.join(DATA_DIR, "screenshots")
+# Screenshots the classifier failed to classify at all (pipeline unavailable, ONNX exception,
+# etc.) -- unlike SCREENSHOTS_DIR, these are NOT a positive NSFW finding, just whatever app
+# happened to be open when classification errored, so a much smaller retention cap
+# (MAX_ERROR_SCREENSHOT_FILES_PER_DEVICE) applies. Exists so a 100%-erroring pipeline is
+# debuggable from the dashboard (see /screenshot-review/list) instead of only showing an "N
+# errored" count with nothing to actually look at.
+SCREENSHOT_ERRORS_DIR = os.path.join(DATA_DIR, "screenshot_errors")
 # Lightweight per-device activity counters (total/safe/nsfw/error/skipped classifications, last
 # result) for every POST /screenshot-classify call -- unlike SCREENSHOTS_DIR, this tracks every
 # call, not just positive (NSFW) ones, and never stores image bytes. Backs the "is this actually
@@ -375,6 +382,11 @@ MAX_SCREENSHOT_BODY_BYTES = 6 * 1024 * 1024
 # Only NSFW-classified screenshots are ever stored (see _store_screenshot) -- this is a "recent
 # incidents" cap, not a full history, so a much lower number than MAX_LOG_FILES_PER_DEVICE is fine.
 MAX_SCREENSHOT_FILES_PER_DEVICE = 50
+# Errored screenshots can arrive far more often than genuine NSFW hits (e.g. the whole classifier
+# pipeline down -- every single upload errors), so this stays well below
+# MAX_SCREENSHOT_FILES_PER_DEVICE: enough recent samples to debug why, not a running log of
+# whatever the device owner had on screen.
+MAX_ERROR_SCREENSHOT_FILES_PER_DEVICE = 12
 # Phone device ids come from Settings.Secure.ANDROID_ID -- always a 16-char lowercase hex string
 # in practice -- but _list_known_device_ids() also surfaces ids from non-phone reporters sharing
 # this same alerts/settings storage (e.g. IntegrityReporter.swift's Mac hostnames/IPs), which
@@ -1130,6 +1142,7 @@ SCREENSHOT_REVIEW_HTML = """<!doctype html>
   }
   h1 { font-size: 1.35rem; margin: 0 0 4px; }
   h2 { font-size: 1rem; margin: 0; }
+  .section-heading { font-size: 0.8rem; color: var(--error); margin: 16px 0 8px; text-transform: uppercase; letter-spacing: 0.03em; }
   .subtitle { color: var(--text-dim); font-size: 0.85rem; margin-bottom: 20px; }
   .panel {
     background: var(--panel);
@@ -1236,6 +1249,18 @@ function formatBytes(n) {
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function renderGallery(shots, altText, emptyText) {
+  if (!shots.length) return `<div class="empty">${emptyText}</div>`;
+  return `<div class="gallery">${shots.map((s) => `
+        <a class="shot" href="${escapeHtml(s.url)}" target="_blank" rel="noreferrer">
+          <img loading="lazy" src="${escapeHtml(s.url)}" alt="${escapeHtml(altText)}" />
+          <div class="shot-meta">
+            <span class="pkg">${escapeHtml(s.filename)}</span>
+            ${formatTime(s.mtime * 1000)} · ${formatBytes(s.size)}
+          </div>
+        </a>`).join("")}</div>`;
+}
+
 function renderDevice(device) {
   const stats = device.stats || {};
   const total = stats.total || 0;
@@ -1253,16 +1278,7 @@ function renderDevice(device) {
   if (stats.lastResult) metaParts.push(`Last result <strong>${escapeHtml(stats.lastResult)}</strong>`);
 
   const shots = Array.isArray(device.screenshots) ? device.screenshots : [];
-  const gallery = shots.length
-    ? `<div class="gallery">${shots.map((s) => `
-        <a class="shot" href="${escapeHtml(s.url)}" target="_blank" rel="noreferrer">
-          <img loading="lazy" src="${escapeHtml(s.url)}" alt="Flagged screenshot" />
-          <div class="shot-meta">
-            <span class="pkg">${escapeHtml(s.filename)}</span>
-            ${formatTime(s.mtime * 1000)} · ${formatBytes(s.size)}
-          </div>
-        </a>`).join("")}</div>`
-    : '<div class="empty">No screenshots flagged for this device.</div>';
+  const errorShots = Array.isArray(device.errorScreenshots) ? device.errorScreenshots : [];
 
   return `<div class="panel">
     <div class="device-header">
@@ -1270,7 +1286,11 @@ function renderDevice(device) {
     </div>
     <div>${chips}</div>
     <div class="meta">${metaParts.join(" · ") || "No classification activity recorded yet."}</div>
-    ${gallery}
+    ${renderGallery(shots, "Flagged screenshot", "No screenshots flagged for this device.")}
+    ${errorShots.length || stats.error ? `
+    <h3 class="section-heading">Errored (classifier failed on these)</h3>
+    ${renderGallery(errorShots, "Screenshot the classifier failed on", "No error samples saved yet.")}
+    ` : ""}
   </div>`;
 }
 
@@ -1302,14 +1322,14 @@ refresh();
 """
 
 
-def _store_screenshot(device_id: str, package_name: str, image_bytes: bytes) -> str:
-    """Writes an NSFW-flagged screenshot to SCREENSHOTS_DIR/<device_id>/, then prunes to the
-    newest MAX_SCREENSHOT_FILES_PER_DEVICE for that device -- see POST /screenshot-classify.
-    Only ever called for a positive (NSFW) classification result; a safe/error result is never
-    written to disk at all. `package_name` is sanitized the same way _sanitize_installed_apps
+def _store_screenshot_in(root_dir: str, max_files: int, device_id: str, package_name: str, image_bytes: bytes) -> str:
+    """Writes a screenshot to root_dir/<device_id>/, then prunes to the newest max_files for that
+    device. Shared by _store_screenshot (NSFW evidence, SCREENSHOTS_DIR) and
+    _store_error_screenshot (classifier-error samples, SCREENSHOT_ERRORS_DIR) -- see
+    POST /screenshot-classify. `package_name` is sanitized the same way _sanitize_installed_apps
     caps a field, since it becomes part of a filename below."""
     safe_package = "".join(c for c in package_name if c.isalnum() or c in "._-")[:200] or "unknown"
-    device_dir = os.path.join(SCREENSHOTS_DIR, device_id)
+    device_dir = os.path.join(root_dir, device_id)
     os.makedirs(device_dir, exist_ok=True)
     stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
     filename = f"{stamp}-{safe_package}.jpg"
@@ -1322,7 +1342,7 @@ def _store_screenshot(device_id: str, package_name: str, image_bytes: bytes) -> 
     with open(path, "wb") as fh:
         fh.write(image_bytes)
     existing = sorted(os.listdir(device_dir))
-    for stale in existing[: max(0, len(existing) - MAX_SCREENSHOT_FILES_PER_DEVICE)]:
+    for stale in existing[: max(0, len(existing) - max_files)]:
         try:
             os.remove(os.path.join(device_dir, stale))
         except OSError:
@@ -1330,12 +1350,27 @@ def _store_screenshot(device_id: str, package_name: str, image_bytes: bytes) -> 
     return filename
 
 
-def _list_screenshots() -> dict:
-    if not os.path.isdir(SCREENSHOTS_DIR):
+def _store_screenshot(device_id: str, package_name: str, image_bytes: bytes) -> str:
+    """Only ever called for a positive (NSFW) classification result; a safe/error result is never
+    written here at all -- see _store_error_screenshot for the separate error-sample path."""
+    return _store_screenshot_in(SCREENSHOTS_DIR, MAX_SCREENSHOT_FILES_PER_DEVICE, device_id, package_name, image_bytes)
+
+
+def _store_error_screenshot(device_id: str, package_name: str, image_bytes: bytes) -> str:
+    """Only ever called when classify_screenshot() returns None (pipeline unavailable/exception) --
+    see MAX_ERROR_SCREENSHOT_FILES_PER_DEVICE's comment for why this keeps far fewer than
+    _store_screenshot's NSFW evidence."""
+    return _store_screenshot_in(
+        SCREENSHOT_ERRORS_DIR, MAX_ERROR_SCREENSHOT_FILES_PER_DEVICE, device_id, package_name, image_bytes
+    )
+
+
+def _list_screenshots_in(root_dir: str) -> dict:
+    if not os.path.isdir(root_dir):
         return {}
     result = {}
-    for device_id in sorted(os.listdir(SCREENSHOTS_DIR)):
-        device_dir = os.path.join(SCREENSHOTS_DIR, device_id)
+    for device_id in sorted(os.listdir(root_dir)):
+        device_dir = os.path.join(root_dir, device_id)
         if not os.path.isdir(device_dir):
             continue
         files = []
@@ -1348,6 +1383,14 @@ def _list_screenshots() -> dict:
             files.append({"filename": filename, "size": stat.st_size, "mtime": stat.st_mtime})
         result[device_id] = files
     return result
+
+
+def _list_screenshots() -> dict:
+    return _list_screenshots_in(SCREENSHOTS_DIR)
+
+
+def _list_error_screenshots() -> dict:
+    return _list_screenshots_in(SCREENSHOT_ERRORS_DIR)
 
 
 def _load_screenshot_stats() -> dict:
@@ -1387,10 +1430,12 @@ def _screenshot_review_payload() -> dict:
     """Combines the flagged-screenshot file listing with the activity counters above into what
     /screenshot-review/data (fetched by the /screenshot-review/list GUI) actually returns."""
     files_by_device = _list_screenshots()
+    error_files_by_device = _list_error_screenshots()
     stats = _load_screenshot_stats()
     devices = []
-    for device_id in sorted(set(files_by_device) | set(stats)):
+    for device_id in sorted(set(files_by_device) | set(error_files_by_device) | set(stats)):
         files = sorted(files_by_device.get(device_id, []), key=lambda f: f["mtime"], reverse=True)
+        error_files = sorted(error_files_by_device.get(device_id, []), key=lambda f: f["mtime"], reverse=True)
         devices.append({
             "deviceId": device_id,
             "stats": stats.get(device_id, {}),
@@ -1402,6 +1447,15 @@ def _screenshot_review_payload() -> dict:
                     "url": f"/screenshot-review/{device_id}/{f['filename']}",
                 }
                 for f in files
+            ],
+            "errorScreenshots": [
+                {
+                    "filename": f["filename"],
+                    "size": f["size"],
+                    "mtime": f["mtime"],
+                    "url": f"/screenshot-review/errors/{device_id}/{f['filename']}",
+                }
+                for f in error_files
             ],
         })
     devices.sort(key=lambda d: d["stats"].get("lastClassifiedAt", 0), reverse=True)
@@ -2994,9 +3048,11 @@ class Handler(BaseHTTPRequestHandler):
 
         if self.path == "/screenshot-classify":
             # See FocusGuardAccessibilityService.kt's screenshot-capture path and
-            # ScreenshotUploader.kt. A SAFE or classifier-error result is discarded immediately
-            # (decoded into memory, never written to disk) -- only a positive NSFW result is
-            # persisted, as evidence for the guardian (see /screenshot-review/* below).
+            # ScreenshotUploader.kt. A SAFE result is discarded immediately (decoded into memory,
+            # never written to disk); a positive NSFW result is persisted as evidence for the
+            # guardian (see /screenshot-review/* below); an error result also gets a small, capped
+            # sample persisted (SCREENSHOT_ERRORS_DIR) so a broken classifier is debuggable from
+            # the dashboard instead of only showing an opaque error count.
             body = self._read_json_body(MAX_SCREENSHOT_BODY_BYTES)
             device_id = _safe_device_id((body or {}).get("device_id", "").strip())
             package_name = (body or {}).get("package_name", "").strip() if body else ""
@@ -3019,6 +3075,7 @@ class Handler(BaseHTTPRequestHandler):
             if verdict is None:
                 _log(f"[lockprofile] screenshot classification failed/unavailable for {device_id}")
                 _record_screenshot_classification(device_id, package_name, "error")
+                _store_error_screenshot(device_id, package_name, image_bytes)
                 return self._send_json(200, {"status": "ok", "classification": "error"})
             if not verdict:
                 _record_screenshot_classification(device_id, package_name, "safe")
@@ -3877,6 +3934,29 @@ class Handler(BaseHTTPRequestHandler):
 
         if parsed.path == "/screenshot-review/data":
             return self._send_json(200, _screenshot_review_payload())
+
+        # Error-sample screenshots (see _store_error_screenshot) -- own prefix, not the generic
+        # /screenshot-review/<device_id>/<filename> fallback below, so "errors" never collides
+        # with a real device_id.
+        if parsed.path.startswith("/screenshot-review/errors/"):
+            remainder = parsed.path[len("/screenshot-review/errors/"):]
+            parts = remainder.split("/", 1)
+            if len(parts) != 2:
+                return self._send_json(404, {"error": "not found"})
+            device_id, filename = parts
+            if not DEVICE_ID_RE.match(device_id) or "/" in filename or ".." in filename:
+                return self._send_json(400, {"error": "invalid path"})
+            path = os.path.join(SCREENSHOT_ERRORS_DIR, device_id, filename)
+            if not os.path.isfile(path):
+                return self._send_json(404, {"error": "not found"})
+            with open(path, "rb") as fh:
+                content = fh.read()
+            self.send_response(200)
+            self.send_header("Content-Type", "image/jpeg")
+            self.send_header("Content-Length", str(len(content)))
+            self.end_headers()
+            self.wfile.write(content)
+            return
 
         if parsed.path.startswith("/screenshot-review/"):
             remainder = parsed.path[len("/screenshot-review/"):]
