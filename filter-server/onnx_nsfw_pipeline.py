@@ -4,18 +4,16 @@ Implements the architecture from the NSFW Pretrained Model Integration Migration
 to the original NSFW Screenshot Classifier Integration Plan): a fast Stage 1 binary classifier
 (Falconsai nsfw_image_detection_26) over the full screenshot plus overlapping tiles, escalating
 ambiguous/high-risk regions to a Stage 2 nudity object detector (NudeNet 640m), fused by an
-explicit policy rather than an averaged score. See `nsfw_image_classifier.py`'s docstring for the
-sibling Claude-vision path this supplements.
+explicit policy rather than an averaged score. See `nsfw_image_classifier.py`, which calls this
+pipeline directly and reports classification unavailable (fails open) if it isn't ready.
 
 Deliberately server-side, not on-device (guardian/product decision: keep screenshot classification
-off the phone entirely to save battery). The screenshot is already uploaded to
-`/screenshot-classify` (ScreenshotUploader.kt) for the existing Claude-vision classifier, so this
-module just gives that route a second, cheaper/faster classifier to try first. Only `onnxruntime`,
-`numpy`, and `Pillow` are required at runtime -- no torch/HF/nudenet package.
+off the phone entirely to save battery). Only `onnxruntime`, `numpy`, and `Pillow` are required at
+runtime -- no torch/HF/nudenet package.
 
 MODEL FILES ARE NOT BUNDLED. This module is a pluggable scaffold: `initialize()` loads whatever
 `.onnx` files are configured at NSFW_CLASSIFIER_PATH / NSFW_DETECTOR_PATH and leaves the pipeline
-NOT READY (Claude fallback stays active) until both exist, validate, and load successfully. See
+NOT READY (screenshot classification unavailable) until both exist, validate, and load successfully. See
 "Bringing your own models" below for exactly what to drop in -- obtaining the actual artifacts
 (accepting Falconsai's gated-repo terms, downloading NudeNet 640m, recording their licenses) is a
 manual, one-time operator task this module cannot perform for you: it requires a Hugging Face
@@ -57,7 +55,7 @@ Optional but recommended -- pin both with a manifest (section 9.2 of the plan): 
 `models/manifest.json` shaped like:
     {"stage1": {"sha256": "..."}, "stage2": {"sha256": "..."}}
 `initialize()` verifies each configured file's SHA-256 against the manifest before loading, and
-fails closed (pipeline NOT READY, Claude fallback stays active) on a mismatch -- this is what
+fails closed (pipeline NOT READY, classification stays unavailable) on a mismatch -- this is what
 catches an accidental/unauthorized model swap silently changing moderation behavior.
 
 Neither of the above -- nor picking a real threshold -- is something this file can do for you.
@@ -313,8 +311,8 @@ def initialize() -> bool:
     Call this once at process startup (see lockprofile_service.main()); classify()/available()
     also call it lazily on first use so ad-hoc scripts and tests don't need to remember to.
     Returns True iff the pipeline is READY (both stages loaded and validated); False otherwise --
-    never raises, since "models not ready yet" must never crash the server or block startup, only
-    keep the Claude fallback active."""
+    never raises, since "models not ready yet" must never crash the server or block startup -- it
+    just leaves screenshot classification unavailable."""
     global _stage1_session, _stage2_session, _ready, _init_attempted
     _init_attempted = True
     _ready = False

@@ -115,16 +115,14 @@ def _run_claude(
     args: list[str],
     prompt: str,
     oauth_token: str | None = None,
-    timeout: float = CLAUDE_TIMEOUT_SECONDS,
-    cwd: str = _CLAUDE_CWD,
 ) -> subprocess.CompletedProcess:
     return subprocess.run(
         args,
         input=prompt,
         capture_output=True,
         text=True,
-        timeout=timeout,
-        cwd=cwd,
+        timeout=CLAUDE_TIMEOUT_SECONDS,
+        cwd=_CLAUDE_CWD,
         **_claude_subprocess_kwargs(oauth_token),
     )
 
@@ -133,20 +131,16 @@ def _run_claude_with_fallback(
     args: list[str],
     prompt: str,
     context: str,
-    timeout: float = CLAUDE_TIMEOUT_SECONDS,
-    cwd: str = _CLAUDE_CWD,
 ) -> subprocess.CompletedProcess | None:
     """Runs `claude` against CLAUDE_CODE_OAUTH_TOKEN (the ambient env var, untouched); if that
     attempt doesn't cleanly exit 0 -- including the primary account hitting its subscription
     usage/session limit, which surfaces as an ordinary non-zero exit, not a distinct error -- and
     CLAUDE_CODE_OAUTH_TOKEN_BACKUP is set to a *different* token, retries once against the backup
-    before giving up. [timeout]/[cwd] let nsfw_image_classifier.py reuse this with its own longer
-    timeout and same fixed cwd, instead of duplicating the fallback logic. Returns whichever
-    CompletedProcess is the more useful result to log/inspect (the backup's, if a retry happened;
-    otherwise the primary's), or None only if every attempt made raised before producing one
-    (missing `claude` binary, a timeout)."""
+    before giving up. Returns whichever CompletedProcess is the more useful result to log/inspect
+    (the backup's, if a retry happened; otherwise the primary's), or None only if every attempt
+    made raised before producing one (missing `claude` binary, a timeout)."""
     try:
-        process = _run_claude(args, prompt, timeout=timeout, cwd=cwd)
+        process = _run_claude(args, prompt)
     except Exception as error:
         log.warning("claude -p failed to start for %s (primary token): %s", context, error)
         process = None
@@ -163,7 +157,7 @@ def _run_claude_with_fallback(
 
     log.warning("Retrying %s against CLAUDE_CODE_OAUTH_TOKEN_BACKUP", context)
     try:
-        return _run_claude(args, prompt, oauth_token=CLAUDE_CODE_OAUTH_TOKEN_BACKUP, timeout=timeout, cwd=cwd)
+        return _run_claude(args, prompt, oauth_token=CLAUDE_CODE_OAUTH_TOKEN_BACKUP)
     except Exception as error:
         log.warning("claude -p failed to start for %s (backup token): %s", context, error)
         return process

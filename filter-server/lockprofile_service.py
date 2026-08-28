@@ -3596,8 +3596,8 @@ def main() -> None:
     # blocked the HTTP server from ever binding -- taking down every route on this process,
     # including /dashboard-auth/*, with nothing at all listening on LISTEN_PORT for Caddy to
     # proxy to (502 Bad Gateway) for as long as loading took. classify() calls
-    # onnx_nsfw_pipeline.available() lazily anyway, so nsfw_image_classifier just keeps using the
-    # claude -p fallback until this thread finishes.
+    # onnx_nsfw_pipeline.available() lazily anyway, so nsfw_image_classifier just reports
+    # classification as unavailable (fail-open, per its own contract) until this thread finishes.
     threading.Thread(target=onnx_nsfw_pipeline.initialize, daemon=True, name="onnx-nsfw-init").start()
     server = ThreadingHTTPServer((LISTEN_HOST, LISTEN_PORT), Handler)
     _log(f"[lockprofile] listening on {LISTEN_HOST}:{LISTEN_PORT}")
