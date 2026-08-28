@@ -84,6 +84,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import collections
 import hashlib
 import hmac
 import json
@@ -98,6 +99,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import nsfw_image_classifier
@@ -126,6 +128,26 @@ SCREENSHOTS_DIR = os.path.join(DATA_DIR, "screenshots")
 LISTEN_HOST = os.environ.get("LOCKPROFILE_LISTEN_HOST", "0.0.0.0")
 LISTEN_PORT = int(os.environ.get("LOCKPROFILE_LISTEN_PORT", "8091"))
 TOKEN = os.environ.get("LOCKPROFILE_TOKEN", "")
+
+# In-memory ring buffer of this process's own diagnostic output (the _log() calls below), exposed
+# read-only via GET /debug/server-log for remote debugging. There is otherwise no way to see this
+# process's own diagnostics short of `docker logs`/journald on the host, which this container has
+# no access to (see SUDO_REVIEW_URL's comment on why host-level things stay out of this container).
+_LOG_BUFFER_MAX_LINES = 2000
+_log_buffer: collections.deque[str] = collections.deque(maxlen=_LOG_BUFFER_MAX_LINES)
+_log_buffer_lock = threading.Lock()
+
+
+def _log(message: str) -> None:
+    """Drop-in replacement for the old bare `print(..., flush=True)` calls this file used
+    everywhere: still writes to stdout (so `docker logs`/Caddy's log driver keep working exactly
+    as before), but also appends a timestamped copy to _log_buffer so GET /debug/server-log can
+    show recent diagnostics without shelling out to the host."""
+    line = f"{datetime.now(timezone.utc).isoformat(timespec='seconds')} {message}"
+    print(line, flush=True)
+    with _log_buffer_lock:
+        _log_buffer.append(line)
+
 
 # Hand-editable master list of every report/alert type (mac/server/android) -- see that file's
 # "_readme" for the full contract. Mounted read-only alongside the script (same pattern as
@@ -1599,7 +1621,7 @@ def _migrate_legacy_device_rules() -> None:
         if changed:
             _save_settings(settings)
         if migrated:
-            print(f"[lockprofile] migrated {len(migrated)} legacy per-device rule(s) into {RULES_PATH}", flush=True)
+            _log(f"[lockprofile] migrated {len(migrated)} legacy per-device rule(s) into {RULES_PATH}")
 
 
 def _load_habit_completions() -> dict:
@@ -2116,7 +2138,7 @@ def _send_ntfy_notification(event: dict) -> None:
     try:
         urllib.request.urlopen(request, timeout=10).close()
     except (urllib.error.URLError, OSError) as error:
-        print(f"[lockprofile] ntfy push failed for {event['type']}: {error}", flush=True)
+        _log(f"[lockprofile] ntfy push failed for {event['type']}: {error}")
 
 
 # --- FCM push (optional) ---------------------------------------------------------------------
@@ -2201,10 +2223,10 @@ def _fcm_credentials():
             if not project_id:
                 raise ValueError("service-account file has no project_id")
             _fcm_creds, _fcm_project_id = creds, project_id
-            print(f"[lockprofile] FCM push enabled for project {project_id}", flush=True)
+            _log(f"[lockprofile] FCM push enabled for project {project_id}")
             return creds, project_id
         except Exception as error:  # noqa: BLE001 -- any failure just disables push
-            print(f"[lockprofile] FCM disabled ({type(error).__name__}: {error})", flush=True)
+            _log(f"[lockprofile] FCM disabled ({type(error).__name__}: {error})")
             _fcm_unavailable = True
             return None, None
 
@@ -2235,7 +2257,7 @@ def _send_fcm_wake(event: dict, tokens: list[str] | None = None) -> int:
             creds.refresh(GoogleAuthRequest())
         access_token = creds.token
     except Exception as error:  # noqa: BLE001
-        print(f"[lockprofile] FCM token refresh failed: {error}", flush=True)
+        _log(f"[lockprofile] FCM token refresh failed: {error}")
         return 0
 
     sent = 0
@@ -2268,9 +2290,9 @@ def _send_fcm_wake(event: dict, tokens: list[str] | None = None) -> int:
             # 404 (or UNREGISTERED) means the token is dead -- prune it so we stop trying.
             if error.code in (404, 400):
                 _forget_fcm_token(token)
-            print(f"[lockprofile] FCM send failed for {event.get('type')}: HTTP {error.code}", flush=True)
+            _log(f"[lockprofile] FCM send failed for {event.get('type')}: HTTP {error.code}")
         except (urllib.error.URLError, OSError) as error:
-            print(f"[lockprofile] FCM send failed for {event.get('type')}: {error}", flush=True)
+            _log(f"[lockprofile] FCM send failed for {event.get('type')}: {error}")
     return sent
 
 
@@ -2678,7 +2700,7 @@ class Handler(BaseHTTPRequestHandler):
 
             verdict = nsfw_image_classifier.classify_screenshot(image_bytes)
             if verdict is None:
-                print(f"[lockprofile] screenshot classification failed/unavailable for {device_id}", flush=True)
+                _log(f"[lockprofile] screenshot classification failed/unavailable for {device_id}")
                 return self._send_json(200, {"status": "ok", "classification": "error"})
             if not verdict:
                 return self._send_json(200, {"status": "ok", "classification": "safe"})
@@ -2754,10 +2776,9 @@ class Handler(BaseHTTPRequestHandler):
         cookie = _dashboard_cookie_from_headers(self.headers)
         if cookie and _dashboard_session_valid(cookie):
             return False
-        print(
+        _log(
             f"[lockprofile] denied {method} {path}: guardian session required, "
-            f"device bearer is not sufficient",
-            flush=True,
+            f"device bearer is not sufficient"
         )
         self._send_json(403, {
             "error": "This route requires a guardian dashboard login, not a device token.",
@@ -2945,7 +2966,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 habitshare_names = _fetch_habitshare_habit_names(username, password)
             except Exception as error:  # noqa: BLE001 -- any failure just fails the import cleanly
-                print(f"[lockprofile] HabitShare import failed: {error}", flush=True)
+                _log(f"[lockprofile] HabitShare import failed: {error}")
                 self._send_json(502, {"error": "Could not reach HabitShare -- check the connected account"})
                 return True
             with _habits_lock:
@@ -3436,6 +3457,21 @@ class Handler(BaseHTTPRequestHandler):
             # _dns_website_blocks_by_source_key's doc comment.
             return self._send_json(200, {"blocks": _dns_website_blocks_by_source_key()})
 
+        if parsed.path == "/debug/server-log":
+            # Recent lines from this process's own diagnostics (_log() above) -- for debugging
+            # this service itself when there's no shell access to `docker logs`/journald on the
+            # host. `?tail=N` caps how many of the most recent lines come back (default/max
+            # _LOG_BUFFER_MAX_LINES, the same cap the in-memory buffer itself keeps).
+            query = urllib.parse.parse_qs(parsed.query)
+            try:
+                tail = int(query.get("tail", [str(_LOG_BUFFER_MAX_LINES)])[0])
+            except ValueError:
+                return self._send_json(400, {"error": "tail must be an integer"})
+            tail = max(1, min(tail, _LOG_BUFFER_MAX_LINES))
+            with _log_buffer_lock:
+                lines = list(_log_buffer)[-tail:]
+            return self._send_json(200, {"lines": lines})
+
         if parsed.path == "/internal/website-budget-targets":
             # Polled by mitm_nsfw_addon.py (see that file's _BudgetTargets) so it knows which
             # (client, domain) pairs currently sit under a dailyBudgetMinutes rule, independent of
@@ -3564,7 +3600,7 @@ def main() -> None:
     # claude -p fallback until this thread finishes.
     threading.Thread(target=onnx_nsfw_pipeline.initialize, daemon=True, name="onnx-nsfw-init").start()
     server = ThreadingHTTPServer((LISTEN_HOST, LISTEN_PORT), Handler)
-    print(f"[lockprofile] listening on {LISTEN_HOST}:{LISTEN_PORT}", flush=True)
+    _log(f"[lockprofile] listening on {LISTEN_HOST}:{LISTEN_PORT}")
     server.serve_forever()
 
 

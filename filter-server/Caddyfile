@@ -62,6 +62,12 @@
 	handle /internal/* {
 		reverse_proxy 127.0.0.1:8091
 	}
+	# GET /debug/server-log -- this process's own recent diagnostic output, for debugging when
+	# there's no shell on the host. Same bearer-token auth as /alerts/* above; nothing here is
+	# device-reportable, so it doesn't belong in route_policy.py's dashboard-api split.
+	handle /debug/* {
+		reverse_proxy 127.0.0.1:8091
+	}
 	# Phone-uploaded diagnostic logs (see lockprofile_service.py's module doc, DeviceLogUploader.kt).
 	# The phone authenticates itself with its own LOCKPROFILE_TOKEN bearer, same as /alerts/*
 	# above -- unrelated to the guardian-browser-session gate in front of /device-logs/view/*
@@ -268,6 +274,12 @@ http://192.168.0.254 {
 	}
 	# See the matching block in the main vhost above -- server-to-server routes for mitm_nsfw_addon.py.
 	handle /internal/* {
+		reverse_proxy 127.0.0.1:8091
+	}
+	# GET /debug/server-log -- this process's own recent diagnostic output, for debugging when
+	# there's no shell on the host. Same bearer-token auth as /alerts/* above; nothing here is
+	# device-reportable, so it doesn't belong in route_policy.py's dashboard-api split.
+	handle /debug/* {
 		reverse_proxy 127.0.0.1:8091
 	}
 	handle /device-logs/upload {
