@@ -37,14 +37,25 @@ cd "$FOCUSLOCK_DIR"
 echo "==> Unlocking build keychain"
 security unlock-keychain -p "$(cat "$BUILD_KEYCHAIN_PASSWORD_FILE")" "$BUILD_KEYCHAIN_PATH"
 
-echo "==> Building + signing (Scripts/build_app.sh --keychain)"
+# Assemble into a throwaway staging root, never straight into the live /Applications -- this agent
+# can easily be running on the very same Mac as a real, currently-installed Otterling (as it does
+# here), and that install is root-owned once the daemon's own UpdateManager has ever swapped a
+# build into place. A non-root build-agent account then can't even `rm -rf` it to reassemble a new
+# one -- confirmed live: this failed with a wall of "Permission denied" and aborted the whole build
+# under `set -e`, silently, well before ever reaching codesign/zip/upload. Staging elsewhere sidesteps
+# needing any privilege over the machine's live install at all, which is also just the correct
+# posture for a build agent that only needs to produce upload bytes, never to touch local state.
+STAGE_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/otterling-stage-XXXXXX")
+trap 'rm -rf "$STAGE_ROOT"' EXIT
+
+echo "==> Building + signing (Scripts/build_app.sh --keychain) into $STAGE_ROOT"
 # Pin the exact version the review host already decided for this job -- build_app.sh otherwise
 # auto-bumps FocusLockConstants.appVersionCode/version.txt itself based on this repo's git history,
 # which would disagree with the version_code/version_name this script is about to upload.
-OTTERLING_VERSION_CODE="$VERSION_CODE" OTTERLING_VERSION_NAME="$VERSION_NAME" \
+OTTERLING_STAGE_ROOT="$STAGE_ROOT" OTTERLING_VERSION_CODE="$VERSION_CODE" OTTERLING_VERSION_NAME="$VERSION_NAME" \
   ./Scripts/build_app.sh --keychain "$BUILD_KEYCHAIN_PATH" "$SIGNING_IDENTITY"
 
-APP_PATH="/Applications/Otterling.app"
+APP_PATH="$STAGE_ROOT/Applications/Otterling.app"
 CODESIGN_INFO=$(codesign -dv --verbose=4 "$APP_PATH" 2>&1)
 TEAM_ID=$(echo "$CODESIGN_INFO" | sed -n 's/^TeamIdentifier=//p')
 [[ -n "$TEAM_ID" && "$TEAM_ID" != "not set" ]] || { echo "Built app has no Team Identifier" >&2; exit 1; }
