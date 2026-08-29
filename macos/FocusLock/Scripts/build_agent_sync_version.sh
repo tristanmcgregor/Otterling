@@ -16,6 +16,12 @@
 # be conflated with a build failure or make the poll loop think the job is still pending (the
 # server already cleared it). It just means a manual sync commit (like 874b1c9) is needed again;
 # this script logs loudly when that's the case.
+#
+# The commit it makes carries an "Otterling-Build-Agent-Sync: true" trailer, which release.sh
+# checks for before queuing a new macOS build -- without that, this commit (which touches macos/
+# paths) would itself trigger another build, whose own sync commit triggers another, forever.
+# Confirmed live: this looped through versionCode 6->7->8->9, unattended, before being killed by
+# hand. Do not drop the trailer without also fixing release.sh's queuing check.
 set -euo pipefail
 
 VERSION_CODE="${1:?version code required}"
@@ -70,7 +76,9 @@ git -C "$REPO" add \
 COMMIT_MSG="Sync macOS appVersionCode/version.txt to published build ${VERSION_CODE} (${VERSION_NAME})
 
 Automated by build_agent_sync_version.sh after a successful publish, so this stops needing a
-manual reconciliation commit (see 874b1c9) every time the build agent ships a release."
+manual reconciliation commit (see 874b1c9) every time the build agent ships a release.
+
+Otterling-Build-Agent-Sync: true"
 
 git -C "$REPO" \
   -c user.name="Otterling Build Agent" \
