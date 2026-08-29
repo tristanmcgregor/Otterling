@@ -150,11 +150,16 @@ atomically swap the new bundle into
 explicitly) so it picks up its own new binary, and exit -- `KeepAlive=true` relaunches the daemon
 itself immediately from the freshly-installed binary.
 
-The GUI app is not force-relaunched (there's no clean way to make a live foreground SwiftUI process
-replace itself mid-run) -- after a successful install its status just reads "restarting the filter
-daemon now"; quit and reopen Otterling.app to pick up the new GUI binary too. This is intentionally
-different from Android's fully silent APK swap, which the OS handles for a background app; nothing
-analogous exists for a running foreground macOS app.
+A live foreground SwiftUI process can't replace its own in-memory binary mid-run, so after a
+manual "Install update" click, `FocusLockViewModel.relaunchAfterUpdate()` instead spawns a brand
+new instance of the now-updated `/Applications/Otterling.app` (a few seconds after the daemon's own
+restart, so the new instance's first status poll doesn't race a daemon that's still mid-restart)
+and quits the old one -- from the user's seat, "Install update" restarts everything. This is still
+different from Android's fully silent APK swap (the OS handles that for a background app; a
+foreground macOS app has no equivalent), but at least doesn't leave a stale GUI window around. The
+*automatic* hourly check (`UpdateCheckLoop`, daemon-side, below) has no such GUI-relaunch step --
+if Otterling.app happens to be open when that silent install runs, its window keeps showing the old
+build number until it's quit and reopened by hand.
 
 Automatic checks run hourly (`UpdateCheckLoop`, daemon-side) and install silently (same code path
 as a manual "Install update" click) -- the only user-visible effect of a fully automatic

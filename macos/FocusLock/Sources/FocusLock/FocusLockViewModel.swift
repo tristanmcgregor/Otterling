@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import FocusLockShared
 import UserNotifications
@@ -255,11 +256,39 @@ final class FocusLockViewModel: NSObject, ObservableObject, UNUserNotificationCe
         Task {
             switch await client.installAvailableUpdate() {
             case .installedPendingRestart(let manifest):
-                updateStatusText = "Installed \(manifest.versionName) -- restarting the filter daemon now."
+                updateStatusText = "Installed \(manifest.versionName) -- restarting now."
                 updateAvailable = false
+                relaunchAfterUpdate()
             case .rejected(let reason):
                 updateStatusText = "Install failed: \(reason)"
                 updateInstalling = false
+            }
+        }
+    }
+
+    /// The daemon already restarts itself (`UpdateManager.restartAfterInstall`, ~2s after replying
+    /// over XPC so this call actually gets its response first) -- this is the GUI-side half of the
+    /// same "restart everything" story. A running foreground app can't replace its own in-memory
+    /// binary, so the only way to actually pick up the freshly-installed GUI executable is to spawn
+    /// a brand-new instance of it (from the now-updated `/Applications/Otterling.app`) and quit this
+    /// one. The delay gives the daemon time to actually finish swapping/restarting first, so the new
+    /// GUI instance's first status poll doesn't race a daemon that's still mid-restart.
+    private func relaunchAfterUpdate() {
+        let appURL = Bundle.main.bundleURL
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+            let config = NSWorkspace.OpenConfiguration()
+            config.createsNewApplicationInstance = true
+            NSWorkspace.shared.openApplication(at: appURL, configuration: config) { _, error in
+                DispatchQueue.main.async {
+                    if let error {
+                        // Don't strand the user on a stale binary with no way back in -- surface it
+                        // and let them reopen Otterling.app by hand instead of silently doing nothing.
+                        self.updateStatusText = "Installed, but couldn't relaunch automatically (\(error.localizedDescription)) -- reopen Otterling.app manually."
+                        self.updateInstalling = false
+                        return
+                    }
+                    NSApplication.shared.terminate(nil)
+                }
             }
         }
     }
