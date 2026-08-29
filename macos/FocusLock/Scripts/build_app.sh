@@ -112,6 +112,9 @@ if [ -n "${OTTERLING_VERSION_CODE:-}" ] || [ -n "${OTTERLING_VERSION_NAME:-}" ];
   if [ "$CURRENT_VERSION_CODE" != "$NEW_VERSION_CODE" ]; then
     sed -i '' "s/appVersionCode = [0-9]*/appVersionCode = ${NEW_VERSION_CODE}/" "$CONSTANTS_FILE"
   fi
+  if [ "$CURRENT_VERSION_NAME" != "$NEW_VERSION_NAME" ]; then
+    printf '%s\n' "$NEW_VERSION_NAME" > "$VERSION_FILE"
+  fi
 else
   LAST_SHA=""
   LAST_VERSION_CODE="$CURRENT_VERSION_CODE"

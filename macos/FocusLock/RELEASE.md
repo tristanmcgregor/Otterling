@@ -231,6 +231,18 @@ How it works, end to end:
    success) writes `macos-manifest.json` + the zip straight into
    `/var/lib/otterling/updates/` via a new `publish_macos_from_upload.sh`. `attest_macos_release.sh`
    itself, and the private attestation key, are completely unchanged by any of this.
+5. Once the upload succeeds, `build_agent_poll.sh` calls `Scripts/build_agent_sync_version.sh`,
+   which does a separate, fresh clone of `origin/main`, patches
+   `Sources/FocusLockShared/Constants.swift`'s `appVersionCode` and `Scripts/version.txt` to the
+   version that was just published (no-op if they already match), and pushes that as its own commit
+   -- retrying through a rebase if `main` moved in the meantime. This is what used to be a manual
+   step (see commits `7555c01`, `c5bd389`, `874b1c9`, all reconciling this repo's committed version
+   files back to whatever the build agent had actually shipped); it's deliberately non-fatal to the
+   overall poll run if it fails (the build already published successfully by this point), but it
+   logs loudly so a failure doesn't go unnoticed -- check `~/.otterling-build-agent/logs/` for a
+   "WARNING: version-bump commit/push failed" line if `git log` on `main` doesn't show the expected
+   sync commit after a build. Requires `GITHUB_CLONE_TOKEN` to have **Contents: Read and write**
+   (not just Read-only) on this repo -- see `build_agent.env.example`.
 
 One-time setup on the build-agent account: run `Scripts/setup_build_agent.sh <path-to-your.p12>`.
 It creates the dedicated signing keychain, generates and stores its unlock password, imports the

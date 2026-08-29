@@ -1,0 +1,96 @@
+#!/bin/bash
+# Commits the just-published versionCode/versionName back to origin/main -- called by
+# build_agent_poll.sh right after build_agent_build_and_upload.sh succeeds.
+#
+# build_agent_build_and_upload.sh pins the version into a THROWAWAY clone purely so the build it
+# uploads matches what the review host decided; it never touches the real GitHub repo. Without this
+# step, Sources/FocusLockShared/Constants.swift and Scripts/version.txt in git silently fall behind
+# every single automated publish -- exactly the drift that required manually re-syncing them by
+# hand after the fact (see commits 7555c01, c5bd389, 874b1c9). This script closes that loop so it
+# stops recurring.
+#
+# Usage: build_agent_sync_version.sh <version_code> <version_name>
+#
+# Deliberately non-fatal to the caller on failure (see build_agent_poll.sh) -- the build was
+# already built, verified, and uploaded by the time this runs, so a git-side hiccup here shouldn't
+# be conflated with a build failure or make the poll loop think the job is still pending (the
+# server already cleared it). It just means a manual sync commit (like 874b1c9) is needed again;
+# this script logs loudly when that's the case.
+set -euo pipefail
+
+VERSION_CODE="${1:?version code required}"
+VERSION_NAME="${2:?version name required}"
+
+CONFIG_FILE="$HOME/.otterling-build-agent/config.env"
+[[ -f "$CONFIG_FILE" ]] || { echo "Missing $CONFIG_FILE -- see build_agent.env.example" >&2; exit 1; }
+# shellcheck source=/dev/null
+source "$CONFIG_FILE"
+
+: "${GITHUB_REPO:?set in config.env}"
+GITHUB_CLONE_TOKEN="${GITHUB_CLONE_TOKEN:-}"
+if [[ -z "$GITHUB_CLONE_TOKEN" ]]; then
+  echo "GITHUB_CLONE_TOKEN not set -- can't push a version-bump commit to a private repo" >&2
+  exit 1
+fi
+CLONE_URL="https://x-access-token:${GITHUB_CLONE_TOKEN}@github.com/${GITHUB_REPO}.git"
+
+WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/otterling-versionsync-XXXXXX")
+cleanup() { rm -rf "$WORKDIR"; }
+trap cleanup EXIT
+
+echo "==> Cloning ${GITHUB_REPO} (main) to sync version..."
+if ! git clone --quiet --depth 1 --branch main "$CLONE_URL" "$WORKDIR/repo" \
+    2> >(sed -E 's#x-access-token:[^@]*@#x-access-token:REDACTED@#g' >&2); then
+  echo "ERROR: clone failed -- GITHUB_CLONE_TOKEN likely needs Contents: Read and write" >&2
+  echo "  (a read-only PAT can build but can't push this commit)." >&2
+  exit 1
+fi
+
+REPO="$WORKDIR/repo"
+CONSTANTS_FILE="$REPO/macos/FocusLock/Sources/FocusLockShared/Constants.swift"
+VERSION_FILE="$REPO/macos/FocusLock/Scripts/version.txt"
+
+CURRENT_VERSION_CODE="$(sed -n 's/.*appVersionCode = \([0-9]*\).*/\1/p' "$CONSTANTS_FILE" | head -1)"
+CURRENT_VERSION_NAME="$(cat "$VERSION_FILE" 2>/dev/null || echo "")"
+
+if [[ "$CURRENT_VERSION_CODE" == "$VERSION_CODE" && "$CURRENT_VERSION_NAME" == "$VERSION_NAME" ]]; then
+  echo "==> main already at appVersionCode=$VERSION_CODE / version.txt=$VERSION_NAME -- nothing to sync."
+  exit 0
+fi
+
+echo "==> Bumping committed version: $CURRENT_VERSION_CODE/$CURRENT_VERSION_NAME -> $VERSION_CODE/$VERSION_NAME"
+sed -i '' "s/appVersionCode = [0-9]*/appVersionCode = ${VERSION_CODE}/" "$CONSTANTS_FILE"
+printf '%s\n' "$VERSION_NAME" > "$VERSION_FILE"
+
+git -C "$REPO" add \
+  macos/FocusLock/Sources/FocusLockShared/Constants.swift \
+  macos/FocusLock/Scripts/version.txt
+
+# Scoped to this commit only (-c, not --global) -- doesn't touch this account's ambient git config.
+COMMIT_MSG="Sync macOS appVersionCode/version.txt to published build ${VERSION_CODE} (${VERSION_NAME})
+
+Automated by build_agent_sync_version.sh after a successful publish, so this stops needing a
+manual reconciliation commit (see 874b1c9) every time the build agent ships a release."
+
+git -C "$REPO" \
+  -c user.name="Otterling Build Agent" \
+  -c user.email="build-agent@otterling.app" \
+  commit --quiet -m "$COMMIT_MSG"
+
+echo "==> Pushing to origin/main..."
+ATTEMPTS=0
+until git -C "$REPO" push --quiet origin HEAD:main \
+    2> >(sed -E 's#x-access-token:[^@]*@#x-access-token:REDACTED@#g' >&2); do
+  ATTEMPTS=$((ATTEMPTS + 1))
+  if [[ "$ATTEMPTS" -ge 3 ]]; then
+    echo "ERROR: push failed after $ATTEMPTS attempts (main likely moved concurrently)." >&2
+    echo "  Manual sync commit needed -- appVersionCode/version.txt in git still lag the" >&2
+    echo "  published build ${VERSION_CODE} (${VERSION_NAME}). See 874b1c9 for precedent." >&2
+    exit 1
+  fi
+  echo "    Push rejected -- rebasing onto the new origin/main and retrying ($ATTEMPTS/3)..."
+  git -C "$REPO" fetch --quiet origin main
+  git -C "$REPO" rebase --quiet origin/main
+done
+
+echo "==> Done. main now has appVersionCode=${VERSION_CODE} / version.txt=${VERSION_NAME}."
