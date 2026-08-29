@@ -96,6 +96,27 @@ REPO_ROOT="$(git -C "$PROJECT_DIR" rev-parse --show-toplevel 2>/dev/null || echo
 CURRENT_VERSION_CODE="$(sed -n 's/.*appVersionCode = \([0-9]*\).*/\1/p' "$CONSTANTS_FILE" | head -1)"
 CURRENT_VERSION_NAME="$(cat "$VERSION_FILE" 2>/dev/null || echo "0.0")"
 
+# Build provenance for IntegrityReporter.swift: lets the daemon tell the server whether it was
+# built from a clean, committed working tree, or from local changes that were never committed --
+# the exact "edited the code and installed it locally" scenario the tamper check exists to catch.
+# Scoped to `macos/FocusLock` specifically (not the whole monorepo) so unrelated in-progress work
+# elsewhere in the tree (Android/server) doesn't produce false "tampered" reports.
+#
+# Computed HERE, before the version-bump block below ever touches CONSTANTS_FILE/VERSION_FILE --
+# not after, where it used to live. Checking after meant `git status --porcelain` always saw
+# those two files as just-modified by this very script's own auto-bump/pin logic and reported
+# every single build -- official pipeline releases included -- as "dirty", permanently and
+# falsely flagging every real release as tampered (confirmed live: this fired every ~5 minutes,
+# non-stop, for hours, for a completely clean official build). This only ever reflects the tree
+# as checked out, before this script does anything to it. Reuses REPO_ROOT from just above
+# rather than recomputing it.
+GIT_SHA="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
+if [ -n "$(git -C "$REPO_ROOT" status --porcelain -- macos/FocusLock 2>/dev/null)" ]; then
+  GIT_DIRTY=true
+else
+  GIT_DIRTY=false
+fi
+
 if [ -n "${OTTERLING_VERSION_CODE:-}" ] || [ -n "${OTTERLING_VERSION_NAME:-}" ]; then
   : "${OTTERLING_VERSION_CODE:?OTTERLING_VERSION_CODE and OTTERLING_VERSION_NAME must be set together}"
   : "${OTTERLING_VERSION_NAME:?OTTERLING_VERSION_CODE and OTTERLING_VERSION_NAME must be set together}"
@@ -173,18 +194,8 @@ if [ -f "$PROJECT_DIR/Resources/AppIcon.icns" ]; then
   cp "$PROJECT_DIR/Resources/AppIcon.icns" "$INSTALL_PATH/Contents/Resources/AppIcon.icns"
 fi
 
-# Build provenance for IntegrityReporter.swift: lets the daemon tell the server whether it was
-# built from a clean, committed working tree, or from local changes that were never committed --
-# the exact "edited the code and installed it locally" scenario the tamper check exists to catch.
-# Scoped to `macos/FocusLock` specifically (not the whole monorepo) so unrelated in-progress work
-# elsewhere in the tree (Android/server) doesn't produce false "tampered" reports.
-REPO_ROOT="$(cd "$PROJECT_DIR/../.." && pwd)"
-GIT_SHA="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
-if [ -n "$(git -C "$REPO_ROOT" status --porcelain -- macos/FocusLock 2>/dev/null)" ]; then
-  GIT_DIRTY=true
-else
-  GIT_DIRTY=false
-fi
+# GIT_SHA/GIT_DIRTY were captured earlier, before the version-bump block above touched anything --
+# see that computation's own comment for why.
 BUILT_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 cat > "$INSTALL_PATH/Contents/Resources/build-info.json" <<JSON
 {"git_sha": "${GIT_SHA}", "dirty": ${GIT_DIRTY}, "built_at": "${BUILT_AT}"}
