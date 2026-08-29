@@ -102,6 +102,16 @@ if [ -n "${OTTERLING_VERSION_CODE:-}" ] || [ -n "${OTTERLING_VERSION_NAME:-}" ];
   NEW_VERSION_CODE="$OTTERLING_VERSION_CODE"
   NEW_VERSION_NAME="$OTTERLING_VERSION_NAME"
   echo "==> Pinning version $NEW_VERSION_NAME ($NEW_VERSION_CODE) from OTTERLING_VERSION_CODE/OTTERLING_VERSION_NAME"
+  # Must actually patch the Swift constant here too, not just set $APP_VERSION below for Info.plist
+  # -- Info.plist's CFBundleShortVersionString is cosmetic, but UpdateManager's own up-to-date check
+  # compares manifest.versionCode against FocusLockConstants.appVersionCode AS COMPILED INTO THIS
+  # BINARY. A build-agent checkout is a fresh `git clone` of whatever's actually committed, which
+  # will still be some earlier value unless this file is bumped in the same commit -- skipping this
+  # patch left the compiled daemon silently reporting an old build forever while Info.plist claimed
+  # the new one, recreating the exact 7555c01 bug this whole auto-bump exists to prevent.
+  if [ "$CURRENT_VERSION_CODE" != "$NEW_VERSION_CODE" ]; then
+    sed -i '' "s/appVersionCode = [0-9]*/appVersionCode = ${NEW_VERSION_CODE}/" "$CONSTANTS_FILE"
+  fi
 else
   LAST_SHA=""
   LAST_VERSION_CODE="$CURRENT_VERSION_CODE"
