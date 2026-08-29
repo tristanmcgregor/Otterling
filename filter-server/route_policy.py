@@ -65,16 +65,6 @@ DEVICE_BEARER_ROUTES: frozenset[tuple[str, str]] = frozenset({
     # InstalledAppsReporter / DashboardConfigSync.reportInstalledApps.
     ("POST", "/dashboard-api/devices/*/installed-apps"),
     ("POST", "/dashboard-api/devices/*/app-info"),
-    # DELIBERATE, ACCEPTED WIDENING: AdminPasswordSync.swift polls this to learn a PIN just set
-    # through the one-time account-handoff flow (see lockprofile_service.py's
-    # ADMIN_PASSWORD_SYNC_PATH), so it can also apply that PIN as the local macOS admin account's
-    # login password. This DOES hand a device holding the shared bearer token a one-time read of
-    # the plaintext Guardian PIN -- exactly the class of exposure this module exists to keep off
-    # the device-reachable list (see the habitshare-account precedent above). Accepted anyway,
-    # explicitly, because it's scoped as tightly as that tradeoff allows: populated only at the
-    # moment a handoff link is actually consumed (not on every ordinary PIN change), expires in
-    # minutes, and is destroyed on first read so at most one device can ever claim it.
-    ("GET", "/dashboard-api/admin-password-sync"),
 })
 
 
