@@ -12,14 +12,27 @@
 # behave like one continuously-blocking poll loop without this script needing its own internal
 # while-loop or long-lived process state.
 #
-# Deliberately does its own git clone+checkout into a fresh temp directory every run rather than
-# reusing/pulling a persistent local checkout -- the whole point of this pipeline is "build exactly
-# what passed AI review," not "build whatever happens to be sitting in a local working tree" (which
-# could be stale, or, on this specific account, tampered with).
+# The job itself is always built from a fresh git clone+checkout into a throwaway temp directory
+# further down, never this script's own fixed checkout -- the whole point of the pipeline is
+# "build exactly what passed AI review," not "build whatever happens to be sitting in a local
+# working tree" (which could be stale, or, on this specific account, tampered with). This script's
+# own checkout (where launchd actually finds it) is a separate concern, self-updated below.
 #
 # Config: reads $HOME/.otterling-build-agent/config.env (chmod 600, owned by this account only) --
 # see build_agent.env.example in this same directory for the expected keys.
 set -euo pipefail
+
+# Keep THIS checkout (the fixed location launchd runs this exact script from -- not the throwaway
+# per-job clone further down, which is intentionally always fresh) up to date with origin/main on
+# every single invocation. Without this, a push that changes this very script (or
+# build_agent_build_and_upload.sh / build_agent_sync_version.sh) silently has no effect here until
+# someone remembers to `git pull` this checkout by hand -- confirmed live, that happened for
+# hours during an earlier incident before anyone noticed the daemon was still running a
+# days-stale version of this file. Best-effort and non-fatal: if the pull fails (no network,
+# unexpected local changes, mid-fetch interruption) just run whatever's already checked out here;
+# the next relaunch tries again.
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+git -C "$REPO_ROOT" pull --quiet --ff-only 2>&1 || echo "WARNING: self-update pull failed in $REPO_ROOT -- running whatever's currently checked out there" >&2
 
 CONFIG_FILE="$HOME/.otterling-build-agent/config.env"
 [[ -f "$CONFIG_FILE" ]] || { echo "Missing $CONFIG_FILE -- see build_agent.env.example" >&2; exit 1; }
