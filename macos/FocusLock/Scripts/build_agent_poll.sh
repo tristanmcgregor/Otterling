@@ -1,8 +1,8 @@
 #!/bin/bash
-# Runs continuously (LaunchDaemon with KeepAlive, see build_agent.launchd.plist.example) on the
-# isolated macOS build-agent admin account -- long-polls the Linux review host for a queued macOS
-# build job (written by release.sh on the Linux host whenever an AI-reviewed push touches macos/
-# paths), and if one is pending, does a clean, from-scratch, exact-SHA checkout and hands off to
+# Runs continuously (LaunchAgent with KeepAlive, see build_agent.launchd.plist.example) on the
+# macOS build-agent account -- long-polls the Linux review host for a queued macOS build job
+# (written by release.sh on the Linux host whenever an AI-reviewed push touches macos/ paths),
+# and if one is pending, does a clean, from-scratch, exact-SHA checkout and hands off to
 # build_agent_build_and_upload.sh. See macos/FocusLock/RELEASE.md for the full picture.
 #
 # The GET below blocks server-side for up to ~25s waiting for a job before replying "none pending"
