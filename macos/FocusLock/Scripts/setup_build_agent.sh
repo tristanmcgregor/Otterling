@@ -122,7 +122,7 @@ ENVEOF
 fi
 
 echo
-echo "==> Setting up the checkout the LaunchDaemon will actually run from…"
+echo "==> Setting up the checkout the LaunchAgent will actually run from…"
 CHECKOUT_DIR="$HOME/otterling-checkout"
 if [[ ! -d "$CHECKOUT_DIR/.git" ]]; then
   echo "    No checkout at $CHECKOUT_DIR -- copying this one there instead of re-cloning."
@@ -132,17 +132,24 @@ fi
 chmod +x "$CHECKOUT_DIR/macos/FocusLock/Scripts/build_agent_poll.sh" \
          "$CHECKOUT_DIR/macos/FocusLock/Scripts/build_agent_build_and_upload.sh"
 
-echo "==> Installing the LaunchDaemon (needs sudo)…"
+echo "==> Installing the LaunchAgent (no sudo needed -- it's per-user, not system-wide)…"
+# A LaunchAgent, not a LaunchDaemon: codesign's access to this account's signing keychain depends
+# on actually running inside its GUI/Aqua login session, which only a LaunchAgent gets -- see the
+# long comment in build_agent.launchd.plist.example for why (confirmed directly: the identical
+# unlock-keychain + codesign sequence fails with "no identity found" from a LaunchDaemon and
+# succeeds run inside the real session). This account must stay logged in for the agent to run.
+mkdir -p "$HOME/Library/LaunchAgents"
 sed "s|&lt;build-agent-account&gt;|$(whoami)|g" \
   "$CHECKOUT_DIR/macos/FocusLock/Scripts/build_agent.launchd.plist.example" \
-  | sudo tee /Library/LaunchDaemons/app.otterling.buildagent.plist > /dev/null
-sudo chown root:wheel /Library/LaunchDaemons/app.otterling.buildagent.plist
-sudo chmod 644 /Library/LaunchDaemons/app.otterling.buildagent.plist
-sudo launchctl bootout system/app.otterling.buildagent 2>/dev/null || true
-sudo launchctl bootstrap system /Library/LaunchDaemons/app.otterling.buildagent.plist
+  > "$HOME/Library/LaunchAgents/app.otterling.buildagent.plist"
+chmod 644 "$HOME/Library/LaunchAgents/app.otterling.buildagent.plist"
+launchctl bootout "gui/$(id -u)/app.otterling.buildagent" 2>/dev/null || true
+launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/app.otterling.buildagent.plist"
 
 echo
-echo "==> Done. The build agent will poll every 15 minutes from now on."
-echo "    To test immediately instead of waiting:"
-echo "      sudo launchctl kickstart -k system/app.otterling.buildagent"
-echo "      tail -f $AGENT_HOME/logs/poll-*.log"
+echo "==> Done. The build agent long-polls continuously from now on (see build_agent_poll.sh's own"
+echo "    doc comment) instead of a flat timer -- a queued job is claimed within a fraction of a"
+echo "    second, as long as $(whoami) stays logged in (screen lock is fine)."
+echo "    To check on it:"
+echo "      launchctl print gui/\$(id -u)/app.otterling.buildagent"
+echo "      tail -f $AGENT_HOME/logs/launchd.log"

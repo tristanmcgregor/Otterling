@@ -1,21 +1,31 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  Template for the build-agent LaunchDaemon, installed ONCE by hand, as root, at
-  /Library/LaunchDaemons/app.otterling.buildagent.plist (then `sudo launchctl bootstrap system
-  /Library/LaunchDaemons/app.otterling.buildagent.plist`). Runs build_agent_poll.sh in the
-  isolated build-agent account's context (UserName below), without that account ever needing an
-  interactive login session; see RELEASE.md's "Automated macOS builds" section.
+  Template for the build agent's LaunchAGENT (not a LaunchDaemon -- see the note below), installed
+  ONCE by hand at ~/Library/LaunchAgents/app.otterling.buildagent.plist for the build-agent
+  account, then loaded with `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/app.otterling.buildagent.plist`
+  (no sudo -- a LaunchAgent is per-user, unlike a LaunchDaemon). See RELEASE.md's "Automated macOS
+  builds" section.
 
-  Replace <build-agent-account> and the Scripts path below with your real values before installing.
-  This file is a template, not live config; nothing here is a secret.
+  Why a LaunchAgent and not a LaunchDaemon: codesign's access to the signing keychain's private key
+  depends on the calling process actually having the build-agent account's GUI/Aqua login session
+  (that's what `security set-key-partition-list` grants access *within*) -- a LaunchDaemon never
+  has one, regardless of its UserName key, since daemons are by design independent of any user's
+  login session. Confirmed directly: the exact same unlock-keychain + codesign sequence succeeds
+  when run inside that account's actual session and fails with "no identity found" from a
+  LaunchDaemon, even with an otherwise-correct keychain/ACL setup. A LaunchAgent runs inside the
+  session that loaded it, which is what codesign actually needs -- the same reasoning
+  build_app.sh's own comments already give for why FocusLockScanner is a LaunchAgent, not a
+  LaunchDaemon. The build-agent account must stay logged in (screen lock is fine, full logout is
+  not) for this to keep running.
+
+  Replace the Scripts path below with your real value before installing. This file is a template,
+  not live config; nothing here is a secret.
 -->
 <plist version="1.0">
 <dict>
     <key>Label</key>
     <string>app.otterling.buildagent</string>
-    <key>UserName</key>
-    <string>&lt;build-agent-account&gt;</string>
     <key>ProgramArguments</key>
     <array>
         <string>/Users/&lt;build-agent-account&gt;/otterling-checkout/macos/FocusLock/Scripts/build_agent_poll.sh</string>

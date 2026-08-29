@@ -211,8 +211,14 @@ How it works, end to end:
    touched `macos/` paths. If so, it writes `/var/lib/otterling/ci/macos-pending-build.json`
    (`{"gitSha", "versionCode", "versionName", "claimed": false}`) -- a single pending-job file, not
    a queue, so multiple pushes while the agent is offline coalesce to just the latest.
-2. `Scripts/build_agent_poll.sh`, kept continuously running by a LaunchDaemon under the isolated
-   account (see `build_agent.launchd.plist.example`: `KeepAlive` + no `StartInterval`), long-polls
+2. `Scripts/build_agent_poll.sh`, kept continuously running by a **LaunchAgent** under the isolated
+   account (see `build_agent.launchd.plist.example`: `KeepAlive` + no `StartInterval` -- a
+   LaunchAgent, deliberately not a LaunchDaemon, since codesign needs the account's actual GUI/Aqua
+   login session to use its signing keychain; a LaunchDaemon never gets one, no matter its
+   `UserName`. Confirmed directly: the identical unlock-keychain + codesign sequence fails with
+   "no identity found" from a LaunchDaemon and succeeds run inside the real session -- the same
+   reasoning `build_app.sh` already documents for why `FocusLockScanner` is a LaunchAgent. This
+   means the build-agent account must stay logged in, screen lock is fine, for builds to run), long-polls
    `GET /ci/pending-macos-build` with a narrowly-scoped `MACOS_BUILD_AGENT_TOKEN` bearer
    (deliberately NOT `LOCKPROFILE_TOKEN` -- a compromised build agent should not also be able to
    impersonate a phone/Mac device). The server (`webhook_server.py`'s `MACOS_LONGPOLL_SECONDS`)
@@ -256,7 +262,7 @@ project's already-documented stance above and `publish_release.sh`'s own `ALLOW_
 precedent for the manual path -- the actual trust check is SHA-256 + pinned Team ID either way),
 writes `~/.otterling-build-agent/config.env` (prompting for the Otterling host, GitHub repo, and
 `MACOS_BUILD_AGENT_TOKEN` -- generate that token once with `openssl rand -hex 32` and set the same
-value in the Linux host's `secrets.env`), and installs the LaunchDaemon. The one thing it cannot do
+value in the Linux host's `secrets.env`), and installs the LaunchAgent. The one thing it cannot do
 for you is obtain *some* code-signing certificate in the first place and export it as a `.p12`
 (Keychain Access -> My Certificates -> Export) -- there's no way to script around a human holding
 that credential, but for most single-developer setups this is just the free identity Xcode already
