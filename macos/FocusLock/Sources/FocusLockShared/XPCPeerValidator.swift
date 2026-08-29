@@ -32,10 +32,16 @@ import Security
 public enum XPCPeerValidator {
     /// Signing identifiers permitted to talk to the daemon. `app.otterling` is the GUI app bundle
     /// (the bundle-level `codesign` pass re-signs `Contents/MacOS/FocusLock` under the bundle
-    /// identifier, so the running GUI presents this, not `FocusLock`). `otterlingctl` is the CLI,
-    /// signed as a bare binary so its identifier is its filename. `FocusLockHelperd` and
-    /// `FocusLockWatchdog` are deliberately absent -- neither is an XPC *client*.
-    public static let allowedIdentifiers = ["app.otterling", "otterlingctl"]
+    /// identifier, so the running GUI presents this, not `FocusLock`). `otterlingctl` and
+    /// `FocusLockWatchdog` are both signed as bare binaries, so each one's identifier is its
+    /// filename. `FocusLockWatchdog` IS an XPC client -- it polls `getStatus` every 20s
+    /// (`FocusLockWatchdog/main.swift`) to detect a wedged/unloaded helper and kickstart it. It used
+    /// to be left out of this list on the theory that it wasn't a client, which meant every one of
+    /// those polls was rejected as an unauthorized peer -- so the watchdog treated the helper as
+    /// permanently unreachable and force-kickstarted (killed + restarted) an otherwise healthy
+    /// daemon every 20 seconds, forever. `FocusLockHelperd` itself is still deliberately absent: it
+    /// only ever receives connections, never initiates one as a client.
+    public static let allowedIdentifiers = ["app.otterling", "otterlingctl", "FocusLockWatchdog"]
 
     /// Describes a connecting process, for logging a rejection in a form that can actually be
     /// acted on ("which identifier / which team was refused") rather than a bare denial.
@@ -129,7 +135,13 @@ public enum XPCPeerValidator {
             return PeerIdentity(pid: pid, identifier: nil, teamID: nil)
         }
         var information: CFDictionary?
-        guard SecCodeCopySigningInformation(staticCode, [], &information) == errSecSuccess,
+        // Empty flags here return only minimal info -- notably NOT the team identifier -- so every
+        // rejection log line printed "team=<none>" regardless of the peer's real signature (as seen
+        // debugging this: both FocusLockWatchdog and FocusLockHelperd were correctly signed under
+        // the same TeamIdentifier, but the log claimed otherwise). kSecCSSigningInformation pulls
+        // the full signing info dictionary, team identifier included. Diagnostic-only -- the actual
+        // accept/reject decision above never used this dictionary.
+        guard SecCodeCopySigningInformation(staticCode, SecCSFlags(rawValue: kSecCSSigningInformation), &information) == errSecSuccess,
               let dictionary = information as? [String: Any] else {
             return PeerIdentity(pid: pid, identifier: nil, teamID: nil)
         }
