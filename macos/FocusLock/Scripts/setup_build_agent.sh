@@ -96,12 +96,19 @@ else
   echo "    MACOS_BUILD_AGENT_TOKEN (from the Linux host's secrets.env, input hidden):"
   read -r -s MACOS_BUILD_AGENT_TOKEN
   echo
+  echo "    GitHub fine-grained PAT for cloning ${GITHUB_REPO} (read-only, Contents scope --"
+  echo "    required if that repo is private: this account's LaunchDaemon can't use the normal"
+  echo "    osxkeychain credential helper, which needs an unlocked login session. Leave blank"
+  echo "    only if the repo is genuinely public. Input hidden):"
+  read -r -s GITHUB_CLONE_TOKEN
+  echo
 
   umask 077
   cat > "$AGENT_HOME/config.env" <<ENVEOF
 OTTERLING_HOST=${OTTERLING_HOST}
 MACOS_BUILD_AGENT_TOKEN=${MACOS_BUILD_AGENT_TOKEN}
 GITHUB_REPO=${GITHUB_REPO}
+GITHUB_CLONE_TOKEN=${GITHUB_CLONE_TOKEN}
 SIGNING_IDENTITY=${SIGNING_IDENTITY}
 BUILD_KEYCHAIN_PATH=${KEYCHAIN_PATH}
 BUILD_KEYCHAIN_PASSWORD_FILE=${AGENT_HOME}/keychain-password
