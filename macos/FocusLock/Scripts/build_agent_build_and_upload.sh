@@ -89,7 +89,12 @@ LOCAL_SHA=$(shasum -a 256 "$ZIP_PATH" | awk '{print $1}')
 echo "    Local SHA-256 (informational only, not trusted by the server): $LOCAL_SHA"
 
 echo "==> Uploading to https://${OTTERLING_HOST}/ci/macos-build-result"
-HTTP_CODE=$(curl -sS --max-time 300 -o "$OUT_DIR/response.json" -w '%{http_code}' \
+# 900s, not 300s -- a multi-MB app bundle over a home upload connection plus the server's own
+# attest+publish work can genuinely take a few minutes; confirmed live, a real (not stuck) upload
+# hit the old 300s ceiling and curl reported client-side failure even though the server had
+# already finished processing and publishing by then. build_agent_sync_version.sh now syncs from
+# the live manifest regardless, so this bump is a mitigation, not the only thing preventing drift.
+HTTP_CODE=$(curl -sS --max-time 900 -o "$OUT_DIR/response.json" -w '%{http_code}' \
   -X POST \
   -H "Authorization: Bearer ${MACOS_BUILD_AGENT_TOKEN}" \
   -H "Content-Type: application/octet-stream" \

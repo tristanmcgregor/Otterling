@@ -1,6 +1,6 @@
 #!/bin/bash
-# Commits the just-published versionCode/versionName back to origin/main -- called by
-# build_agent_poll.sh right after build_agent_build_and_upload.sh succeeds.
+# Commits the actually-live published versionCode/versionName back to origin/main -- called by
+# build_agent_poll.sh after every build attempt, success or failure (see that script).
 #
 # build_agent_build_and_upload.sh pins the version into a THROWAWAY clone purely so the build it
 # uploads matches what the review host decided; it never touches the real GitHub repo. Without this
@@ -9,13 +9,21 @@
 # hand after the fact (see commits 7555c01, c5bd389, 874b1c9). This script closes that loop so it
 # stops recurring.
 #
-# Usage: build_agent_sync_version.sh <version_code> <version_name>
+# Usage: build_agent_sync_version.sh
 #
-# Deliberately non-fatal to the caller on failure (see build_agent_poll.sh) -- the build was
-# already built, verified, and uploaded by the time this runs, so a git-side hiccup here shouldn't
-# be conflated with a build failure or make the poll loop think the job is still pending (the
-# server already cleared it). It just means a manual sync commit (like 874b1c9) is needed again;
-# this script logs loudly when that's the case.
+# Deliberately fetches the LIVE manifest at /updates/macos-manifest.json rather than trusting the
+# versionCode/versionName the calling job originally intended to publish: a slow multi-MB upload
+# over a home connection can make curl's own response-read time out (client-side failure) even
+# though the server had already finished processing and publishing by then -- confirmed live, this
+# happened for build 9 and silently left git one version behind a build that was actually published
+# successfully. Syncing to whatever the manifest ACTUALLY says is live is correct in every case:
+# nothing to do if the upload really did fail (manifest didn't change), and correctly catches up if
+# it secretly succeeded despite the client-side error.
+#
+# Deliberately non-fatal to the caller on failure (see build_agent_poll.sh) -- by the time this
+# runs the build attempt is already over one way or another, so a git-side hiccup here shouldn't
+# be conflated with a build failure. It just means a manual sync commit (like 874b1c9) is needed
+# again; this script logs loudly when that's the case.
 #
 # The commit it makes carries an "Otterling-Build-Agent-Sync: true" trailer, which release.sh
 # checks for before queuing a new macOS build -- without that, this commit (which touches macos/
@@ -24,15 +32,22 @@
 # hand. Do not drop the trailer without also fixing release.sh's queuing check.
 set -euo pipefail
 
-VERSION_CODE="${1:?version code required}"
-VERSION_NAME="${2:?version name required}"
-
 CONFIG_FILE="$HOME/.otterling-build-agent/config.env"
 [[ -f "$CONFIG_FILE" ]] || { echo "Missing $CONFIG_FILE -- see build_agent.env.example" >&2; exit 1; }
 # shellcheck source=/dev/null
 source "$CONFIG_FILE"
 
+: "${OTTERLING_HOST:?set in config.env}"
 : "${GITHUB_REPO:?set in config.env}"
+
+echo "==> Fetching live manifest from https://${OTTERLING_HOST}/updates/macos-manifest.json..."
+MANIFEST_JSON=$(curl -fsS --max-time 20 "https://${OTTERLING_HOST}/updates/macos-manifest.json") \
+  || { echo "ERROR: couldn't fetch live manifest -- nothing to sync against, giving up." >&2; exit 1; }
+VERSION_CODE=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["versionCode"])' "$MANIFEST_JSON") \
+  || { echo "ERROR: live manifest missing/invalid versionCode" >&2; exit 1; }
+VERSION_NAME=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["versionName"])' "$MANIFEST_JSON") \
+  || { echo "ERROR: live manifest missing/invalid versionName" >&2; exit 1; }
+echo "==> Live manifest says versionCode=${VERSION_CODE} versionName=${VERSION_NAME}"
 GITHUB_CLONE_TOKEN="${GITHUB_CLONE_TOKEN:-}"
 if [[ -z "$GITHUB_CLONE_TOKEN" ]]; then
   echo "GITHUB_CLONE_TOKEN not set -- can't push a version-bump commit to a private repo" >&2

@@ -91,15 +91,32 @@ fi
 echo "==> Verified checkout is exactly ${GIT_SHA}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Don't let a failure here (`set -e` would otherwise abort this whole script) skip the
+# version-sync step below -- a multi-MB upload over a home connection can make curl's own
+# response-read time out and report failure even though the server had already finished
+# processing and publishing by then. Confirmed live: this happened for build 9, and because the
+# old code aborted here unconditionally, the sync step never ran at all, leaving git one version
+# behind a build that actually published fine. Always attempt the sync afterward regardless -- it
+# fetches the live manifest itself now, so it's a safe no-op if nothing actually got published.
+BUILD_STATUS=0
 "$SCRIPT_DIR/build_agent_build_and_upload.sh" \
-  "$WORKDIR/repo" "$GIT_SHA" "$VERSION_CODE" "$VERSION_NAME"
+  "$WORKDIR/repo" "$GIT_SHA" "$VERSION_CODE" "$VERSION_NAME" || BUILD_STATUS=$?
+if [[ "$BUILD_STATUS" -ne 0 ]]; then
+  echo "WARNING: build_agent_build_and_upload.sh exited $BUILD_STATUS -- checking the live manifest" >&2
+  echo "  in case it actually published despite a client-side error (e.g. a slow-upload response" >&2
+  echo "  timeout) before giving up on this job." >&2
+fi
 
 # Commit the version bump back to origin/main so this repo's own appVersionCode/version.txt don't
-# drift from what was just published (see build_agent_sync_version.sh's doc comment for why this
-# used to require a manual reconciliation commit). Deliberately non-fatal: the build already
-# succeeded and uploaded by this point, and the server has already cleared the pending job, so a
-# git-side failure here shouldn't make this run look like a build failure or a job that's still
-# pending -- it just means someone needs to sync those two files by hand again, which this logs
-# loudly about.
-"$SCRIPT_DIR/build_agent_sync_version.sh" "$VERSION_CODE" "$VERSION_NAME" || \
-  echo "WARNING: version-bump commit/push failed -- macos/FocusLock's committed appVersionCode/version.txt still need a manual sync to ${VERSION_CODE}/${VERSION_NAME} (see 874b1c9 for precedent)." >&2
+# drift from what's actually live (see build_agent_sync_version.sh's doc comment for why this used
+# to require a manual reconciliation commit, and why it now checks the live manifest instead of
+# trusting this job's own intent). Deliberately non-fatal: by this point the build attempt is
+# already over one way or another, so a git-side failure here shouldn't make this run look like a
+# job that's still pending -- it just means someone needs to sync those two files by hand again,
+# which this logs loudly about.
+"$SCRIPT_DIR/build_agent_sync_version.sh" || \
+  echo "WARNING: version-bump commit/push failed -- macos/FocusLock's committed appVersionCode/version.txt may still need a manual sync to match the live manifest (see 874b1c9 for precedent)." >&2
+
+if [[ "$BUILD_STATUS" -ne 0 ]]; then
+  exit "$BUILD_STATUS"
+fi
