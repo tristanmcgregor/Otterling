@@ -3,7 +3,17 @@ services:
     # Pinned: `latest` meant a `docker compose pull` could silently change the DNS filtering
     # engine underneath a working deployment. The Claude CLI in the Dockerfiles was already pinned
     # for the same reason; this applies the same rule to the bases.
-    image: adguard/adguardhome:v0.107.63
+    #
+    # Was v0.107.63 (schema 32) -- but the on-disk config at ./conf/AdGuardHome.yaml had already
+    # been migrated to schema_version 34 (first introduced in v0.107.74) by some earlier run of a
+    # newer image, before this pin was set back to an older tag. AdGuard Home refuses to start at
+    # all against a config schema newer than the running binary's own
+    # ("parsing configuration file: unknown current schema version 34"), so the container was
+    # crash-looping on every restart. Bumping forward to the current stable release (schema >= 34)
+    # lets AdGuard's own startup code read the existing config correctly instead of needing this
+    # file hand-edited to guess at a downgrade. Confirmed no breaking config changes in the
+    # v0.107.63..v0.107.79 changelog relevant to this deployment's settings.
+    image: adguard/adguardhome:v0.107.79
     container_name: otterling-filter-server
     restart: unless-stopped
     ports:
