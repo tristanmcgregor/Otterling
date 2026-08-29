@@ -9,10 +9,17 @@ import Foundation
 /// call it, and those are separate executable targets/processes -- this is the one piece of logic
 /// they share beyond the XPC protocol itself.
 public enum TamperReporter {
+    /// Minimum spacing between reports of the *same* `type`, so a flapping condition (e.g. DNS
+    /// floor disabled/re-enabled in a loop) can't flood ntfy and the phone's SMS relay. Deliberately
+    /// short -- this guards against runaway flapping, not against genuinely repeated tamper events
+    /// the accountability partner should still see in a timely way.
+    private static let minReportInterval: TimeInterval = 300
+
     /// Fire-and-forget with a single retry. Uses the host/token provisioned by
     /// `install_lock_profile.py` when present, otherwise the baked-in defaults in
     /// `FocusLockConstants` -- so reporting works out of the box on a fresh install.
     public static func report(type: String, details: String) {
+        guard shouldSend(type: type) else { return }
         let host = resolvedHost()
         let token = resolvedToken()
         guard !host.isEmpty, !token.isEmpty else { return }
@@ -36,6 +43,38 @@ public enum TamperReporter {
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
 
         send(request, retriesLeft: 1)
+    }
+
+    /// Checks and updates the shared, file-backed last-sent timestamp for `type`, returning
+    /// whether this call is allowed to actually send. File-backed (not an in-memory dict) because
+    /// `report` is called from the daemon, the watchdog LaunchDaemon, and the scanner CLI --
+    /// separate processes that don't share memory but do all run as root. `flock` serializes
+    /// concurrent read-modify-write across all of them; failures fail open (allow the send) so a
+    /// rate-limiter bug can't silently swallow a real tamper report.
+    private static func shouldSend(type: String) -> Bool {
+        FocusLockConstants.ensureStateDirectoryExists()
+        let path = FocusLockConstants.tamperReportStatePath
+        let fd = open(path, O_RDWR | O_CREAT, 0o600)
+        guard fd >= 0 else { return true }
+        defer { close(fd) }
+        guard flock(fd, LOCK_EX) == 0 else { return true }
+        defer { flock(fd, LOCK_UN) }
+
+        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: false)
+        let data = handle.readDataToEndOfFile()
+        var timestamps = (try? JSONDecoder().decode([String: TimeInterval].self, from: data)) ?? [:]
+
+        let now = Date().timeIntervalSince1970
+        if let last = timestamps[type], now - last < minReportInterval {
+            return false
+        }
+
+        timestamps[type] = now
+        guard let encoded = try? JSONEncoder().encode(timestamps) else { return true }
+        handle.seek(toFileOffset: 0)
+        handle.truncateFile(atOffset: 0)
+        handle.write(encoded)
+        return true
     }
 
     private static func send(_ request: URLRequest, retriesLeft: Int) {

@@ -12,6 +12,21 @@ public enum FocusLockConstants {
     /// Cache file for the downloaded adult-domain hosts lists (see `AdultBlocklistManager`).
     public static let adultBlocklistCachePath = "\(stateDirectory)/adult_domains.txt"
 
+    /// Creates `stateDirectory` if missing, so processes that write into it standalone (e.g.
+    /// `TamperReporter` from the watchdog or scanner CLI, which may run before the main daemon
+    /// ever has) don't fail. 0711, not 0700: this directory also holds `proxyCACertPath`, a
+    /// deliberately world-readable file the console user's own CLI tools must open directly by
+    /// path -- `--x` for group/other grants exactly that traverse-by-known-name without directory
+    /// listing. Individual files still carry their own restrictive mode.
+    public static func ensureStateDirectoryExists() {
+        guard !FileManager.default.fileExists(atPath: stateDirectory) else { return }
+        try? FileManager.default.createDirectory(
+            atPath: stateDirectory,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o711]
+        )
+    }
+
     /// pf anchor the daemon loads its `block drop` rules into.
     public static let pfAnchorName = "app.otterling"
     public static let pfAnchorFilePath = "/Library/Application Support/FocusLock/pf.anchor"
@@ -109,6 +124,13 @@ public enum FocusLockConstants {
     /// When present they take precedence over the baked-in defaults below.
     public static let lockProfileTokenPath = "\(stateDirectory)/lockprofile_token"
     public static let lockProfileHostPath = "\(stateDirectory)/lockprofile_host"
+
+    /// Per-type last-sent timestamps `TamperReporter` uses to rate-limit `/alerts/tamper` POSTs.
+    /// Lives here (not in-memory) because callers span separate processes -- the daemon, the
+    /// watchdog LaunchDaemon, and the scanner CLI -- that don't share memory but do all run as
+    /// root, so a shared root-owned file is the only way to throttle a flapping event (e.g. DNS
+    /// floor disabled/re-enabled) across all of them.
+    public static let tamperReportStatePath = "\(stateDirectory)/tamper_report_state.json"
 
     /// Baked-in fallbacks so on-device tamper reporting (daemon-unloaded, watchdog recovery, lock-
     /// profile removed) reaches the filter-server -- and from there ntfy + the phone's SMS relay --
