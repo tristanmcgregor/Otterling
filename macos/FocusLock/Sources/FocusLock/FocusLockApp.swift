@@ -1,6 +1,6 @@
 import SwiftUI
 
-// Test commit: verifying versionCode increments to 4 on this push.
+// Test commit: verifying the auto-publish pipeline completes end-to-end.
 @main
 struct FocusLockApp: App {
     init() {
