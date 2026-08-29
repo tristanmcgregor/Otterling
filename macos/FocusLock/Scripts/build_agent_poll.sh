@@ -39,6 +39,12 @@ CONFIG_FILE="$HOME/.otterling-build-agent/config.env"
 # shellcheck source=/dev/null
 source "$CONFIG_FILE"
 
+# See build_agent_proxy_env.sh's own doc comment: applies this account's already-provisioned
+# proxy env vars (if this Mac has proxy/firewall force-through enabled on itself) so the git/curl
+# calls below aren't silently dropped by this Mac's own enforcement.
+# shellcheck source=/dev/null
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/build_agent_proxy_env.sh"
+
 : "${OTTERLING_HOST:?set in config.env, e.g. vpn.bartholomew.help}"
 : "${MACOS_BUILD_AGENT_TOKEN:?set in config.env}"
 : "${GITHUB_REPO:?set in config.env, e.g. tristanmcgregor/Otterling}"
