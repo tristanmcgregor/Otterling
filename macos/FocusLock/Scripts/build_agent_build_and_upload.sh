@@ -38,7 +38,11 @@ echo "==> Unlocking build keychain"
 security unlock-keychain -p "$(cat "$BUILD_KEYCHAIN_PASSWORD_FILE")" "$BUILD_KEYCHAIN_PATH"
 
 echo "==> Building + signing (Scripts/build_app.sh --keychain)"
-./Scripts/build_app.sh --keychain "$BUILD_KEYCHAIN_PATH" "$SIGNING_IDENTITY"
+# Pin the exact version the review host already decided for this job -- build_app.sh otherwise
+# auto-bumps FocusLockConstants.appVersionCode/version.txt itself based on this repo's git history,
+# which would disagree with the version_code/version_name this script is about to upload.
+OTTERLING_VERSION_CODE="$VERSION_CODE" OTTERLING_VERSION_NAME="$VERSION_NAME" \
+  ./Scripts/build_app.sh --keychain "$BUILD_KEYCHAIN_PATH" "$SIGNING_IDENTITY"
 
 APP_PATH="/Applications/Otterling.app"
 CODESIGN_INFO=$(codesign -dv --verbose=4 "$APP_PATH" 2>&1)

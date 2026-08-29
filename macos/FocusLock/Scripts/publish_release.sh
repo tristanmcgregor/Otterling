@@ -16,28 +16,48 @@
 # write a usable manifest without one, since an unattested manifest is just dead weight no install
 # will ever trust anyway.
 #
-# Usage: Scripts/publish_release.sh <versionCode> <versionName> [--attestation '<json>']
-#   e.g. Scripts/publish_release.sh 2 "0.2"
+# Usage: Scripts/publish_release.sh [<versionCode> <versionName>] [--attestation '<json>']
+#   e.g. Scripts/publish_release.sh --attestation '{"gitSha":"...","reviewAttestation":"..."}'
 #        Scripts/publish_release.sh 2 "0.2" --attestation '{"gitSha":"...","reviewAttestation":"..."}'
 #   The --attestation JSON is exactly what `sudo otterling-attest-macos` prints on the review host.
+#
+#   versionCode/versionName are now optional: omitted, they're read straight out of
+#   FocusLockConstants.appVersionCode / Scripts/version.txt -- i.e. whatever build_app.sh just baked
+#   into /Applications/Otterling.app, which auto-bumps those itself when macos/ files changed since
+#   the last publish (see that script). Passing them explicitly still works and overrides the files.
 
 set -euo pipefail
 
-VERSION_CODE="${1:-}"
-VERSION_NAME="${2:-}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CONSTANTS_FILE="$SCRIPT_DIR/../Sources/FocusLockShared/Constants.swift"
+VERSION_FILE="$SCRIPT_DIR/version.txt"
+
+VERSION_CODE=""
+VERSION_NAME=""
 ATTESTATION_JSON=""
-if [ $# -gt 2 ]; then
+if [ $# -ge 2 ] && [[ "$1" =~ ^[0-9]+$ ]] && [ "$2" != "--attestation" ]; then
+  VERSION_CODE="$1"
+  VERSION_NAME="$2"
   shift 2
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      --attestation) ATTESTATION_JSON="${2:?--attestation needs a JSON argument}"; shift 2 ;;
-      *) echo "Unknown argument: $1" >&2; exit 1 ;;
-    esac
-  done
+fi
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --attestation) ATTESTATION_JSON="${2:?--attestation needs a JSON argument}"; shift 2 ;;
+    *) echo "Unknown argument: $1" >&2; exit 1 ;;
+  esac
+done
+
+if [ -z "$VERSION_CODE" ]; then
+  VERSION_CODE="$(sed -n 's/.*appVersionCode = \([0-9]*\).*/\1/p' "$CONSTANTS_FILE" | head -1)"
+  echo "==> No versionCode given -- using FocusLockConstants.appVersionCode: $VERSION_CODE"
+fi
+if [ -z "$VERSION_NAME" ]; then
+  VERSION_NAME="$(cat "$VERSION_FILE" 2>/dev/null || echo "")"
+  echo "==> No versionName given -- using Scripts/version.txt: $VERSION_NAME"
 fi
 
 if [ -z "$VERSION_CODE" ] || [ -z "$VERSION_NAME" ]; then
-  echo "Usage: $0 <versionCode> <versionName> [--attestation '<json>']"
+  echo "Usage: $0 [<versionCode> <versionName>] [--attestation '<json>']"
   echo "  versionCode must be a plain integer, strictly greater than the last published one,"
   echo "  and must match FocusLockConstants.appVersionCode in the build you're publishing."
   exit 1
@@ -155,6 +175,13 @@ cat > "$MANIFEST_PATH" <<JSON
   "reviewAttestation": "${REVIEW_ATTESTATION}"
 }
 JSON
+
+# Records what was just published so build_app.sh's next run can auto-bump the version from *this*
+# baseline instead of the git history the review host attested to -- gitignored, local-only state
+# (see .gitignore's note on .release/).
+printf '%s\n' "$GIT_SHA" > "$OUT_DIR/last_published_sha"
+printf '%s\n' "$VERSION_CODE" > "$OUT_DIR/last_published_version_code"
+printf '%s\n' "$VERSION_NAME" > "$OUT_DIR/last_published_version_name"
 
 echo
 echo "==> Done. Wrote:"

@@ -82,8 +82,21 @@ review host never touched the binary itself.
 ```bash
 cd macos/FocusLock
 ./Scripts/build_app.sh "Apple Development: Your Name (TEAMID)"
-ALLOW_NON_DEVELOPER_ID=1 ./Scripts/publish_release.sh <versionCode> <versionName>   # e.g. 2 "0.2"
+ALLOW_NON_DEVELOPER_ID=1 ./Scripts/publish_release.sh   # versionCode/versionName no longer required
 ```
+
+**Version bumping is now automatic.** `build_app.sh` checks whether anything under `macos/` changed
+since the last local publish (tracked in `.release/last_published_*`, written by
+`publish_release.sh` after a successful publish) and, if so, bumps
+`FocusLockConstants.appVersionCode` and `Scripts/version.txt` itself before building -- no more
+manually editing `Constants.swift` and remembering to keep it in sync with the build. No macOS
+changes since the last publish means no bump (re-running the build for an unrelated release just
+reuses the existing version). `publish_release.sh` then reads `versionCode`/`versionName` straight
+back out of those two files if you don't pass them explicitly, so what gets published always
+matches what was just built. Passing `<versionCode> <versionName>` explicitly to either script
+still works and overrides this (see `OTTERLING_VERSION_CODE`/`OTTERLING_VERSION_NAME` in
+`build_app.sh`'s own comments -- that's what the build-agent path uses, to pin the version the
+review host already decided rather than rely on this repo's git history).
 
 `publish_release.sh`:
 - Refuses to run if the built app's Team Identifier doesn't match `pinnedUpdateTeamID` -- catches

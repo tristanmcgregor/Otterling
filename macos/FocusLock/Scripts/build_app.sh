@@ -35,14 +35,17 @@ fi
 # Empty array (not appended inline) so `codesign "${CODESIGN_KEYCHAIN_ARGS[@]}" ...` is a true
 # no-op when $KEYCHAIN_PATH is unset -- bash has no clean way to conditionally splice extra args
 # into a fixed positional command otherwise without either duplicating every codesign line or
-# risking a stray empty-string argument.
+# risking a stray empty-string argument. Expanded below as
+# `${CODESIGN_KEYCHAIN_ARGS[@]+"${CODESIGN_KEYCHAIN_ARGS[@]}"}`, not the plain form, because macOS's
+# stock /bin/bash (3.2) throws "unbound variable" under `set -u` when a *plain* empty-array
+# expansion has no elements -- this guarded form is the standard bash 3.2-safe workaround.
 CODESIGN_KEYCHAIN_ARGS=()
 if [ -n "$KEYCHAIN_PATH" ]; then
   CODESIGN_KEYCHAIN_ARGS=(--keychain "$KEYCHAIN_PATH")
 fi
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BUILD_DIR="$PROJECT_DIR/.build/debug"
+BUILD_DIR="$PROJECT_DIR/.build/release"
 # EXECUTABLE_NAME matches the SwiftPM product names in Package.swift (unchanged -- renaming these
 # would mean large Package.swift/target churn for no user-facing benefit). APP_NAME/DISPLAY_NAME
 # is purely the install path and Info.plist branding -- bundle/Mach/LaunchDaemon IDs stay as
@@ -54,14 +57,93 @@ BUNDLE_ID="app.otterling"
 HELPER_LABEL="app.otterling.helperd"
 WATCHDOG_LABEL="app.otterling.watchdog"
 SCANNER_LABEL="app.otterling.scanner"
-INSTALL_PATH="/Applications/${APP_NAME}.app"
-# Must match FocusLockConstants.appVersionCode in Sources/FocusLockShared/Constants.swift -- kept
-# in sync by hand (see that constant's doc comment); UpdateManager compares against the Swift
-# constant, not this plist value, but they should always read the same to a human checking either.
-APP_VERSION="0.2"
+# OTTERLING_STAGE_ROOT lets build_pkg.sh reuse this exact assembly/signing logic to stage a payload
+# for pkgbuild instead of writing straight into the running system's /Applications + /usr/local/bin
+# -- unset (the normal manual/build-agent path, unchanged) writes to the real paths as before.
+STAGE_ROOT="${OTTERLING_STAGE_ROOT:-}"
+INSTALL_PATH="${STAGE_ROOT}/Applications/${APP_NAME}.app"
+CTL_BIN_DIR="${STAGE_ROOT}/usr/local/bin"
+# Where the app will actually live once installed, regardless of STAGE_ROOT -- the LaunchDaemon/
+# LaunchAgent plists below must always point here, never at $INSTALL_PATH. $INSTALL_PATH is only
+# where this script writes files *right now* (the real /Applications on a normal run, or a
+# throwaway pkgbuild staging root under build_pkg.sh); the plists launchd loads describe where the
+# binaries will be running FROM, which for a staged build is /Applications on the machine the .pkg
+# eventually installs onto, not the build machine's staging directory that gets deleted right after
+# packaging. Baking $INSTALL_PATH in here directly was exactly that bug: pkg installs shipped
+# LaunchDaemon plists whose Program pointed at a `mktemp` staging dir that no longer existed on the
+# target machine, so the daemon failed to spawn (EX_CONFIG) on every install from a built .pkg.
+FINAL_APP_PATH="/Applications/${APP_NAME}.app"
 
-echo "==> Building with SwiftPM"
-swift build --package-path "$PROJECT_DIR"
+# --- Auto version bump -------------------------------------------------------------------------
+# FocusLockConstants.appVersionCode and Scripts/version.txt (this build's CFBundleShortVersionString)
+# used to be bumped by hand before every release -- forgetting that step is exactly what caused a
+# shipped build to keep reporting itself as an old version to UpdateManager's check, forever
+# redownloading/reinstalling the "update" it had already installed (see git history on this file
+# and on Constants.swift for the incident this fixes). Auto-bump instead, but only when something
+# under macos/ actually changed since the last local publish (tracked in .release/last_published_*,
+# written by publish_release.sh) -- so a build with no macOS changes just reuses the existing
+# version instead of bumping on every single build.
+#
+# OTTERLING_VERSION_CODE / OTTERLING_VERSION_NAME (set together) pin an exact version instead and
+# skip this logic entirely -- used by build_agent_build_and_upload.sh, which must bake in whatever
+# version the review host already decided for this job, not whatever this repo's git history
+# happens to suggest.
+CONSTANTS_FILE="$PROJECT_DIR/Sources/FocusLockShared/Constants.swift"
+VERSION_FILE="$PROJECT_DIR/Scripts/version.txt"
+RELEASE_DIR="$PROJECT_DIR/.release"
+REPO_ROOT="$(git -C "$PROJECT_DIR" rev-parse --show-toplevel 2>/dev/null || echo "")"
+
+CURRENT_VERSION_CODE="$(sed -n 's/.*appVersionCode = \([0-9]*\).*/\1/p' "$CONSTANTS_FILE" | head -1)"
+CURRENT_VERSION_NAME="$(cat "$VERSION_FILE" 2>/dev/null || echo "0.0")"
+
+if [ -n "${OTTERLING_VERSION_CODE:-}" ] || [ -n "${OTTERLING_VERSION_NAME:-}" ]; then
+  : "${OTTERLING_VERSION_CODE:?OTTERLING_VERSION_CODE and OTTERLING_VERSION_NAME must be set together}"
+  : "${OTTERLING_VERSION_NAME:?OTTERLING_VERSION_CODE and OTTERLING_VERSION_NAME must be set together}"
+  NEW_VERSION_CODE="$OTTERLING_VERSION_CODE"
+  NEW_VERSION_NAME="$OTTERLING_VERSION_NAME"
+  echo "==> Pinning version $NEW_VERSION_NAME ($NEW_VERSION_CODE) from OTTERLING_VERSION_CODE/OTTERLING_VERSION_NAME"
+else
+  LAST_SHA=""
+  LAST_VERSION_CODE="$CURRENT_VERSION_CODE"
+  LAST_VERSION_NAME="$CURRENT_VERSION_NAME"
+  [ -f "$RELEASE_DIR/last_published_sha" ] && LAST_SHA="$(cat "$RELEASE_DIR/last_published_sha")"
+  [ -f "$RELEASE_DIR/last_published_version_code" ] && LAST_VERSION_CODE="$(cat "$RELEASE_DIR/last_published_version_code")"
+  [ -f "$RELEASE_DIR/last_published_version_name" ] && LAST_VERSION_NAME="$(cat "$RELEASE_DIR/last_published_version_name")"
+
+  MACOS_CHANGED=1
+  if [ -n "$REPO_ROOT" ] && [ -n "$LAST_SHA" ] && git -C "$REPO_ROOT" cat-file -e "${LAST_SHA}^{commit}" 2>/dev/null; then
+    if git -C "$REPO_ROOT" diff --quiet "$LAST_SHA" HEAD -- macos/ 2>/dev/null; then
+      MACOS_CHANGED=0
+    fi
+  fi
+
+  if [ "$MACOS_CHANGED" = "1" ]; then
+    NEW_VERSION_CODE=$((LAST_VERSION_CODE + 1))
+    LAST_PATCH="${LAST_VERSION_NAME##*.}"
+    LAST_PREFIX="${LAST_VERSION_NAME%.*}"
+    if [[ "$LAST_PATCH" =~ ^[0-9]+$ ]]; then
+      NEW_VERSION_NAME="${LAST_PREFIX}.$((LAST_PATCH + 1))"
+    else
+      NEW_VERSION_NAME="$NEW_VERSION_CODE"
+    fi
+    echo "==> macos/ changed since last publish (${LAST_SHA:-none}) -- bumping version to $NEW_VERSION_NAME ($NEW_VERSION_CODE)"
+    sed -i '' "s/appVersionCode = [0-9]*/appVersionCode = ${NEW_VERSION_CODE}/" "$CONSTANTS_FILE"
+    printf '%s\n' "$NEW_VERSION_NAME" > "$VERSION_FILE"
+  else
+    NEW_VERSION_CODE="$CURRENT_VERSION_CODE"
+    NEW_VERSION_NAME="$CURRENT_VERSION_NAME"
+    echo "==> No macos/ changes since last publish -- keeping version $NEW_VERSION_NAME ($NEW_VERSION_CODE)"
+  fi
+fi
+
+# Must match FocusLockConstants.appVersionCode in Sources/FocusLockShared/Constants.swift --
+# kept in sync automatically by the block above (see that constant's doc comment); UpdateManager
+# compares against the Swift constant, not this plist value, but they should always read the same
+# to a human checking either.
+APP_VERSION="$NEW_VERSION_NAME"
+
+echo "==> Building with SwiftPM (release)"
+swift build -c release --package-path "$PROJECT_DIR"
 
 echo "==> Assembling ${APP_NAME}.app at ${INSTALL_PATH}"
 rm -rf "$INSTALL_PATH"
@@ -133,7 +215,7 @@ tee "$INSTALL_PATH/Contents/Library/LaunchDaemons/${HELPER_LABEL}.plist" > /dev/
         <true/>
     </dict>
     <key>Program</key>
-    <string>${INSTALL_PATH}/Contents/MacOS/FocusLockHelperd</string>
+    <string>${FINAL_APP_PATH}/Contents/MacOS/FocusLockHelperd</string>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
@@ -157,7 +239,7 @@ tee "$INSTALL_PATH/Contents/Library/LaunchDaemons/${WATCHDOG_LABEL}.plist" > /de
     <key>Label</key>
     <string>${WATCHDOG_LABEL}</string>
     <key>Program</key>
-    <string>${INSTALL_PATH}/Contents/MacOS/FocusLockWatchdog</string>
+    <string>${FINAL_APP_PATH}/Contents/MacOS/FocusLockWatchdog</string>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
@@ -182,7 +264,7 @@ tee "$INSTALL_PATH/Contents/Library/LaunchAgents/${SCANNER_LABEL}.plist" > /dev/
     <key>Label</key>
     <string>${SCANNER_LABEL}</string>
     <key>Program</key>
-    <string>${INSTALL_PATH}/Contents/MacOS/FocusLockScanner</string>
+    <string>${FINAL_APP_PATH}/Contents/MacOS/FocusLockScanner</string>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
@@ -196,22 +278,22 @@ tee "$INSTALL_PATH/Contents/Library/LaunchAgents/${SCANNER_LABEL}.plist" > /dev/
 PLIST
 
 echo "==> Code-signing (daemons + agent first, then app bundle)"
-codesign --force --options runtime "${CODESIGN_KEYCHAIN_ARGS[@]}" --sign "$SIGN_IDENTITY" "$INSTALL_PATH/Contents/MacOS/FocusLockHelperd"
-codesign --force --options runtime "${CODESIGN_KEYCHAIN_ARGS[@]}" --sign "$SIGN_IDENTITY" "$INSTALL_PATH/Contents/MacOS/FocusLockWatchdog"
-codesign --force --options runtime "${CODESIGN_KEYCHAIN_ARGS[@]}" --sign "$SIGN_IDENTITY" "$INSTALL_PATH/Contents/MacOS/FocusLockScanner"
-codesign --force --options runtime "${CODESIGN_KEYCHAIN_ARGS[@]}" --sign "$SIGN_IDENTITY" "$INSTALL_PATH/Contents/MacOS/${EXECUTABLE_NAME}"
-codesign --force --options runtime "${CODESIGN_KEYCHAIN_ARGS[@]}" --sign "$SIGN_IDENTITY" "$INSTALL_PATH"
+codesign --force --options runtime "${CODESIGN_KEYCHAIN_ARGS[@]+"${CODESIGN_KEYCHAIN_ARGS[@]}"}" --sign "$SIGN_IDENTITY" "$INSTALL_PATH/Contents/MacOS/FocusLockHelperd"
+codesign --force --options runtime "${CODESIGN_KEYCHAIN_ARGS[@]+"${CODESIGN_KEYCHAIN_ARGS[@]}"}" --sign "$SIGN_IDENTITY" "$INSTALL_PATH/Contents/MacOS/FocusLockWatchdog"
+codesign --force --options runtime "${CODESIGN_KEYCHAIN_ARGS[@]+"${CODESIGN_KEYCHAIN_ARGS[@]}"}" --sign "$SIGN_IDENTITY" "$INSTALL_PATH/Contents/MacOS/FocusLockScanner"
+codesign --force --options runtime "${CODESIGN_KEYCHAIN_ARGS[@]+"${CODESIGN_KEYCHAIN_ARGS[@]}"}" --sign "$SIGN_IDENTITY" "$INSTALL_PATH/Contents/MacOS/${EXECUTABLE_NAME}"
+codesign --force --options runtime "${CODESIGN_KEYCHAIN_ARGS[@]+"${CODESIGN_KEYCHAIN_ARGS[@]}"}" --sign "$SIGN_IDENTITY" "$INSTALL_PATH"
 
 echo "==> Verifying signatures"
 codesign -dv --verbose=4 "$INSTALL_PATH" 2>&1 | grep -E "Identifier|TeamIdentifier|Authority"
 codesign -dv --verbose=4 "$INSTALL_PATH/Contents/MacOS/FocusLockHelperd" 2>&1 | grep -E "Identifier|TeamIdentifier|Authority"
 codesign -dv --verbose=4 "$INSTALL_PATH/Contents/MacOS/FocusLockWatchdog" 2>&1 | grep -E "Identifier|TeamIdentifier|Authority"
 
-echo "==> Installing otterlingctl to /usr/local/bin"
-mkdir -p /usr/local/bin
-rm -f /usr/local/bin/focuslockctl
-cp "$BUILD_DIR/otterlingctl" /usr/local/bin/otterlingctl
-codesign --force --options runtime "${CODESIGN_KEYCHAIN_ARGS[@]}" --sign "$SIGN_IDENTITY" /usr/local/bin/otterlingctl
+echo "==> Installing otterlingctl to ${CTL_BIN_DIR}"
+mkdir -p "$CTL_BIN_DIR"
+rm -f "$CTL_BIN_DIR/focuslockctl"
+cp "$BUILD_DIR/otterlingctl" "$CTL_BIN_DIR/otterlingctl"
+codesign --force --options runtime "${CODESIGN_KEYCHAIN_ARGS[@]+"${CODESIGN_KEYCHAIN_ARGS[@]}"}" --sign "$SIGN_IDENTITY" "$CTL_BIN_DIR/otterlingctl"
 
 echo "==> Done. Launch with: open ${INSTALL_PATH}"
 echo "    Guardian CLI: otterlingctl status"
