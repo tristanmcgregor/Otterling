@@ -187,12 +187,12 @@ class AlertReporter(context: Context) {
      *
      * Everything else is one of two buckets: [BENIGN_TYPES] (status/recovery events whose own
      * `details` text is already clear and fine to send as-is -- "content filter VPN blocked
-     * example.com", "watched app opened", etc.) or a tamper event, which -- per direct request --
-     * collapses to one simple, human line instead of leaking internal detail text (raw type/id
-     * strings like "ACCESSIBILITY_SERVICE_DESTROYED" or a git sha mean nothing to an accountability
-     * partner reading an SMS). A type not in either bucket defaults to the tamper message rather
-     * than benign passthrough, so a newly-added tamper type alerts loudly by default instead of
-     * silently going out as raw text.
+     * example.com", "watched app opened", etc.) or a tamper event, which is prefixed with
+     * "Tampering detected: " and sent with its `details` text so the accountability partner sees
+     * what actually happened (e.g. the rejected peer's pid/identifier/team, which action a failed
+     * passcode attempt targeted, or the git sha of a locally-modified build) rather than a single
+     * generic line. Only when a tamper event's `details` is blank does it fall back to the generic
+     * "App has been tampered with" message, so a report never goes out empty.
      *
      * A guardian-set [ReportConfigStore.customMessage] for [type] (report_types.json's
      * `customMessage`, edited via the dashboard's Report Types panel) takes priority over all of
@@ -217,6 +217,7 @@ class AlertReporter(context: Context) {
                 "\"$word\" flagged $preposition $place"
             }
             type in BENIGN_TYPES -> details
+            details.isNotBlank() -> "Tampering detected: $details"
             else -> "App has been tampered with. It is highly recommended to check up on Tristan."
         }
         val suspicionTag = when (reportConfig.suspicion(type)) {
