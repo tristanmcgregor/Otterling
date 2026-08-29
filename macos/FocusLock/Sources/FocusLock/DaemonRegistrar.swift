@@ -26,17 +26,50 @@ enum DaemonRegistrar {
     /// `SMAppService.agent` (its plist lives in Contents/Library/LaunchAgents). Like the daemons it
     /// sits in `.requiresApproval` until the user allows it under Login Items & Extensions; on top
     /// of that it needs Accessibility permission, which the scanner itself prompts for on first run.
-    /// No reachability re-check/re-register dance here: the scanner is report-only, so a stale
-    /// registration is a missed alert, not a lifted protection -- not worth the extra launchctl
-    /// probing the daemons justify.
+    ///
+    /// Same stale-`.enabled`-but-unreachable re-register dance as `registerIfNeeded` below: this
+    /// used to skip that check on the theory that the scanner was report-only, so a stale
+    /// registration was only a missed alert -- but it now also runs the screenshot NSFW capture
+    /// loop (`ScreenshotMonitor`), so a silently-dead scanner is a genuinely lifted protection, not
+    /// just a missed alert. Confirmed via `launchctl print gui/<uid>/app.otterling.scanner`
+    /// returning "Could not find service" while `SMAppService.status` still reported `.enabled`
+    /// after a rebuild changed the binary underneath an existing registration.
     private static func registerScannerAgentIfNeeded() {
         let service = SMAppService.agent(plistName: "\(FocusLockConstants.scannerBundleIdentifier).plist")
-        guard service.status != .enabled else { return }
+        if service.status == .enabled, scannerJobLoaded() { return }
+
+        let wasStaleEnabled = service.status == .enabled
+        if wasStaleEnabled {
+            let group = DispatchGroup()
+            group.enter()
+            service.unregister { _ in group.leave() }
+            group.wait()
+        }
+
         do {
             try service.register()
+            if wasStaleEnabled {
+                TamperReporter.report(
+                    type: "watchdog_or_daemon_reregistered",
+                    details: "FocusLockScanner was enabled but unreachable on GUI launch -- re-registered"
+                )
+            }
         } catch {
             NSLog("FocusLock: FocusLockScanner agent registration failed (status=\(service.status)): \(error)")
         }
+    }
+
+    /// Per-user-agent equivalent of `launchdJobLoaded` below (which checks `system/<label>`) --
+    /// the scanner lives in the `gui/<uid>` launchd domain, not `system`.
+    private static func scannerJobLoaded() -> Bool {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        process.arguments = ["print", "gui/\(getuid())/\(FocusLockConstants.scannerBundleIdentifier)"]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        guard (try? process.run()) != nil else { return false }
+        process.waitUntilExit()
+        return process.terminationStatus == 0
     }
 
     /// SMAppService's cached `.status` can go stale relative to what launchd actually has loaded
