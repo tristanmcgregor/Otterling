@@ -300,6 +300,52 @@ def _consume_handoff_token(token: str) -> bool:
             pass
         return True
 
+
+# Lets the handoff flow above ALSO set the same PIN as the local login password on this
+# household's macOS build-agent admin account -- explicitly requested and accepted with the
+# tradeoff understood: this hands a device holding the shared bearer token (which ships inside
+# the app itself) a one-time read of the plaintext Guardian PIN, which route_policy.py's own
+# module doc otherwise treats as the single highest-value secret this service holds. Kept as
+# narrow as the tradeoff allows: written only at the exact moment a handoff link is actually
+# consumed (not on every ordinary PIN change), expires quickly, and is destroyed on first read --
+# see _claim_admin_password_sync. The macOS side (AdminPasswordSync.swift) polls for it and never
+# logs the value.
+ADMIN_PASSWORD_SYNC_PATH = os.path.join(DATA_DIR, "admin_password_sync.json")
+ADMIN_PASSWORD_SYNC_TTL_SECONDS = 10 * 60  # 10 minutes -- the Mac's poll interval is well under this.
+_admin_password_sync_lock = threading.Lock()
+
+
+def _save_admin_password_sync(pin: str) -> None:
+    with _admin_password_sync_lock:
+        data = {"pin": pin, "expiresAt": time.time() + ADMIN_PASSWORD_SYNC_TTL_SECONDS}
+        os.makedirs(DATA_DIR, exist_ok=True)
+        tmp_path = ADMIN_PASSWORD_SYNC_PATH + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as fh:
+            json.dump(data, fh)
+        os.replace(tmp_path, ADMIN_PASSWORD_SYNC_PATH)
+
+
+def _claim_admin_password_sync() -> str | None:
+    """Single-use, like _consume_handoff_token: returns the pending PIN at most once, then the
+    file is gone -- a second call (a retried request, a second device polling) gets None, not a
+    stale replay of an already-applied password. Also None if nothing is pending or it expired
+    before any device asked."""
+    with _admin_password_sync_lock:
+        try:
+            with open(ADMIN_PASSWORD_SYNC_PATH, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (FileNotFoundError, json.JSONDecodeError):
+            return None
+        try:
+            os.remove(ADMIN_PASSWORD_SYNC_PATH)
+        except FileNotFoundError:
+            pass
+        if not isinstance(data, dict) or data.get("expiresAt", 0) < time.time():
+            return None
+        pin = data.get("pin")
+        return pin if isinstance(pin, str) else None
+
+
 NTFY_SERVER = os.environ.get("NTFY_SERVER", "https://ntfy.sh").rstrip("/")
 NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "")
 
@@ -3123,7 +3169,10 @@ class Handler(BaseHTTPRequestHandler):
         new Guardian PIN -- the `/handoff/` static page's form posts here. Same 4-digit format as
         the regular POST /dashboard-api/pin change flow; same _save_guardian_pin call, so this has
         the identical side effect of invalidating every existing dashboard session (including
-        whoever generated the link) and changing what unlocks Settings fleet-wide."""
+        whoever generated the link) and changing what unlocks Settings fleet-wide. Also queues the
+        same PIN for AdminPasswordSync.swift to pick up (see ADMIN_PASSWORD_SYNC_PATH's comment)
+        -- only from THIS flow, not the ordinary PIN-change route, since the handoff link is the
+        one moment this was explicitly asked to also become the Mac's local admin password."""
         body = self._read_json_body()
         token = (body or {}).get("token", "")
         new_pin = (body or {}).get("newPin", "")
@@ -3134,6 +3183,7 @@ class Handler(BaseHTTPRequestHandler):
         if not _consume_handoff_token(token):
             return self._send_json(400, {"error": "This link is invalid or has expired."})
         _save_guardian_pin(new_pin)
+        _save_admin_password_sync(new_pin)
         self._send_json(200, {"status": "ok"})
 
     def _handle_dashboard_verify(self) -> None:
@@ -3570,6 +3620,15 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/dashboard-api/handoff-link" and method == "POST":
             data = _save_handoff_token()
             self._send_json(200, {"token": data["token"], "expiresAt": data["expiresAt"]})
+            return True
+
+        # Device-bearer reachable (see route_policy.py's DEVICE_BEARER_ROUTES and its comment on
+        # this exact route) -- AdminPasswordSync.swift polls this to learn a PIN just set through
+        # the account-handoff flow above, so it can apply the same value as the local macOS admin
+        # account's login password. Single-use (see _claim_admin_password_sync): whichever device
+        # asks first gets the PIN and it's gone, so at most one device can ever apply it.
+        if path == "/dashboard-api/admin-password-sync" and method == "GET":
+            self._send_json(200, {"pin": _claim_admin_password_sync()})
             return True
 
         if path == "/dashboard-api/handoff-link" and method == "DELETE":

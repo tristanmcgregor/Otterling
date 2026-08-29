@@ -204,6 +204,10 @@ final class EnforcementLoop {
                 // Same cadence -- lets the dashboard's Habit Rule Wizard search this Mac's real
                 // installed apps. Changes rarely, so once per sync cycle is plenty.
                 DashboardConfigSync.reportInstalledApps()
+                // Same cadence -- see AdminPasswordSync.swift's header comment. A no-op poll
+                // almost every tick; only does anything right after the account-handoff link is
+                // actually used.
+                AdminPasswordSync.check()
                 self.lastDashboardSyncAt = dashboardSyncNow
             }
 

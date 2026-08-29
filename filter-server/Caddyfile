@@ -209,7 +209,7 @@
 		# still confined. Keep the two in sync -- route_policy.py is the authority, and
 		# tests/test_route_policy.py pins its contents.
 		@dashboardApiDeviceGet {
-			path /dashboard-api/devices/*/settings /dashboard-api/pin/exists /dashboard-api/habits
+			path /dashboard-api/devices/*/settings /dashboard-api/pin/exists /dashboard-api/habits /dashboard-api/admin-password-sync
 			method GET
 			header Authorization *
 		}
@@ -373,7 +373,7 @@ http://192.168.0.254 {
 		# still confined. Keep the two in sync -- route_policy.py is the authority, and
 		# tests/test_route_policy.py pins its contents.
 		@dashboardApiDeviceGet {
-			path /dashboard-api/devices/*/settings /dashboard-api/pin/exists /dashboard-api/habits
+			path /dashboard-api/devices/*/settings /dashboard-api/pin/exists /dashboard-api/habits /dashboard-api/admin-password-sync
 			method GET
 			header Authorization *
 		}

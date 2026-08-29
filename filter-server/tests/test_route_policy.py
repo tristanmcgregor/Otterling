@@ -25,6 +25,7 @@ class DeviceRouteTableTests(unittest.TestCase):
             ("POST", "/dashboard-api/habits/*/complete"),
             ("POST", "/dashboard-api/devices/*/installed-apps"),
             ("POST", "/dashboard-api/devices/*/app-info"),
+            ("GET", "/dashboard-api/admin-password-sync"),
         }))
 
     def test_the_routes_devices_actually_call_are_permitted(self):
@@ -36,6 +37,7 @@ class DeviceRouteTableTests(unittest.TestCase):
             ("POST", "/dashboard-api/habits/abc123/complete"),
             ("POST", "/dashboard-api/devices/mac-uuid/installed-apps"),
             ("POST", "/dashboard-api/devices/mac-uuid/app-info"),
+            ("GET", "/dashboard-api/admin-password-sync"),
         ]:
             self.assertEqual(
                 rp.required_access(method, path), rp.DEVICE_BEARER_OK,
