@@ -173,7 +173,7 @@ struct ContentView: View {
 
             // Footer: build + theme note
             Divider().overlay(Otter.outlineVariant.opacity(0.4))
-            Text("🦦 Otterling · Build \(FocusLockConstants.appVersionCode)")
+            Text("🦦 Otterling — Build \(FocusLockConstants.appVersionCode)")
                 .font(.system(size: 10))
                 .foregroundStyle(Otter.onSurfaceVariant)
                 .padding(.horizontal, 16).padding(.vertical, 10)
