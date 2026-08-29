@@ -1,9 +1,16 @@
 #!/bin/bash
-# Runs on a timer (LaunchDaemon, ~15 min, see build_agent.launchd.plist.example) on the isolated
-# macOS build-agent admin account -- polls the Linux review host for a queued macOS build job
-# (written by release.sh on the Linux host whenever an AI-reviewed push touches macos/ paths),
-# and if one is pending, does a clean, from-scratch, exact-SHA checkout and hands off to
+# Runs continuously (LaunchDaemon with KeepAlive, see build_agent.launchd.plist.example) on the
+# isolated macOS build-agent admin account -- long-polls the Linux review host for a queued macOS
+# build job (written by release.sh on the Linux host whenever an AI-reviewed push touches macos/
+# paths), and if one is pending, does a clean, from-scratch, exact-SHA checkout and hands off to
 # build_agent_build_and_upload.sh. See macos/FocusLock/RELEASE.md for the full picture.
+#
+# The GET below blocks server-side for up to ~25s waiting for a job before replying "none pending"
+# (see webhook_server.py's MACOS_LONGPOLL_SECONDS) -- so a queued job is claimed within a fraction
+# of a second of release.sh writing it, not whenever this happened to next run. launchd relaunches
+# this script immediately (KeepAlive, no StartInterval) every time it exits, so the two together
+# behave like one continuously-blocking poll loop without this script needing its own internal
+# while-loop or long-lived process state.
 #
 # Deliberately does its own git clone+checkout into a fresh temp directory every run rather than
 # reusing/pulling a persistent local checkout -- the whole point of this pipeline is "build exactly
@@ -32,24 +39,28 @@ GITHUB_CLONE_TOKEN="${GITHUB_CLONE_TOKEN:-}"
 
 LOG_DIR="$HOME/.otterling-build-agent/logs"
 mkdir -p "$LOG_DIR"
-LOG="$LOG_DIR/poll-$(date -u +%Y%m%dT%H%M%SZ).log"
-exec > >(tee -a "$LOG") 2>&1
-echo "==> Polling https://${OTTERLING_HOST}/ci/pending-macos-build"
 
-RESPONSE=$(curl -fsS --max-time 20 \
+# No dedicated log file (and no "==> Polling..." announcement) for the routine long-poll-then-
+# nothing-pending case -- with KeepAlive relaunching this every ~25s when idle, that would create
+# a near-empty timestamped file every ~25s forever. Routine runs just print to stdout/stderr,
+# which launchd already redirects to the single shared launchd.log. A dedicated per-job log file
+# is only created below once there's actually a job to build.
+RESPONSE=$(curl -fsS --max-time 30 \
   -H "Authorization: Bearer ${MACOS_BUILD_AGENT_TOKEN}" \
   "https://${OTTERLING_HOST}/ci/pending-macos-build") || {
-  echo "Poll request failed -- will retry next timer tick" >&2
+  echo "Poll request failed -- will retry immediately (KeepAlive relaunch)" >&2
   exit 0
 }
 
 GIT_SHA=$(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); print(d.get("gitSha") or "")' "$RESPONSE")
 if [[ -z "$GIT_SHA" ]]; then
-  echo "No pending macOS build job."
   exit 0
 fi
 VERSION_CODE=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["versionCode"])' "$RESPONSE")
 VERSION_NAME=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["versionName"])' "$RESPONSE")
+
+LOG="$LOG_DIR/poll-$(date -u +%Y%m%dT%H%M%SZ).log"
+exec > >(tee -a "$LOG") 2>&1
 echo "==> Job claimed: gitSha=${GIT_SHA} versionCode=${VERSION_CODE} versionName=${VERSION_NAME}"
 
 WORKDIR=$(mktemp -d "${TMPDIR:-/tmp}/otterling-build-XXXXXX")

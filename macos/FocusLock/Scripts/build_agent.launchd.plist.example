@@ -4,8 +4,8 @@
   Template for the build-agent LaunchDaemon, installed ONCE by hand, as root, at
   /Library/LaunchDaemons/app.otterling.buildagent.plist (then `sudo launchctl bootstrap system
   /Library/LaunchDaemons/app.otterling.buildagent.plist`). Runs build_agent_poll.sh in the
-  isolated build-agent account's context (UserName below) on a timer, without that account ever
-  needing an interactive login session; see RELEASE.md's "Automated macOS builds" section.
+  isolated build-agent account's context (UserName below), without that account ever needing an
+  interactive login session; see RELEASE.md's "Automated macOS builds" section.
 
   Replace <build-agent-account> and the Scripts path below with your real values before installing.
   This file is a template, not live config; nothing here is a secret.
@@ -20,10 +20,17 @@
     <array>
         <string>/Users/&lt;build-agent-account&gt;/otterling-checkout/macos/FocusLock/Scripts/build_agent_poll.sh</string>
     </array>
-    <!-- 15 minutes, matching this repo's existing WorkManager-floor convention for periodic
-         background checks elsewhere (Android's habit/update polling). -->
-    <key>StartInterval</key>
-    <integer>900</integer>
+    <!-- No StartInterval: build_agent_poll.sh's GET now long-polls the server for up to ~25s
+         (webhook_server.py's MACOS_LONGPOLL_SECONDS) before exiting, and KeepAlive below
+         relaunches it the instant it exits -- together that behaves like one continuous poll
+         loop, so a queued job gets claimed within a fraction of a second instead of up to 15
+         minutes late. ThrottleInterval is launchd's own floor between relaunches (its default is
+         10s); set low since the long-poll itself already paces normal operation, but still a
+         safety net against a tight respawn loop if config.env is ever missing/broken. -->
+    <key>KeepAlive</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>2</integer>
     <key>RunAtLoad</key>
     <true/>
     <key>StandardOutPath</key>

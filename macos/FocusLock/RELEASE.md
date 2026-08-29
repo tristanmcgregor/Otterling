@@ -211,13 +211,17 @@ How it works, end to end:
    touched `macos/` paths. If so, it writes `/var/lib/otterling/ci/macos-pending-build.json`
    (`{"gitSha", "versionCode", "versionName", "claimed": false}`) -- a single pending-job file, not
    a queue, so multiple pushes while the agent is offline coalesce to just the latest.
-2. `Scripts/build_agent_poll.sh`, run every ~15 minutes by a LaunchDaemon under the isolated
-   account (see `build_agent.launchd.plist.example`), polls `GET /ci/pending-macos-build` with a
-   narrowly-scoped `MACOS_BUILD_AGENT_TOKEN` bearer (deliberately NOT `LOCKPROFILE_TOKEN` -- a
-   compromised build agent should not also be able to impersonate a phone/Mac device). If a job is
-   pending, it does a clean `git clone` + `checkout --force --detach <gitSha>` into a throwaway
-   temp directory -- never a persistent local checkout -- and verifies the resulting `HEAD` matches
-   the requested SHA exactly before building anything.
+2. `Scripts/build_agent_poll.sh`, kept continuously running by a LaunchDaemon under the isolated
+   account (see `build_agent.launchd.plist.example`: `KeepAlive` + no `StartInterval`), long-polls
+   `GET /ci/pending-macos-build` with a narrowly-scoped `MACOS_BUILD_AGENT_TOKEN` bearer
+   (deliberately NOT `LOCKPROFILE_TOKEN` -- a compromised build agent should not also be able to
+   impersonate a phone/Mac device). The server (`webhook_server.py`'s `MACOS_LONGPOLL_SECONDS`)
+   blocks that GET for up to ~25s waiting for a job before replying empty, and launchd relaunches
+   the script the instant it exits -- so a job release.sh just queued is claimed within a fraction
+   of a second, not whenever the next scheduled poll happened to land (this used to be a flat
+   15-minute timer). If a job is pending, it does a clean `git clone` + `checkout --force --detach
+   <gitSha>` into a throwaway temp directory -- never a persistent local checkout -- and verifies
+   the resulting `HEAD` matches the requested SHA exactly before building anything.
 3. `Scripts/build_agent_build_and_upload.sh` unlocks a dedicated build keychain (never the
    account's login keychain), runs `build_app.sh --keychain <path> "<identity>"` (see that script's
    own doc comment for the new non-interactive-signing flag), optionally notarizes if
