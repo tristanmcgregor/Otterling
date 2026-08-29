@@ -1778,6 +1778,219 @@ def _fetch_habitshare_habit_names(username: str, password: str) -> list:
     return names
 
 
+_HABITSHARE_DIRECT_BOOLEAN_KEYS = (
+    "done", "completed", "checkedInToday", "doneToday", "isDoneToday", "todayDone",
+    "completedToday", "checkedToday", "isCheckedToday",
+)
+_HABITSHARE_DIRECT_STATUS_KEYS = ("todayStatus", "today_status", "status")
+_HABITSHARE_TRACKER_LIST_KEYS = ("trackers", "checkins", "logs", "history")
+
+
+def _habitshare_parse_date(text) -> str | None:
+    if not isinstance(text, str) or len(text) < 10:
+        return None
+    candidate = text[:10]
+    try:
+        datetime.strptime(candidate, "%Y-%m-%d")
+        return candidate
+    except ValueError:
+        return None
+
+
+def _habitshare_tracker_list_has_today(entries: list, today_local: str, today_utc: str) -> bool:
+    """Mirrors HabitShareApiClient.kt's trackerListHasToday exactly, including scanning the whole
+    list (not stopping at the first same-day entry) so a "fail" on one accepted date can't mask a
+    "success" on the other, and accepting either the local or UTC calendar date (HabitShare's
+    backend is US-hosted, so an early-morning local tick can be stamped under the previous UTC
+    date or vice versa)."""
+    def is_today(date_str: str) -> bool:
+        return date_str == today_local or date_str == today_utc
+
+    for entry in entries:
+        if isinstance(entry, list):
+            if len(entry) < 2:
+                continue
+            entry_date = _habitshare_parse_date(entry[0])
+            if not entry_date or not is_today(entry_date):
+                continue
+            if isinstance(entry[1], str) and entry[1].strip().lower() == "success":
+                return True
+        elif isinstance(entry, dict):
+            date_text = (entry.get("date") or entry.get("day") or entry.get("checkinDate")
+                         or entry.get("createdAt") or entry.get("created_at"))
+            entry_date = _habitshare_parse_date(date_text)
+            if not entry_date or not is_today(entry_date):
+                continue
+            status = entry.get("status") or entry.get("state")
+            if isinstance(status, str) and status.strip():
+                if status.strip().lower() in ("success", "done", "completed"):
+                    return True
+            else:
+                has_explicit_flag = any(key in entry for key in _HABITSHARE_DIRECT_BOOLEAN_KEYS)
+                if has_explicit_flag:
+                    if any(bool(entry.get(key)) for key in _HABITSHARE_DIRECT_BOOLEAN_KEYS):
+                        return True
+                else:
+                    return True
+        elif isinstance(entry, str):
+            entry_date = _habitshare_parse_date(entry)
+            if entry_date and is_today(entry_date):
+                return True
+    return False
+
+
+def _habitshare_is_done_today(habit: dict, today_local: str, today_utc: str) -> bool:
+    """Mirrors HabitShareApiClient.kt's isDoneToday exactly: the dated tracker list wins over any
+    top-level done/status flag (those are frequently habit-level, e.g. "archived/finished
+    overall", not today-specific), falling back to direct flags only when no tracker list is
+    present at all."""
+    for key in _HABITSHARE_TRACKER_LIST_KEYS:
+        entries = habit.get(key)
+        if isinstance(entries, list):
+            return _habitshare_tracker_list_has_today(entries, today_local, today_utc)
+    for key in _HABITSHARE_DIRECT_BOOLEAN_KEYS:
+        if key in habit:
+            return bool(habit.get(key))
+    for key in _HABITSHARE_DIRECT_STATUS_KEYS:
+        status = habit.get(key)
+        if isinstance(status, str) and status.strip():
+            return status.strip().lower() in ("done", "completed", "checked")
+    return False
+
+
+def _fetch_habitshare_completions(username: str, password: str) -> list:
+    """Server-side equivalent of HabitShareApiClient.kt's fetchTodayCompletions -- returns
+    (habitName, doneToday) pairs for every habit on the account. Used by the background poll loop
+    below so habit completion doesn't depend on any phone/Mac being online or connected; see that
+    loop's own doc comment for why this exists.
+
+    Raises on any failure (bad credentials, network error, unexpected response shape) -- the
+    caller must treat that as "couldn't reach HabitShare this cycle", not "nothing done", and
+    must NOT clear any already-recorded completion just because this fetch failed.
+    """
+    login_body = json.dumps({"username": username, "password": password}).encode("utf-8")
+    login_req = urllib.request.Request(
+        HABITSHARE_LOGIN_URL,
+        data=login_body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(login_req, timeout=15) as resp:
+        login_data = json.loads(resp.read().decode("utf-8"))
+    token = login_data.get("key") if isinstance(login_data, dict) else None
+    if not token:
+        raise ValueError("HabitShare login did not return a token")
+
+    habits_req = urllib.request.Request(
+        HABITSHARE_HABITS_URL,
+        headers={"Authorization": f"Token {token}"},
+    )
+    with urllib.request.urlopen(habits_req, timeout=15) as resp:
+        habits_data = json.loads(resp.read().decode("utf-8"))
+
+    if isinstance(habits_data, list):
+        items = habits_data
+    elif isinstance(habits_data, dict):
+        items = habits_data.get("results") or habits_data.get("habits") or habits_data.get("data") or []
+    else:
+        items = []
+
+    today_local = _today_str()
+    today_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    rows = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("title") or item.get("name") or item.get("habitName")
+        if not (isinstance(name, str) and name.strip()):
+            continue
+        rows.append((name.strip(), _habitshare_is_done_today(item, today_local, today_utc)))
+    return rows
+
+
+# How often the server checks HabitShare directly on its own, independent of any phone/Mac being
+# online. This closes a real gap: completion previously depended entirely on a device (phone)
+# polling HabitShare and reporting up -- if that device was disconnected, force-quit, or its own
+# app-side habit-name-matching silently skipped a report (see HabitCompletionReporter.kt), every
+# habit stayed stuck undone server-side with no error anywhere, permanently blocking whatever
+# website/app rules gated on it. Server-side polling means completion detection no longer depends
+# on a device at all once HabitShare credentials are configured (see /dashboard-api/habitshare-account).
+# 60s matches this deployment's other fast-turnaround polls (e.g. mitm_nsfw_addon.py's
+# WEBSITE_RULE_POLL_SECONDS) rather than anything HabitShare-specific.
+HABITSHARE_POLL_INTERVAL_SECONDS = 60
+
+
+def _habitshare_poll_once() -> None:
+    account = _load_habitshare_account()
+    username, password = account.get("username"), account.get("password")
+    if not username or not password:
+        return  # No HabitShare account connected server-side -- nothing to poll.
+
+    try:
+        completions = _fetch_habitshare_completions(username, password)
+    except Exception as error:
+        _log(f"[lockprofile] HabitShare completion fetch failed this cycle: {error!r}")
+        return
+
+    done_names = {name.strip().lower() for name, done in completions if done}
+    if not done_names:
+        return
+
+    today = _today_str()
+    with _habits_lock:
+        habits = _load_habits()
+
+    newly_completed = []
+    with _habit_completions_lock:
+        stored = _load_habit_completions()
+        changed = False
+        for habit in habits:
+            name = habit.get("name")
+            if not isinstance(name, str) or name.strip().lower() not in done_names:
+                continue
+            if habit.get("requiresProof"):
+                # Can't satisfy the proof gate from here -- no photo exists server-side for a
+                # completion detected purely from HabitShare's API. Leave this one for the
+                # phone/Mac's own verified-completion flow, exactly as before this poll existed.
+                continue
+            habit_id = habit.get("id", "")
+            existing = stored.get(habit_id)
+            if existing and existing.get("date") == today:
+                continue  # Already recorded today -- nothing to do.
+            stored[habit_id] = {
+                "date": today,
+                "verifiedAt": time.time(),
+                "device_id": "habitshare-poll",
+                "hasProof": False,
+            }
+            changed = True
+            newly_completed.append(habit)
+        if changed:
+            _save_habit_completions(stored)
+
+    # Audit trail, same as the device-reported /complete endpoint -- so a guardian sees exactly
+    # where a completion came from, not just that it happened.
+    for habit in newly_completed:
+        event = _append_alert({
+            "device_id": "habitshare-poll",
+            "type": "habit_completed",
+            "details": f"\"{habit.get('name')}\" marked done for {today} (detected via direct HabitShare poll)",
+            "reported_at": time.time(),
+            "received_at": time.time(),
+        })
+        if event:
+            _push_event(event)
+
+
+def _habitshare_poll_loop() -> None:
+    while True:
+        try:
+            _habitshare_poll_once()
+        except Exception as error:
+            _log(f"[lockprofile] HabitShare poll iteration failed: {error!r}")
+        time.sleep(HABITSHARE_POLL_INTERVAL_SECONDS)
+
+
 def _pin_verify_lockout_remaining_seconds() -> float:
     with _pin_verify_lock:
         return max(0.0, _pin_verify_lockout_until - time.time())
@@ -4089,6 +4302,10 @@ def main() -> None:
     # onnx_nsfw_pipeline.available() lazily anyway, so nsfw_image_classifier just reports
     # classification as unavailable (fail-open, per its own contract) until this thread finishes.
     threading.Thread(target=onnx_nsfw_pipeline.initialize, daemon=True, name="onnx-nsfw-init").start()
+    # See _habitshare_poll_loop's own doc comment: polls HabitShare directly on the server's own
+    # schedule so habit completion doesn't depend on any phone/Mac being online. No-ops harmlessly
+    # every cycle until a HabitShare account is actually connected (see _load_habitshare_account).
+    threading.Thread(target=_habitshare_poll_loop, daemon=True, name="habitshare-poll").start()
     server = ThreadingHTTPServer((LISTEN_HOST, LISTEN_PORT), Handler)
     _log(f"[lockprofile] listening on {LISTEN_HOST}:{LISTEN_PORT}")
     server.serve_forever()
