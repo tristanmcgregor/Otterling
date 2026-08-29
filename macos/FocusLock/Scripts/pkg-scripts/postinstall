@@ -1,0 +1,22 @@
+#!/bin/bash
+# Runs once, as root, right after pkgbuild's payload lays down /Applications/Otterling.app and
+# /usr/local/bin/otterlingctl. Deliberately does NOT touch launchd/SMAppService directly here --
+# that would be a second daemon-registration path running alongside DaemonRegistrar.swift's own
+# (see that file's doc comment), and this project has already been bitten once by two divergent
+# registration paths fighting over the same LaunchDaemon label (see
+# Sources/FocusLockShared/DirectLabelBootstrap.swift). Instead this just opens the freshly-installed
+# app as the logged-in console user, which runs DaemonRegistrar.registerIfNeeded() exactly the same
+# way a normal manual double-click would -- the user still sees (and must approve) the standard
+# Login Items & Extensions prompt for the daemons and the scanner agent.
+set -e
+
+CONSOLE_USER=$(stat -f%Su /dev/console 2>/dev/null || true)
+if [ -z "$CONSOLE_USER" ] || [ "$CONSOLE_USER" = "root" ]; then
+  # No one logged in at install time (e.g. remote/unattended install) -- nothing to launch as, and
+  # SMAppService registration needs a GUI session anyway. The app will register itself next time
+  # someone opens it normally.
+  exit 0
+fi
+
+sudo -u "$CONSOLE_USER" open -a "/Applications/Otterling.app" || true
+exit 0
