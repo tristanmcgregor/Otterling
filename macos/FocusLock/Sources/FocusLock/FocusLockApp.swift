@@ -11,10 +11,5 @@ struct FocusLockApp: App {
             ContentView()
         }
         .windowResizability(.contentSize)
-        .commands {
-            CommandMenu("Test") {
-                Button("Test Item") {}
-            }
-        }
     }
 }
