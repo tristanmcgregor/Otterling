@@ -590,77 +590,163 @@ struct ContentView: View {
     }
 
     // MARK: - AI Assistant
+    //
+    // Chat-style reskin (a la Claude): a scrolling column of user bubbles + assistant turns inside
+    // a card, a capsule composer pinned to the bottom. Every piece of state and every XPC call
+    // below is unchanged from the old terminal-styled log -- this only changes how one exchange
+    // (a natural-language request, and the agent loop's steps/commands/results) is drawn.
 
     private var assistantScreen: some View {
-        Card {
-            SectionLabel(text: "AI Assistant")
-            Text("Describe what you need. The assistant works it as a multi-step agent -- proposing a command, seeing the real result, and deciding what (if anything) to try next -- but it only ever translates; it never executes anything itself. Every command it proposes, in every round, is run through the exact same broker as the terminal above, one at a time.")
-                .font(.system(size: 11)).foregroundStyle(Otter.onSurfaceVariant)
-
-            ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    if viewModel.assistantLog.isEmpty && viewModel.pendingAssistantRequest == nil {
-                        emptyState("No requests yet", "Try something like \"install wget\".")
-                    }
-                    ForEach(viewModel.assistantLog) { entry in
-                        assistantEntryView(entry)
-                    }
-                    if let pending = viewModel.pendingAssistantRequest {
-                        pendingAssistantEntryView(request: pending)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
+        Card(padding: 0) {
+            VStack(alignment: .leading, spacing: 8) {
+                SectionLabel(text: "AI Assistant")
+                Text("Describe what you need. The assistant works it as a multi-step agent -- proposing a command, seeing the real result, and deciding what (if anything) to try next -- but it only ever translates; it never executes anything itself. Every command it proposes, in every round, is run through the exact same broker as the terminal above, one at a time.")
+                    .font(.system(size: 11)).foregroundStyle(Otter.onSurfaceVariant)
             }
-            .frame(height: 320)
-            .padding(10)
-            .background(Color.black.opacity(0.85))
-            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .padding(16)
 
-            HStack(spacing: 8) {
-                TextField("e.g. install wget", text: $viewModel.assistantRequestText)
-                    .font(.system(size: 12))
-                    .textFieldStyle(.roundedBorder)
-                    .onSubmit { viewModel.runAssistantRequest() }
-                Button("Send") { viewModel.runAssistantRequest() }
-                    .buttonStyle(OtterFilled())
-                    .disabled(viewModel.assistantRunning || viewModel.assistantRequestText.trimmingCharacters(in: .whitespaces).isEmpty)
+            Divider().overlay(Otter.outlineVariant.opacity(0.4))
+
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 20) {
+                        if viewModel.assistantLog.isEmpty && viewModel.pendingAssistantRequest == nil {
+                            assistantEmptyState
+                        }
+                        ForEach(viewModel.assistantLog) { entry in
+                            assistantExchangeView(entry).id(entry.id)
+                        }
+                        if let pending = viewModel.pendingAssistantRequest {
+                            VStack(alignment: .leading, spacing: 12) {
+                                userBubble(pending)
+                                assistantTypingIndicator
+                            }
+                            .id("pending")
+                        }
+                    }
+                    .padding(16)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .onChange(of: viewModel.assistantLog.count) { _ in scrollToBottom(proxy) }
+                .onChange(of: viewModel.pendingAssistantRequest) { _ in scrollToBottom(proxy) }
+            }
+            .frame(height: 380)
+            .background(Otter.background)
+
+            Divider().overlay(Otter.outlineVariant.opacity(0.4))
+
+            assistantComposer.padding(12)
+        }
+    }
+
+    private func scrollToBottom(_ proxy: ScrollViewProxy) {
+        withAnimation(.easeOut(duration: 0.2)) {
+            if viewModel.pendingAssistantRequest != nil {
+                proxy.scrollTo("pending", anchor: .bottom)
+            } else if let last = viewModel.assistantLog.last {
+                proxy.scrollTo(last.id, anchor: .bottom)
             }
         }
     }
 
-    private func assistantEntryView(_ entry: FocusLockViewModel.AssistantEntry) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("> \(entry.request)").font(.system(size: 12, design: .monospaced)).foregroundStyle(.white)
-            if entry.result.steps.isEmpty {
-                Text(entry.result.translationExplanation)
-                    .font(.system(size: 11)).foregroundStyle(.white.opacity(0.6))
-                Text("(no commands to run)").font(.system(size: 11, design: .monospaced)).foregroundStyle(.orange)
-            }
-            // Each step's `roundExplanation` is only populated on the first command of a new
-            // round (see AssistantStep's doc comment), so this naturally renders as "reasoning,
-            // then the command(s) it led to" once per round of the agent loop, not once per line.
-            ForEach(Array(entry.result.steps.enumerated()), id: \.offset) { _, step in
-                VStack(alignment: .leading, spacing: 2) {
-                    if let roundExplanation = step.roundExplanation, !roundExplanation.isEmpty {
-                        Text(roundExplanation)
-                            .font(.system(size: 11)).foregroundStyle(.white.opacity(0.6))
-                            .padding(.top, 2)
-                    }
-                    Text("$ \(step.command)").font(.system(size: 12, design: .monospaced)).foregroundStyle(.white)
-                    Text("\(step.result.approved ? "APPROVED" : "DENIED") (\(step.result.source)): \(step.result.explanation)")
-                        .font(.system(size: 11, design: .monospaced))
-                        .foregroundStyle(step.result.approved ? Color.green : Color.red)
-                    if let stdout = step.result.stdout, !stdout.isEmpty {
-                        Text(stdout).font(.system(size: 11, design: .monospaced)).foregroundStyle(.white.opacity(0.85))
+    private var assistantEmptyState: some View {
+        VStack(spacing: 10) {
+            IconTile(systemImage: "sparkles", hue: .info, size: 40)
+            Text("What do you need?").font(.system(size: 14, weight: .semibold)).foregroundStyle(Otter.onSurface)
+            Text("Try something like \u{201c}install wget\u{201d}. Anything Otterling-related still goes through the same broker as the terminal.")
+                .font(.system(size: 11)).foregroundStyle(Otter.onSurfaceVariant)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 320)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 28)
+    }
+
+    /// One full exchange: the Guardian's own request as a right-aligned chat bubble, followed by
+    /// the assistant's turn (reasoning + the command card(s) it actually ran) as a left-aligned
+    /// block with an avatar, the same way Claude renders a reply that includes tool calls.
+    private func assistantExchangeView(_ entry: FocusLockViewModel.AssistantEntry) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            userBubble(entry.request)
+            assistantTurnView(entry.result)
+        }
+    }
+
+    private func userBubble(_ text: String) -> some View {
+        HStack {
+            Spacer(minLength: 40)
+            Text(text)
+                .font(.system(size: 13))
+                .foregroundStyle(Otter.onPrimaryContainer)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 9)
+                .background(Otter.primaryContainer)
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        }
+        .frame(maxWidth: .infinity, alignment: .trailing)
+    }
+
+    private var assistantAvatar: some View {
+        IconTile(systemImage: "sparkles", hue: .info, size: 26)
+    }
+
+    private func assistantTurnView(_ result: AssistantActionResult) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            assistantAvatar
+            VStack(alignment: .leading, spacing: 10) {
+                if result.steps.isEmpty {
+                    Text(result.translationExplanation)
+                        .font(.system(size: 13)).foregroundStyle(Otter.onSurface)
+                    Pill(text: "No commands to run", variant: .neutral)
+                }
+                // Each step's `roundExplanation` is only populated on the first command of a new
+                // round (see AssistantStep's doc comment), so this naturally renders as "reasoning,
+                // then the command(s) it led to" once per round of the agent loop, not once per line.
+                ForEach(Array(result.steps.enumerated()), id: \.offset) { _, step in
+                    VStack(alignment: .leading, spacing: 8) {
+                        if let roundExplanation = step.roundExplanation, !roundExplanation.isEmpty {
+                            Text(roundExplanation)
+                                .font(.system(size: 13)).foregroundStyle(Otter.onSurface)
+                        }
+                        assistantCommandCard(step)
                     }
                 }
-                .padding(.leading, 12)
+                if let stopNote = assistantStopNote(result.stopReason) {
+                    Text(stopNote).font(.system(size: 11)).foregroundStyle(Otter.onSurfaceVariant)
+                }
             }
-            if let stopNote = assistantStopNote(entry.result.stopReason) {
-                Text(stopNote).font(.system(size: 10, design: .monospaced)).foregroundStyle(.white.opacity(0.4))
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// One proposed-and-broker-checked command, styled like a tool-call card: the command itself
+    /// in a monospaced block, an approve/deny [`Pill`], then any output.
+    private func assistantCommandCard(_ step: AssistantStep) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(step.command)
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(Otter.onSurface)
+                .textSelection(.enabled)
+            HStack(spacing: 6) {
+                Pill(text: step.result.approved ? "Approved" : "Denied", variant: step.result.approved ? .success : .error)
+                Text("\(step.result.source) \u{2014} \(step.result.explanation)")
+                    .font(.system(size: 11)).foregroundStyle(Otter.onSurfaceVariant)
+                    .lineLimit(2)
+            }
+            if let stdout = step.result.stdout, !stdout.isEmpty {
+                Text(stdout).font(.system(size: 11, design: .monospaced)).foregroundStyle(Otter.onSurfaceVariant)
+                    .textSelection(.enabled)
+            }
+            if let stderr = step.result.stderr, !stderr.isEmpty {
+                Text(stderr).font(.system(size: 11, design: .monospaced)).foregroundStyle(Otter.error)
+                    .textSelection(.enabled)
             }
         }
-        .padding(.bottom, 4)
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Otter.surfaceVariant.opacity(0.4))
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
     /// `stopReason` values other than these mean the agent loop ran to a normal conclusion (the
@@ -670,9 +756,9 @@ struct ContentView: View {
     private func assistantStopNote(_ stopReason: String) -> String? {
         switch stopReason {
         case "max_rounds", "max_steps":
-            return "(stopped: reached this request's step limit -- send it again to continue)"
+            return "Stopped: reached this request's step limit -- send it again to continue."
         case "error":
-            return "(stopped: malformed request)"
+            return "Stopped: malformed request."
         default:
             return nil
         }
@@ -682,17 +768,41 @@ struct ContentView: View {
     /// several translate/broker round-trips (see `XPCService.runAssistantAgentLoop`), not just
     /// the one network call the old label implied, so the whole reply is a single blocking wait
     /// with no partial/live progress to show.
-    private func pendingAssistantEntryView(request: String) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Text("> \(request)")
-                .font(.system(size: 12, design: .monospaced))
-                .foregroundStyle(.white)
-            ProgressView().controlSize(.small).tint(.white)
-            Text("working…")
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.7))
+    private var assistantTypingIndicator: some View {
+        HStack(alignment: .center, spacing: 10) {
+            assistantAvatar
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text("Working…").font(.system(size: 13)).foregroundStyle(Otter.onSurfaceVariant)
+            }
         }
-        .padding(.bottom, 4)
+    }
+
+    /// Claude-style composer: a rounded input field with a circular send button, instead of a
+    /// plain text field + rectangular button.
+    private var assistantComposer: some View {
+        HStack(spacing: 8) {
+            TextField("Message the assistant\u{2026}", text: $viewModel.assistantRequestText, axis: .vertical)
+                .font(.system(size: 13))
+                .textFieldStyle(.plain)
+                .lineLimit(1...4)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(Otter.surfaceVariant.opacity(0.4))
+                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .onSubmit { viewModel.runAssistantRequest() }
+            Button(action: { viewModel.runAssistantRequest() }) {
+                Image(systemName: "arrow.up")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundStyle(Otter.onPrimary)
+                    .frame(width: 32, height: 32)
+                    .background(Otter.primary)
+                    .clipShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .disabled(viewModel.assistantRunning || viewModel.assistantRequestText.trimmingCharacters(in: .whitespaces).isEmpty)
+            .opacity(viewModel.assistantRunning || viewModel.assistantRequestText.trimmingCharacters(in: .whitespaces).isEmpty ? 0.5 : 1)
+        }
     }
 
     // MARK: - Multi-user
