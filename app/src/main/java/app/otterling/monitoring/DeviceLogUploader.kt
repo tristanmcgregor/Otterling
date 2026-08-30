@@ -5,8 +5,6 @@ import android.provider.Settings
 import android.util.Log
 import app.otterling.alerts.MacTamperPollSettings
 import app.otterling.content.CloudFilterSettings
-import app.otterling.content.MitmExemptManager
-import app.otterling.content.PinningFailureTracker
 import java.net.HttpURLConnection
 import java.net.URL
 import kotlinx.coroutines.Dispatchers
@@ -14,10 +12,9 @@ import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
 /**
- * Uploads this device's own recent logcat output, plus a snapshot of its MITM-exemption state, to
- * filter-server's `/device-logs/upload` (see `lockprofile_service.py`) -- so a Guardian debugging
- * "this app still doesn't work" can see what actually happened on-device (auto-exempt attempts,
- * pinning-heuristic matches, etc.) without needing ADB access to the phone itself.
+ * Uploads this device's own recent logcat output to filter-server's `/device-logs/upload` (see
+ * `lockprofile_service.py`) -- so a Guardian debugging "this app still doesn't work" can see what
+ * actually happened on-device without needing ADB access to the phone itself.
  *
  * Reuses the same `LOCKPROFILE_TOKEN` already configured for Mac-tamper polling
  * ([MacTamperPollSettings]) rather than provisioning a second credential -- same reasoning as that
@@ -25,11 +22,6 @@ import org.json.JSONObject
  */
 object DeviceLogUploader {
     suspend fun upload(context: Context): Result<Unit> = withContext(Dispatchers.IO) {
-        // Only autoExemptCount() (a plain SharedPreferences read) is called below -- never
-        // recordSuspectedFailure -- so alertScope is never actually launched into; this
-        // withContext's own scope is just a harmless, correctly-shaped value to satisfy the
-        // constructor.
-        val ioScope = this
         runCatching {
             val settings = MacTamperPollSettings(context)
             check(settings.isConfigured()) { "Server token not configured (see Mac tamper alerts settings)" }
@@ -39,14 +31,10 @@ object DeviceLogUploader {
 
             val deviceId = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
                 ?: "unknown-device"
-            val exemptManager = MitmExemptManager(context)
-            val tracker = PinningFailureTracker(context, ioScope)
 
             val header = buildString {
                 appendLine("device_id=$deviceId")
                 appendLine("uploaded_at_millis=${System.currentTimeMillis()}")
-                appendLine("auto_exempt_count=${tracker.autoExemptCount()}")
-                appendLine("exempt_packages=${exemptManager.exemptPackages().sorted().joinToString()}")
                 appendLine("--- logcat (this app's own process only) ---")
             }
             val logs = header + DebugLogReader.recentLines(MAX_LOG_LINES).joinToString("\n")
