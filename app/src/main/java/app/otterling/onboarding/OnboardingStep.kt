@@ -6,9 +6,10 @@ import app.otterling.alerts.AccountabilityPartnerSettings
 import app.otterling.content.VpnFilterManager
 import app.otterling.restrictions.AccessibilityGuard
 import app.otterling.restrictions.DeviceRestrictionsManager
+import app.otterling.restrictions.OverlayPermissionManager
 import app.otterling.restrictions.Restriction
 
-enum class OnboardingStep { Welcome, DeviceOwner, Restrictions, ContentFilter, AccountabilityPartnerSms, Accessibility, Done }
+enum class OnboardingStep { Welcome, DeviceOwner, Restrictions, ContentFilter, AccountabilityPartnerSms, Accessibility, Overlay, Done }
 
 /**
  * Live, side-effect-free scan of every manager's own persisted/system state, first-incomplete-wins.
@@ -34,6 +35,8 @@ fun resolveOnboardingStep(context: Context): OnboardingStep {
     if (!(alerts.isEnabled() && alerts.partnerNumbers().isNotEmpty())) return OnboardingStep.AccountabilityPartnerSms
 
     if (!AccessibilityGuard.isEnabled(context)) return OnboardingStep.Accessibility
+
+    if (!OverlayPermissionManager(context).isGranted()) return OnboardingStep.Overlay
 
     return OnboardingStep.Done
 }

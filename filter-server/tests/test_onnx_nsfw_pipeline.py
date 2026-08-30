@@ -124,10 +124,10 @@ class FusionPolicyTests(unittest.TestCase):
         self.assertEqual(decision, pipeline.DECISION_UNCERTAIN)
 
     def test_strong_stage2_blocks_despite_modest_stage1(self):
-        # Stage 1 = 0.60, Stage 2 = female breast exposed @ 0.82 => BLOCK
+        # Stage 1 = 0.60, Stage 2 = female breast exposed @ 0.90 => BLOCK
         decision = pipeline._fuse(
             full_image_score=0.60, max_stage1=0.60, corroborating_regions=1,
-            detections=[_detection("FEMALE_BREAST_EXPOSED", 0.82)],
+            detections=[_detection("FEMALE_BREAST_EXPOSED", 0.90)],
         )
         self.assertEqual(decision, pipeline.DECISION_BLOCK)
 

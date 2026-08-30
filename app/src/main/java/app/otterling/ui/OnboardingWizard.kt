@@ -44,6 +44,7 @@ import app.otterling.onboarding.OnboardingStep
 import app.otterling.onboarding.resolveOnboardingStep
 import app.otterling.restrictions.AccessibilityGuard
 import app.otterling.restrictions.DeviceRestrictionsManager
+import app.otterling.restrictions.OverlayPermissionManager
 import app.otterling.restrictions.Restriction
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -79,7 +80,8 @@ fun OnboardingWizard(context: Context, onComplete: () -> Unit) {
         OnboardingStep.Restrictions -> RestrictionsStep(context, onContinue = { currentStep = OnboardingStep.ContentFilter })
         OnboardingStep.ContentFilter -> ContentFilterStep(context, onContinue = { currentStep = OnboardingStep.AccountabilityPartnerSms })
         OnboardingStep.AccountabilityPartnerSms -> AccountabilityPartnerSmsStep(context, onContinue = { currentStep = OnboardingStep.Accessibility })
-        OnboardingStep.Accessibility -> AccessibilityStep(context, onContinue = { currentStep = OnboardingStep.Done })
+        OnboardingStep.Accessibility -> AccessibilityStep(context, onContinue = { currentStep = OnboardingStep.Overlay })
+        OnboardingStep.Overlay -> OverlayStep(context, onContinue = { currentStep = OnboardingStep.Done })
         OnboardingStep.Done -> DoneStep(
             onFinish = {
                 onboardingState.markComplete()
@@ -327,6 +329,32 @@ private fun AccessibilityStep(context: Context, onContinue: () -> Unit) {
             },
         ) {
             Text("Open Accessibility settings")
+        }
+        OutlinedButton(onClick = { refreshTrigger++ }) {
+            Text("Refresh status")
+        }
+    }
+}
+
+@Composable
+private fun OverlayStep(context: Context, onContinue: () -> Unit) {
+    val overlayManager = remember { OverlayPermissionManager(context) }
+    var refreshTrigger by remember { mutableIntStateOf(0) }
+    val granted = remember(refreshTrigger) { overlayManager.isGranted() }
+
+    WizardScaffold(
+        title = "Appear on top",
+        subtitle = "Lets Otterling show a brief on-screen warning the moment it flags a " +
+            "screenshot as NSFW, before the app is actually blocked. Requires \"Display over " +
+            "other apps\" permission, granted once in system Settings.",
+        onContinue = if (granted) onContinue else null,
+    ) {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("Appear on top", style = MaterialTheme.typography.bodyLarge)
+            StatusText(if (granted) "Granted" else "Not granted", isGood = granted)
+        }
+        Button(onClick = { context.startActivity(overlayManager.permissionRequestIntent()) }) {
+            Text("Open permission settings")
         }
         OutlinedButton(onClick = { refreshTrigger++ }) {
             Text("Refresh status")

@@ -57,6 +57,12 @@ class FocusGuardAccessibilityService : AccessibilityService() {
     private var lastPathBlockMillis = 0L
     private var lastTriggerScanMillis = 0L
 
+    /** Consecutive "nsfw" screenshot verdicts per package since the last non-nsfw verdict (or app
+     * switch) -- a single flagged screenshot only warns (see [NsfwWarningOverlay]); the app is
+     * only actually blocked once [NSFW_BLOCK_TRIGGER_COUNT] consecutive hits land, since one-off
+     * false positives (e.g. a frame of a normal video) shouldn't block outright. */
+    private val nsfwStreaks = mutableMapOf<String, Int>()
+
     /** Own package + the current launcher -- resolved once, not per capture. Screenshotting our
      *  own Settings UI or the home screen/lock screen is wasted uploads and a mild privacy smell. */
     private val screenshotSkipPackages: Set<String> by lazy {
@@ -288,6 +294,11 @@ class FocusGuardAccessibilityService : AccessibilityService() {
     }
 
     private fun onForegroundChanged(packageName: String) {
+        // A streak only counts consecutive nsfw hits while the app stays foregrounded -- leaving
+        // it (even briefly) starts the count fresh next time it's reopened. Only the package that
+        // was just foregrounded can have an in-progress streak (the screenshot loop only ever
+        // targets currentPackage), so any switch clears it.
+        nsfwStreaks.clear()
         tickJob?.cancel()
         // Poll HabitShare's API every second only while HabitShare is the foreground app -- this is
         // when a habit is most likely being ticked, and it's the one moment fast feedback matters
@@ -469,7 +480,18 @@ class FocusGuardAccessibilityService : AccessibilityService() {
         // classification for an app that's no longer foreground.
         if (currentPackage != packageName) return
         val result = ScreenshotUploader.upload(applicationContext, packageName, jpegBytes).getOrNull() ?: return
-        if (result.classification != "nsfw") return
+        if (result.classification != "nsfw") {
+            nsfwStreaks.remove(packageName)
+            return
+        }
+
+        val streak = (nsfwStreaks[packageName] ?: 0) + 1
+        nsfwStreaks[packageName] = streak
+        if (streak < NSFW_BLOCK_TRIGGER_COUNT) {
+            NsfwWarningOverlay.show(applicationContext)
+            return
+        }
+        nsfwStreaks.remove(packageName)
 
         // Prefer the server-computed deadline (keeps the duration dashboard-tunable later without
         // an app update) over a hardcoded client-side constant; clamp for clock skew between
@@ -487,7 +509,8 @@ class FocusGuardAccessibilityService : AccessibilityService() {
         runCatching {
             AlertReporter(applicationContext).report(
                 type = "NSFW_SCREENSHOT_DETECTED",
-                details = "NSFW content detected in $packageName; blocked for 15 minutes",
+                details = "NSFW content detected $NSFW_BLOCK_TRIGGER_COUNT times in a row in " +
+                    "$packageName; blocked for 15 minutes",
                 severity = AlertSeverity.CRITICAL,
                 debounceKey = "NSFW_SCREENSHOT_DETECTED|$packageName",
             )
@@ -680,6 +703,10 @@ class FocusGuardAccessibilityService : AccessibilityService() {
         const val SCREENSHOT_JPEG_QUALITY = 80
         const val DEFAULT_NSFW_BLOCK_MILLIS = 15 * 60 * 1000L
         const val MIN_NSFW_BLOCK_MILLIS = 60_000L
+        // Requires 3 consecutive nsfw verdicts (not just one) before actually blocking, since a
+        // single flagged screenshot is too easily a false positive (e.g. one frame of a normal
+        // video); the 1st and 2nd hits only show NsfwWarningOverlay's brief warning.
+        const val NSFW_BLOCK_TRIGGER_COUNT = 3
         val SUB_FEATURE_HINTS = listOf("shorts", "reel")
         // Shorts player: near-fullscreen *portrait* surface anchored at the very top of the
         // screen -- see hasFullscreenPortraitVideoSurface's doc comment for why that shape (not

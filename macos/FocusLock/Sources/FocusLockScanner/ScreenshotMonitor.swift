@@ -33,6 +33,9 @@ enum ScreenshotMonitor {
     private static var lastCaptureAt = Date.distantPast
     private static var blockedUntil: [String: Date] = [:]
     private static var promptedForScreenRecording = false
+    /// Consecutive "nsfw" verdicts per bundle ID since the last non-nsfw verdict (or app switch)
+    /// -- mirrors the phone's `nsfwStreaks` in `FocusGuardAccessibilityService.kt`.
+    private static var nsfwStreaks: [String: Int] = [:]
 
     static func tick() {
         enforceActiveBlocks()
@@ -52,6 +55,14 @@ enum ScreenshotMonitor {
 
         lock.lock()
         lastCaptureAt = Date()
+        // A streak only counts consecutive nsfw hits while the same app stays frontmost --
+        // switching away (even briefly) starts the count fresh next time it's reopened. Only the
+        // bundle ID that was just captured can have an in-progress streak (this loop only ever
+        // targets the current frontmost app), so any switch clears it -- mirrors the phone's
+        // onForegroundChanged clearing nsfwStreaks.
+        if nsfwStreaks[bundleID] == nil {
+            nsfwStreaks.removeAll()
+        }
         lock.unlock()
         guard let imageData = captureScreenJPEG() else { return }
         classify(imageData: imageData, bundleID: bundleID, appName: app.localizedName ?? bundleID)
@@ -136,7 +147,24 @@ enum ScreenshotMonitor {
     private static func classify(imageData: Data, bundleID: String, appName: String) {
         guard let deviceID = TamperReporter.deviceID() else { return }
         ScreenshotUploader.upload(deviceID: deviceID, packageName: bundleID, imageData: imageData) { result in
-            guard case .success(let value) = result, value.classification == "nsfw" else { return }
+            guard case .success(let value) = result, value.classification == "nsfw" else {
+                lock.lock()
+                nsfwStreaks.removeValue(forKey: bundleID)
+                lock.unlock()
+                return
+            }
+
+            lock.lock()
+            let streak = (nsfwStreaks[bundleID] ?? 0) + 1
+            nsfwStreaks[bundleID] = streak
+            lock.unlock()
+            guard streak >= FocusLockConstants.nsfwBlockTriggerCount else {
+                FileHandle.standardError.write("[scanner] NSFW screenshot flagged in \(appName) (\(streak)/\(FocusLockConstants.nsfwBlockTriggerCount)); not blocking yet\n".data(using: .utf8)!)
+                return
+            }
+            lock.lock()
+            nsfwStreaks.removeValue(forKey: bundleID)
+            lock.unlock()
 
             // Prefer the server-computed deadline (keeps the duration dashboard-tunable without a
             // rebuild, same reasoning as the phone's handleCapturedScreenshot) over the hardcoded
@@ -153,10 +181,10 @@ enum ScreenshotMonitor {
             }
 
             let minutes = Int((blockSeconds / 60).rounded())
-            FileHandle.standardError.write("[scanner] NSFW screenshot detected in \(appName); blocked for \(minutes) minutes\n".data(using: .utf8)!)
+            FileHandle.standardError.write("[scanner] NSFW content detected \(FocusLockConstants.nsfwBlockTriggerCount) times in a row in \(appName); blocked for \(minutes) minutes\n".data(using: .utf8)!)
             TamperReporter.report(
                 type: "NSFW_SCREENSHOT_DETECTED",
-                details: "NSFW content detected in \(appName); blocked for \(minutes) minutes"
+                details: "NSFW content detected \(FocusLockConstants.nsfwBlockTriggerCount) times in a row in \(appName); blocked for \(minutes) minutes"
             )
         }
     }

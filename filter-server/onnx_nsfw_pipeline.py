@@ -147,16 +147,21 @@ MAX_TILES = int(os.environ.get("NSFW_MAX_TILES", "24"))
 
 # --- Fusion thresholds (section 7 -- PLACEHOLDERS, calibrate against a real golden/benchmark set
 # before production use) ---------------------------------------------------------------------------
-STAGE1_HIGH_THRESHOLD = float(os.environ.get("NSFW_STAGE1_HIGH_THRESHOLD", "0.95"))
-STAGE2_STRONG_THRESHOLD = float(os.environ.get("NSFW_STAGE2_STRONG_THRESHOLD", "0.70"))
+STAGE1_HIGH_THRESHOLD = float(os.environ.get("NSFW_STAGE1_HIGH_THRESHOLD", "0.97"))
+STAGE2_STRONG_THRESHOLD = float(os.environ.get("NSFW_STAGE2_STRONG_THRESHOLD", "0.85"))
 # Also doubles as the Stage 1 escalation trigger (§6.2: "ambiguous/high-risk" regions run Stage 2)
 # and as the "another region corroborates" bar in the STAGE1_HIGH_THRESHOLD-alone case below.
-STAGE2_GENERAL_THRESHOLD = float(os.environ.get("NSFW_STAGE2_GENERAL_THRESHOLD", "0.50"))
+# Raised from the original plan's 0.50 placeholder -- 0.50 was firing on normal (non-NSFW) video
+# content in real-world use, escalating to Stage 2 and corroborating far too easily.
+STAGE2_GENERAL_THRESHOLD = float(os.environ.get("NSFW_STAGE2_GENERAL_THRESHOLD", "0.65"))
 # How an internal UNCERTAIN verdict (section 7.3 -- e.g. a lone very-high Stage 1 score with no
-# corroborating region and no Stage 2 evidence) maps to the boolean callers need. Parental-control
-# products should weigh false negatives over false positives (see the original plan's section 7),
-# so this defaults to the conservative side; an operator with calibration data may override.
-UNCERTAIN_POLICY = os.environ.get("NSFW_UNCERTAIN_POLICY", "block").strip().lower()
+# corroborating region and no Stage 2 evidence) maps to the boolean callers need. Originally
+# defaulted to "block" (weighing false negatives over false positives), but that meant a single
+# uncorroborated Stage 1 spike -- which normal, non-NSFW video content was shown to trigger --
+# was enough to block an app outright. Requiring actual corroborating evidence (a real BLOCK
+# verdict) before acting, and just letting an UNCERTAIN pass, cuts that false-positive path;
+# an operator with calibration data may override back to "block".
+UNCERTAIN_POLICY = os.environ.get("NSFW_UNCERTAIN_POLICY", "allow").strip().lower()
 
 DECISION_ALLOW = "ALLOW"
 DECISION_BLOCK = "BLOCK"

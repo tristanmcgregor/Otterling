@@ -232,6 +232,11 @@ public enum FocusLockConstants {
     /// phone/Mac clock skew).
     public static let defaultNsfwBlockSeconds: Double = 15 * 60
     public static let minNsfwBlockSeconds: Double = 60
+    /// Matches the phone's `NSFW_BLOCK_TRIGGER_COUNT` -- requires this many consecutive "nsfw"
+    /// verdicts in a row (not just one) before `ScreenshotMonitor` actually force-quits the app,
+    /// since a single flagged screenshot is too easily a false positive (e.g. one frame of a
+    /// normal video).
+    public static let nsfwBlockTriggerCount: Int = 3
 
     /// This build's version -- bump by hand each release, matching `CFBundleShortVersionString`
     /// in `Scripts/build_app.sh` (kept in sync manually, not code-generated -- there's no
