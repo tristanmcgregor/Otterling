@@ -235,11 +235,19 @@ final class FocusLockViewModel: NSObject, ObservableObject, UNUserNotificationCe
         Task {
             switch await client.checkForUpdate() {
             case .upToDate:
-                updateStatusText = "Up to date (build \(FocusLockConstants.appVersionCode))."
+                // The daemon that just answered this check is the authority on its own version --
+                // not this GUI process's own compiled-in appVersionCode, which can genuinely differ
+                // if the two haven't restarted in lockstep. See FocusLockState.daemonVersionCode.
+                updateStatusText = "Up to date (build \(state.daemonVersionCode))."
             case .updateAvailable(let manifest):
                 pendingUpdateManifest = manifest
                 updateAvailable = true
-                updateStatusText = "Update available: \(manifest.versionName)."
+                // Names both sides of the comparison -- a guardian seeing this while the "Build N"
+                // pill nearby shows a build number that looks current is exactly the confusing case
+                // FocusLockState.daemonVersionCode's doc comment describes; spelling out what this
+                // is actually being compared against makes a GUI/daemon version mismatch visible
+                // instead of just looking wrong.
+                updateStatusText = "Update available: \(manifest.versionName) (currently running build \(state.daemonVersionCode))."
             case .error(let message):
                 updateStatusText = "Check failed: \(message)"
             case nil:

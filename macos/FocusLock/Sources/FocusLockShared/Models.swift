@@ -195,6 +195,18 @@ public struct FocusLockState: Codable, Sendable {
     /// `VPNGuard.lastKnownState` the same way `lockProfileInstalled` is, for the same reason.
     public var vpnActive: Bool
 
+    /// Live status, not persisted config: `FocusLockConstants.appVersionCode` as compiled into the
+    /// DAEMON binary actually answering this `getStatus` call -- overlaid the same way
+    /// `lockProfileInstalled` is. The GUI and daemon are separate processes/binaries that don't
+    /// necessarily restart in lockstep (e.g. the daemon silently self-updates on the hourly
+    /// automatic check while a still-open GUI window keeps running its own older binary until
+    /// quit and reopened -- see RELEASE.md), so the GUI's own compiled-in `appVersionCode` is NOT
+    /// reliably "the build actually running" and must never be used for the "Build N" label or an
+    /// update-available comparison -- both should read this field instead. 0 means "not yet
+    /// overlaid" (e.g. a state.json read before the first live `getStatus` reply), never a real
+    /// build number.
+    public var daemonVersionCode: Int
+
     /// The secret that gates every protection-reducing call once it's set. **Never leaves the
     /// daemon**: `XPCService.getStatus` nils this out and reports `passcodeConfigured` instead, so
     /// the digest isn't handed to callers who could grind it offline at their leisure.
@@ -272,6 +284,7 @@ public struct FocusLockState: Codable, Sendable {
         proxyPort: Int = FocusLockConstants.defaultProxyPort,
         lockProfileInstalled: Bool = false,
         vpnActive: Bool = false,
+        daemonVersionCode: Int = 0,
         guardianPasscode: PasscodeRecord? = nil,
         passcodeConfigured: Bool = false,
         protectionEnabled: Bool = true,
@@ -295,6 +308,7 @@ public struct FocusLockState: Codable, Sendable {
         self.proxyPort = proxyPort
         self.lockProfileInstalled = lockProfileInstalled
         self.vpnActive = vpnActive
+        self.daemonVersionCode = daemonVersionCode
         self.guardianPasscode = guardianPasscode
         self.passcodeConfigured = passcodeConfigured
         self.protectionEnabled = protectionEnabled
@@ -331,6 +345,7 @@ public struct FocusLockState: Codable, Sendable {
         proxyPort = try container.decodeIfPresent(Int.self, forKey: .proxyPort) ?? FocusLockConstants.defaultProxyPort
         lockProfileInstalled = try container.decodeIfPresent(Bool.self, forKey: .lockProfileInstalled) ?? false
         vpnActive = try container.decodeIfPresent(Bool.self, forKey: .vpnActive) ?? false
+        daemonVersionCode = try container.decodeIfPresent(Int.self, forKey: .daemonVersionCode) ?? 0
         guardianPasscode = try container.decodeIfPresent(PasscodeRecord.self, forKey: .guardianPasscode)
         // Present in a `getStatus` payload (where `guardianPasscode` has deliberately been stripped,
         // so it can't be derived); absent from a state.json written before this field existed, where
@@ -361,7 +376,7 @@ public struct FocusLockState: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case blockedApps, blockedDomains, protectedApps, dnsEnforcementEnabled
-        case cloudFilterHost, cloudFilterEnabled, lockProfileInstalled, vpnActive
+        case cloudFilterHost, cloudFilterEnabled, lockProfileInstalled, vpnActive, daemonVersionCode
         case proxyEnforcementEnabled, forceProxyViaFirewall, proxyHost, proxyPort
         case guardianPasscode, passcodeConfigured
         case protectionEnabled, dashboardConfigCache, dashboardConfigLastFetchedAt
