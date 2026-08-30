@@ -254,7 +254,7 @@ public enum FocusLockConstants {
     /// Gradle-style single-source-of-truth build system here, and duplicating one integer by hand
     /// across two files beats adding build-time codegen for it). `UpdateManager` compares this
     /// against a manifest's `versionCode` the same way Android's `BuildConfig.VERSION_CODE` does.
-    public static let appVersionCode = 12
+    public static let appVersionCode = 13
 
     /// The Team Identifier (from `codesign -dv`, e.g. "ABCDE12345") that a downloaded update's
     /// `.app` bundle must be signed by, checked *in addition to* SHA-256 -- this is the actual
