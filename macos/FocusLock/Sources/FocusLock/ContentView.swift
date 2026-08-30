@@ -701,17 +701,23 @@ struct ContentView: View {
                     // one made even an ordinary "hi" back look like an error state.
                     Text(result.translationExplanation)
                         .font(.system(size: 13)).foregroundStyle(Otter.onSurface)
-                }
-                // Each step's `roundExplanation` is only populated on the first command of a new
-                // round (see AssistantStep's doc comment), so this naturally renders as "reasoning,
-                // then the command(s) it led to" once per round of the agent loop, not once per line.
-                ForEach(Array(result.steps.enumerated()), id: \.offset) { _, step in
-                    VStack(alignment: .leading, spacing: 8) {
-                        if let roundExplanation = step.roundExplanation, !roundExplanation.isEmpty {
-                            Text(roundExplanation)
-                                .font(.system(size: 13)).foregroundStyle(Otter.onSurface)
+                } else if allStepsDenied(result.steps) {
+                    // Every retry round hit the same wall -- showing each one as its own full card
+                    // reads as a stuck/broken loop (reported live), not as "firmly and repeatedly
+                    // refused." One clear verdict instead, with the attempts available on request.
+                    assistantBlockedSummary(result.steps)
+                } else {
+                    // Each step's `roundExplanation` is only populated on the first command of a new
+                    // round (see AssistantStep's doc comment), so this naturally renders as
+                    // "reasoning, then the command(s) it led to" once per round, not once per line.
+                    ForEach(Array(result.steps.enumerated()), id: \.offset) { _, step in
+                        VStack(alignment: .leading, spacing: 8) {
+                            if let roundExplanation = step.roundExplanation, !roundExplanation.isEmpty {
+                                Text(roundExplanation)
+                                    .font(.system(size: 13)).foregroundStyle(Otter.onSurface)
+                            }
+                            assistantCommandCard(step)
                         }
-                        assistantCommandCard(step)
                     }
                 }
                 if let stopNote = assistantStopNote(result.stopReason) {
@@ -721,6 +727,45 @@ struct ContentView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func allStepsDenied(_ steps: [AssistantStep]) -> Bool {
+        !steps.isEmpty && steps.allSatisfy { !$0.result.approved }
+    }
+
+    /// One clear "blocked" verdict instead of a full command card per retry round -- every attempt
+    /// hit the same wall, so showing each one in full just reads as a stuck loop rather than as
+    /// "firmly and repeatedly refused." Uses the LAST attempt's reasoning (later rounds see more
+    /// context, so it's typically the most specific one, e.g. catching a reworded or smuggled
+    /// retry) as the headline; every individual attempt is still available, just collapsed.
+    private func assistantBlockedSummary(_ steps: [AssistantStep]) -> some View {
+        let last = steps[steps.count - 1]
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 6) {
+                Pill(text: "Blocked", variant: .error)
+                Text(
+                    steps.count > 1
+                        ? "Tried \(steps.count) ways to phrase this -- all blocked by the same rule."
+                        : "This request is blocked."
+                )
+                .font(.system(size: 13)).foregroundStyle(Otter.onSurface)
+            }
+            Text("\(last.result.source) \u{2014} \(last.result.explanation)")
+                .font(.system(size: 12)).foregroundStyle(Otter.onSurfaceVariant)
+            if steps.count > 1 {
+                DisclosureGroup("Show every attempt") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(Array(steps.enumerated()), id: \.offset) { _, step in
+                            assistantCommandCard(step)
+                        }
+                    }
+                    .padding(.top, 6)
+                }
+                .font(.system(size: 12)).foregroundStyle(Otter.onSurfaceVariant)
+            } else {
+                assistantCommandCard(last)
+            }
+        }
     }
 
     /// One proposed-and-broker-checked command, styled like a tool-call card: the command itself
