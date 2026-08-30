@@ -15,14 +15,31 @@ import FocusLockShared
 /// (`launchctl bootstrap`/`kickstart`).
 final class Watchdog {
     private let client = FocusLockXPCClient()
+    // A single failed check must never force-kill a healthy daemon -- confirmed live 2026-08-30:
+    // with zero tolerance here (recovering on the very first miss), a daemon that failed even one
+    // connectivity blip got kicked every single 20s tick, forever, each cycle tearing down and
+    // rebuilding DNS/proxy/pf (see the daemon's own graceful-shutdown handler) -- actively worse
+    // for protection than the wedged-daemon scenario this exists to fix. Requires several
+    // CONSECUTIVE misses, not one unlucky check, before concluding it's actually wedged.
+    private var consecutiveFailures = 0
+    private static let failureThreshold = 3
 
     func tick() {
         Task {
             if await client.getStatus() != nil {
+                consecutiveFailures = 0
                 return
             }
+            consecutiveFailures += 1
+            guard consecutiveFailures >= Self.failureThreshold else {
+                FileHandle.standardError.write(
+                    "[FocusLockWatchdog] FocusLockHelperd status check failed (\(consecutiveFailures)/\(Self.failureThreshold)) -- not recovering yet\n".data(using: .utf8)!
+                )
+                return
+            }
+            consecutiveFailures = 0
             FileHandle.standardError.write(
-                "[FocusLockWatchdog] FocusLockHelperd unreachable -- attempting to reload it\n".data(using: .utf8)!
+                "[FocusLockWatchdog] FocusLockHelperd unreachable \(Self.failureThreshold) checks in a row -- attempting to reload it\n".data(using: .utf8)!
             )
             recover()
         }

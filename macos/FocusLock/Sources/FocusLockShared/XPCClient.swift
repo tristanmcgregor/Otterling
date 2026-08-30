@@ -13,8 +13,26 @@ public final class FocusLockXPCClient {
     // proxy call that silently swallows its reply hangs that continuation -- and the awaiting
     // Task -- forever. `remoteObjectProxyWithErrorHandler` guarantees the error handler fires
     // in exactly that situation, so callers pass it through to resume with a failure instead.
+    // Confirmed live 2026-08-30: the cached `connection` was only ever cleared by
+    // `invalidationHandler`/`interruptionHandler` firing -- both asynchronous. A call that races
+    // ahead of that callback (or a long-lived client like the watchdog, whose connection to a
+    // just-restarted daemon can end up in a state neither handler ever fires cleanly for) can keep
+    // reusing a proxy derived from an already-dead connection indefinitely: every call fails, but
+    // nothing ever forces a fresh connection to replace it, because the cache is only ever cleared
+    // reactively, never on the failure path itself. On a long-lived client (the watchdog, ticking
+    // forever) this is a permanent break, not a transient one -- and for the watchdog specifically,
+    // that meant every 20s check "failing" forever after the very first hiccup, force-killing an
+    // otherwise healthy daemon on every single tick.
+    //
+    // Fix: clear the cache directly inside the error handler, on both paths below, so ANY failure
+    // -- not just an eventual invalidation/interruption callback -- guarantees the next call
+    // builds a fresh connection instead of retrying through the same broken one.
     private func proxy(errorHandler: @escaping () -> Void) -> FocusLockXPCProtocol {
-        if let connection, let proxy = connection.remoteObjectProxyWithErrorHandler({ _ in errorHandler() }) as? FocusLockXPCProtocol {
+        let handleError: () -> Void = { [weak self] in
+            self?.connection = nil
+            errorHandler()
+        }
+        if let connection, let proxy = connection.remoteObjectProxyWithErrorHandler({ _ in handleError() }) as? FocusLockXPCProtocol {
             return proxy
         }
         let newConnection = NSXPCConnection(machServiceName: FocusLockConstants.machServiceName, options: .privileged)
@@ -23,7 +41,7 @@ public final class FocusLockXPCClient {
         newConnection.interruptionHandler = { [weak self] in self?.connection = nil }
         newConnection.resume()
         self.connection = newConnection
-        guard let proxy = newConnection.remoteObjectProxyWithErrorHandler({ _ in errorHandler() }) as? FocusLockXPCProtocol else {
+        guard let proxy = newConnection.remoteObjectProxyWithErrorHandler({ _ in handleError() }) as? FocusLockXPCProtocol else {
             fatalError("FocusLockHelperd XPC proxy unavailable -- is the daemon registered and running?")
         }
         return proxy
