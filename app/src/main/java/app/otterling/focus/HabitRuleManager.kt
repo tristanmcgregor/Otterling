@@ -47,15 +47,15 @@ import kotlinx.coroutines.sync.withLock
  * start at 1) -- [isDashboardManaged] and the on-device rule-list UI rely on that to hide
  * edit/enable/remove controls that wouldn't do anything (there's no Room row for them to act on).
  *
- * ## Cross-device rules: global habits + completion reporting
+ * ## Cross-device rules: global habits
  *
  * Habits themselves are no longer part of this (or any) device's own settings record -- they're
  * a single library shared across the whole fleet (see [DashboardConfigStore.globalHabitsSnapshot],
  * `lockprofile_service.py`'s `HABITS_PATH`), so a rule stored under a DIFFERENT device (e.g. a
  * Mac rule gating an app on that Mac) can reference the exact same habit this phone verifies via
- * HabitShare. [evaluateTrigger] reports every habit HabitShare confirms done today to the server
- * (see [HabitCompletionReporter]) regardless of whether any of THIS phone's own local rules
- * reference it -- the other device's rule evaluation has no other way to see it.
+ * HabitShare. Completion is only evaluated against THIS device's own local rules -- there is no
+ * cross-device completion reporting, so a dashboard rule stored under a different device won't see
+ * habits done here.
  */
 class HabitRuleManager(private val context: Context) {
     private val dao = AppDatabase.getInstance(context).habitRuleDao()
@@ -81,14 +81,22 @@ class HabitRuleManager(private val context: Context) {
 
     /** Parses the dashboard's `rules` list into synthetic, always-windowed [HabitRule]s. Never
      *  persisted -- see this class's Phase 5 doc for why that's safe. Skips any entry with no
-     *  `targetApps` (a website-only rule, or an older rule saved before this field existed) or no
-     *  valid schedule. A rule's `targetApps` can name more than one app -- all of them share the
-     *  same [HabitRule.targetPackages], same as a local multi-target rule created via [addRule].
+     *  usable target packages (see below) or no valid schedule. A rule's target packages can
+     *  name more than one app -- all of them share the same [HabitRule.targetPackages], same as
+     *  a local multi-target rule created via [addRule].
      *  A rule can carry both non-empty `targetApps` and `targetWebsites` at once (see api.ts's
-     *  Rule doc comment on the dashboard side) -- this method only ever picks out the app half.
-     *  The website half used to have an on-device counterpart here too (`isWebsiteCurrentlyBlocked`,
-     *  consulted by VpnFilterService's DNS handling), but that's now enforced server-side instead
-     *  -- see VpnFilterService.kt's handleDnsPacket and mitm_nsfw_addon.py's _WebsiteRuleBlocks. */
+     *  Rule doc comment on the dashboard side). The website half used to have an on-device
+     *  DNS-level counterpart here too (`isWebsiteCurrentlyBlocked`, consulted by
+     *  VpnFilterService's DNS handling), but that's now enforced server-side instead -- see
+     *  VpnFilterService.kt's handleDnsPacket and mitm_nsfw_addon.py's _WebsiteRuleBlocks. That
+     *  server-side MITM enforcement is silently unreachable for any `targetWebsites` domain owned
+     *  by an app on [app.otterling.content.MitmExemptManager]'s exemption list (YouTube being the
+     *  flagship case -- it cert-pins and is exempted from MITM for that reason), since the
+     *  exempt app's traffic never reaches the proxy that would enforce the block. [KNOWN_APP_DOMAINS]
+     *  closes that gap by also mapping a handful of well-known domains straight to the native
+     *  app package(s) that serve them, so those get suspended the same reliable way as an
+     *  explicit `targetApps` entry, regardless of whether the guardian added the target as an app
+     *  or a website (or both) on the dashboard. */
     private fun dashboardRules(): List<HabitRule> {
         val snapshot = DashboardConfigStore(context).snapshot() ?: return emptyList()
         val entries = snapshot.optJSONArray("rules") ?: return emptyList()
@@ -105,9 +113,16 @@ class HabitRuleManager(private val context: Context) {
         val result = mutableListOf<HabitRule>()
         for (i in 0 until entries.length()) {
             val entry = entries.optJSONObject(i) ?: continue
-            val appIds = entry.optJSONArray("targetApps")?.let { apps ->
+            val rawAppIds = entry.optJSONArray("targetApps")?.let { apps ->
                 (0 until apps.length()).mapNotNull { apps.optJSONObject(it)?.optString("appId")?.takeIf(String::isNotBlank) }
             }.orEmpty()
+            val websiteAppIds = entry.optJSONArray("targetWebsites")?.let { sites ->
+                (0 until sites.length()).flatMap { j ->
+                    val domain = sites.optJSONObject(j)?.optString("domain")?.trim()?.lowercase().orEmpty()
+                    KNOWN_APP_DOMAINS[domain].orEmpty()
+                }
+            }.orEmpty()
+            val appIds = (rawAppIds + websiteAppIds).distinct()
             if (appIds.isEmpty()) continue
             val schedule = entry.optJSONObject("schedule") ?: continue
             val start = parseTimeToMinuteOfDay(schedule.optString("startTime"))
@@ -281,12 +296,6 @@ class HabitRuleManager(private val context: Context) {
 
         val rawDoneNames = detectedHabitRows.filter { it.second }.map { it.first.lowercase() }.toSet()
         val doneHabitNames = proofManager.filterSatisfied(rawDoneNames)
-        // Reported regardless of whether any of THIS phone's own local (Room) rules reference
-        // these habits -- a dashboard rule gating a different device (e.g. a Mac rule) has no
-        // local representation here to condition this on. See HabitCompletionReporter's doc
-        // comment. Must run before the early return below, which only applies to the
-        // local-rule-granting logic that follows.
-        HabitCompletionReporter(context).reportDoneToday(doneHabitNames)
 
         val candidates = dao.forTrigger(triggerPackageName)
             .filter { it.lastGrantedEpochDay != today && !it.isTimeWindowed() }
@@ -423,5 +432,19 @@ class HabitRuleManager(private val context: Context) {
 
     private fun setSuspended(packageName: String, suspended: Boolean) {
         PackageBlockEnforcer.setBlocked(context, packageName, blocked = suspended)
+    }
+
+    companion object {
+        /** Domains whose native Android app is on [app.otterling.content.MitmExemptManager]'s
+         *  exemption list, so the MITM-proxy website-rule enforcement path
+         *  ([filter-server]'s `mitm_nsfw_addon.py`) can never see -- let alone block -- that app's
+         *  traffic. Mapped straight to the app package(s) that serve them so [dashboardRules] can
+         *  fall back to the reliable app-suspend enforcement path instead. Add an entry here
+         *  whenever a `targetWebsites` domain turns out to map to an app on that exemption list. */
+        private val KNOWN_APP_DOMAINS: Map<String, Set<String>> = mapOf(
+            "youtube.com" to setOf("com.google.android.youtube", "app.morphe.android.youtube"),
+            "www.youtube.com" to setOf("com.google.android.youtube", "app.morphe.android.youtube"),
+            "m.youtube.com" to setOf("com.google.android.youtube", "app.morphe.android.youtube"),
+        )
     }
 }
