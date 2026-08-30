@@ -133,7 +133,11 @@ public enum FocusLockConstants {
     /// reports itself unreachable rather than silently doing nothing.
     public static let anthropicApiKeyPath = "\(stateDirectory)/anthropic_api_key"
     /// Optional absolute path to the `claude` binary, for a Mac where it isn't in one of
-    /// `AIAssistantClient`'s auto-probed install locations. Absent -> auto-probe.
+    /// `AIAssistantClient`'s auto-probed install locations (`/opt/homebrew/bin`, `/usr/local/bin`
+    /// -- deliberately never anywhere under a console user's home directory; see that type's
+    /// `resolveClaudeExecutable` doc comment for why). The target this points at is executed by a
+    /// root daemon, so it must not be writable by the account being filtered either -- this file
+    /// relocates *where* the daemon looks, not the trust requirement on what it finds there.
     public static let claudeCliPathOverridePath = "\(stateDirectory)/claude_cli_path"
 
     /// Per-type last-sent timestamps `TamperReporter` uses to rate-limit `/alerts/tamper` POSTs.

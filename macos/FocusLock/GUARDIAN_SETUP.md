@@ -131,7 +131,15 @@ sudo chmod 600 "/Library/Application Support/FocusLock/anthropic_api_key"
 ```
 
 `claude` itself must actually be installed for the daemon to find -- it auto-probes
-`/opt/homebrew/bin/claude`, `/usr/local/bin/claude`, and `~/.local/bin/claude` under the console
-user, or set an explicit path in `"/Library/Application Support/FocusLock/claude_cli_path"` (same
-ownership/permissions as above) if it lives somewhere else. Leaving the API key file unprovisioned
-just makes the AI Assistant report itself unreachable -- everything else in the app is unaffected.
+`/opt/homebrew/bin/claude` and `/usr/local/bin/claude` (a Homebrew install under an admin account;
+these get the same trust `SudoBroker` already extends them for every other elevated command's PATH
+search, since they require admin-group write access, not root, on a properly-split setup). It
+deliberately does **not** probe anywhere under a console user's home directory (e.g. the Claude
+Code installer's own default `~/.local/bin/claude`) -- that's writable by whoever is logged in
+regardless of admin status, which on this setup is the filtered Standard account, and would let it
+plant an arbitrary binary named `claude` for this root daemon to run. If `claude` lives somewhere
+else, set an explicit path in `"/Library/Application Support/FocusLock/claude_cli_path"` (same
+ownership/permissions as above) -- but first make sure that target binary itself isn't writable by
+the Standard account either, or this override just relocates the same hole. Leaving the API key
+file unprovisioned just makes the AI Assistant report itself unreachable -- everything else in the
+app is unaffected.

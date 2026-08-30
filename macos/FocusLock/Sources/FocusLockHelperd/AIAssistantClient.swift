@@ -1,4 +1,3 @@
-import Darwin
 import Foundation
 import FocusLockShared
 
@@ -163,18 +162,20 @@ enum AIAssistantClient {
            FileManager.default.isExecutableFile(atPath: override) {
             return override
         }
-        var candidates = ["/opt/homebrew/bin/claude", "/usr/local/bin/claude"]
-        if let uid = ConsoleUser.currentUID(), let home = homeDirectory(uid: uid) {
-            // The Claude Code installer's own default location for a user-level (non-Homebrew)
-            // install -- confirmed the actual `which claude` result on a real dev Mac.
-            candidates.append("\(home)/.local/bin/claude")
-        }
+        // Deliberately NOT probing anything under a console user's home directory (e.g. the
+        // Claude Code installer's own default `~/.local/bin/claude`): unlike the two paths below,
+        // a home directory is unconditionally writable by whoever is logged in, admin or not --
+        // on a properly-split Guardian/Standard setup, that's the filtered account itself. Probing
+        // it would let that account plant an arbitrary binary named `claude` there and have this
+        // root daemon execute it, a straight path to root code execution and every protection
+        // disabled -- exactly what the Guardian/Standard split (see SudoBroker.swift's doc
+        // comment) exists to prevent. `/opt/homebrew/bin` and `/usr/local/bin` are trusted here at
+        // the same level `SudoBroker.execute` already trusts them for every other elevated
+        // command's PATH search -- both require admin-group write access, which the filtered
+        // account does not have once actually demoted to Standard (see GUARDIAN_SETUP.md). Anyone
+        // installing `claude` somewhere else must provision `claudeCliPathOverridePath` instead.
+        let candidates = ["/opt/homebrew/bin/claude", "/usr/local/bin/claude"]
         return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
-    }
-
-    private static func homeDirectory(uid: uid_t) -> String? {
-        guard let pw = getpwuid(uid) else { return nil }
-        return String(cString: pw.pointee.pw_dir)
     }
 
     private static func readTrimmed(_ path: String) -> String? {
