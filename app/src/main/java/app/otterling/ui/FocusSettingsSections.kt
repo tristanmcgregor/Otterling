@@ -899,7 +899,6 @@ fun HabitShareSettingsScreen(context: Context, onBack: () -> Unit) {
         ) {
             HabitShareAccountSection(context)
             HabitShareVerificationSection(context)
-            HabitRulesSection(context)
         }
     }
 }

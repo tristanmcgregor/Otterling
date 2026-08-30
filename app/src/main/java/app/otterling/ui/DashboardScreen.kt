@@ -86,6 +86,9 @@ import app.otterling.restrictions.DeviceRestrictionsManager
 import app.otterling.restrictions.Restriction
 import app.otterling.tamper.TamperEvent
 import app.otterling.tamper.TamperEventLogger
+import app.otterling.ui.components.FilledPillButton
+import app.otterling.ui.components.OutlinedPillButton
+import app.otterling.ui.components.StatTile
 import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.format.TextStyle
@@ -224,16 +227,30 @@ fun DashboardScreen(context: Context, onOpenSettings: () -> Unit) {
                     val snapshot = data!!
                     ProtectionStatus(context, snapshot) { refresh++ }
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Button(onClick = { showRuleWizard = true }, modifier = Modifier.weight(1f)) {
-                            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.size(8.dp))
-                            Text("Add rule")
-                        }
-                        OutlinedButton(onClick = { showDomainDialog = true }, modifier = Modifier.weight(1f)) {
-                            Icon(Icons.Default.Language, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.size(8.dp))
-                            Text("Block web")
-                        }
+                        StatTile(
+                            value = snapshot.rules.count { it.enabled }.toString(),
+                            label = "Active rules",
+                            modifier = Modifier.weight(1f),
+                        )
+                        StatTile(
+                            value = snapshot.budgets.size.toString(),
+                            label = "App budgets",
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        FilledPillButton(
+                            text = "Add rule",
+                            onClick = { showRuleWizard = true },
+                            icon = Icons.Default.Add,
+                            modifier = Modifier.weight(1f),
+                        )
+                        OutlinedPillButton(
+                            text = "Block web",
+                            onClick = { showDomainDialog = true },
+                            icon = Icons.Default.Language,
+                            modifier = Modifier.weight(1f),
+                        )
                     }
                     RulesOverview(context, snapshot, now, habitsRefreshing) {
                         habitsRefreshing = true
@@ -258,14 +275,12 @@ fun DashboardScreen(context: Context, onOpenSettings: () -> Unit) {
             tonalElevation = 0.dp,
             shadowElevation = 8.dp,
         ) {
-            Button(
+            FilledPillButton(
+                text = "Open Settings with PIN",
                 onClick = onOpenSettings,
+                icon = Icons.Default.Lock,
                 modifier = Modifier.fillMaxWidth().padding(16.dp),
-            ) {
-                Icon(Icons.Default.Lock, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.size(8.dp))
-                Text("Open Settings with PIN")
-            }
+            )
         }
     }
 }

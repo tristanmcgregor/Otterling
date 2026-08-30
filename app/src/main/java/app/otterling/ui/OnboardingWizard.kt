@@ -17,9 +17,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -46,6 +44,8 @@ import app.otterling.restrictions.AccessibilityGuard
 import app.otterling.restrictions.DeviceRestrictionsManager
 import app.otterling.restrictions.OverlayPermissionManager
 import app.otterling.restrictions.Restriction
+import app.otterling.ui.components.FilledPillButton
+import app.otterling.ui.components.OutlinedPillButton
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -123,9 +123,7 @@ private fun WizardScaffold(
         content()
         Spacer(Modifier.height(8.dp))
         if (onContinue != null) {
-            Button(onClick = onContinue, modifier = Modifier.fillMaxWidth()) {
-                Text(continueLabel)
-            }
+            FilledPillButton(text = continueLabel, onClick = onContinue, modifier = Modifier.fillMaxWidth())
         }
     }
 }
@@ -182,9 +180,7 @@ private fun DeviceOwnerStep(context: Context, onContinue: () -> Unit) {
             )
             WizardCodeBlock(ownerManager.provisioningAdbCommand)
         }
-        OutlinedButton(onClick = { refreshTrigger++ }) {
-            Text("Check again")
-        }
+        OutlinedPillButton(text = "Check again", onClick = { refreshTrigger++ })
     }
 }
 
@@ -208,14 +204,13 @@ private fun RestrictionsStep(context: Context, onContinue: () -> Unit) {
             StatusText(if (satisfied) "Enabled" else "Not enabled", isGood = satisfied)
         }
         if (!satisfied) {
-            Button(
+            FilledPillButton(
+                text = "Enable recommended protections",
                 onClick = {
                     restrictionsManager.applyDefaults()
                     refreshTrigger++
                 },
-            ) {
-                Text("Enable recommended protections")
-            }
+            )
         }
     }
 }
@@ -243,7 +238,8 @@ private fun ContentFilterStep(context: Context, onContinue: () -> Unit) {
             StatusText(if (enabled) "Enabled" else "Disabled", isGood = enabled)
         }
         if (!enabled) {
-            Button(
+            FilledPillButton(
+                text = "Enable content filter",
                 enabled = !busy,
                 onClick = {
                     busy = true
@@ -261,9 +257,7 @@ private fun ContentFilterStep(context: Context, onContinue: () -> Unit) {
                         busy = false
                     }
                 },
-            ) {
-                Text("Enable content filter")
-            }
+            )
         }
         if (statusMessage.isNotEmpty()) {
             Text(statusMessage, style = MaterialTheme.typography.bodySmall)
@@ -293,7 +287,8 @@ private fun AccountabilityPartnerSmsStep(context: Context, onContinue: () -> Uni
             singleLine = true,
             placeholder = { Text("+614...") },
         )
-        Button(
+        FilledPillButton(
+            text = "Save",
             enabled = number.isNotBlank(),
             onClick = {
                 settings.addPartnerNumber(number)
@@ -302,9 +297,7 @@ private fun AccountabilityPartnerSmsStep(context: Context, onContinue: () -> Uni
                 number = ""
                 refreshTrigger++
             },
-        ) {
-            Text("Save")
-        }
+        )
     }
 }
 
@@ -323,16 +316,13 @@ private fun AccessibilityStep(context: Context, onContinue: () -> Unit) {
             Text("Accessibility service", style = MaterialTheme.typography.bodyLarge)
             StatusText(if (enabled) "Enabled" else "Not enabled", isGood = enabled)
         }
-        Button(
+        FilledPillButton(
+            text = "Open Accessibility settings",
             onClick = {
                 context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             },
-        ) {
-            Text("Open Accessibility settings")
-        }
-        OutlinedButton(onClick = { refreshTrigger++ }) {
-            Text("Refresh status")
-        }
+        )
+        OutlinedPillButton(text = "Refresh status", onClick = { refreshTrigger++ })
     }
 }
 
@@ -353,12 +343,11 @@ private fun OverlayStep(context: Context, onContinue: () -> Unit) {
             Text("Appear on top", style = MaterialTheme.typography.bodyLarge)
             StatusText(if (granted) "Granted" else "Not granted", isGood = granted)
         }
-        Button(onClick = { context.startActivity(overlayManager.permissionRequestIntent()) }) {
-            Text("Open permission settings")
-        }
-        OutlinedButton(onClick = { refreshTrigger++ }) {
-            Text("Refresh status")
-        }
+        FilledPillButton(
+            text = "Open permission settings",
+            onClick = { context.startActivity(overlayManager.permissionRequestIntent()) },
+        )
+        OutlinedPillButton(text = "Refresh status", onClick = { refreshTrigger++ })
     }
 }
 
