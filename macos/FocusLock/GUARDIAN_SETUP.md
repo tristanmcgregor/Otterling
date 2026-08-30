@@ -113,3 +113,25 @@ None of this is unique to Otterling -- it's true of every self-control tool that
 on hardware you administer. The Guardian-account split raises the bar from "one click in Settings"
 to "needs another person's cooperation, or a deliberate act of reinstalling the OS," which is the
 realistic ceiling for this kind of tool.
+
+## 7. AI Assistant (optional)
+
+The GUI's "AI Assistant" chat box (see `AIAssistantClient.swift`) runs a local, non-interactive
+`claude` CLI session on this Mac to translate a plain-English request into candidate shell
+commands -- it never executes anything itself; every command it proposes still goes through the
+exact same `SudoBroker` denylist/allowlist/AI-review pipeline as the manual Sudo Terminal, one at a
+time. It needs its own Anthropic API key, separate from any interactive Claude Code subscription
+login, since the daemon runs as root with no login session to read OAuth credentials from:
+
+```bash
+sudo install -d -m 755 -o root -g wheel "/Library/Application Support/FocusLock"
+sudo tee "/Library/Application Support/FocusLock/anthropic_api_key" > /dev/null <<< "sk-ant-..."
+sudo chown root:wheel "/Library/Application Support/FocusLock/anthropic_api_key"
+sudo chmod 600 "/Library/Application Support/FocusLock/anthropic_api_key"
+```
+
+`claude` itself must actually be installed for the daemon to find -- it auto-probes
+`/opt/homebrew/bin/claude`, `/usr/local/bin/claude`, and `~/.local/bin/claude` under the console
+user, or set an explicit path in `"/Library/Application Support/FocusLock/claude_cli_path"` (same
+ownership/permissions as above) if it lives somewhere else. Leaving the API key file unprovisioned
+just makes the AI Assistant report itself unreachable -- everything else in the app is unaffected.

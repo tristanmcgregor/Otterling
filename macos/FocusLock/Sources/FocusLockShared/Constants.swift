@@ -125,6 +125,17 @@ public enum FocusLockConstants {
     public static let lockProfileTokenPath = "\(stateDirectory)/lockprofile_token"
     public static let lockProfileHostPath = "\(stateDirectory)/lockprofile_host"
 
+    /// Root-only file holding the Anthropic API key `AIAssistantClient` exports into its local,
+    /// non-interactive `claude` CLI session -- API-key auth, not the household's own interactive
+    /// Claude Code subscription login, since a root LaunchDaemon has no login session for `claude`
+    /// to read OAuth credentials from (`--bare` mode deliberately refuses to try). Provision by
+    /// writing this file (0600, root:wheel) with nothing but the key. Absent -> the AI Assistant
+    /// reports itself unreachable rather than silently doing nothing.
+    public static let anthropicApiKeyPath = "\(stateDirectory)/anthropic_api_key"
+    /// Optional absolute path to the `claude` binary, for a Mac where it isn't in one of
+    /// `AIAssistantClient`'s auto-probed install locations. Absent -> auto-probe.
+    public static let claudeCliPathOverridePath = "\(stateDirectory)/claude_cli_path"
+
     /// Per-type last-sent timestamps `TamperReporter` uses to rate-limit `/alerts/tamper` POSTs.
     /// Lives here (not in-memory) because callers span separate processes -- the daemon, the
     /// watchdog LaunchDaemon, and the scanner CLI -- that don't share memory but do all run as
