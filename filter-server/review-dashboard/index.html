@@ -127,6 +127,12 @@
     border-color: var(--fail);
     color: var(--fail);
   }
+  .subpanel {
+    border: 1px solid var(--panel-border);
+    border-radius: 10px;
+    padding: 12px 14px;
+    margin-top: 14px;
+  }
   .section-title {
     font-size: 0.72rem;
     text-transform: uppercase;
@@ -263,6 +269,15 @@
     <div id="meta" class="meta">No release has run yet.</div>
     <div id="phases" class="phases" hidden></div>
 
+    <div id="macos-build-section" class="subpanel" hidden>
+      <div class="section-title" style="margin-bottom:6px;">
+        <span>macOS build agent</span>
+        <span id="macos-build-version" class="chip" hidden></span>
+      </div>
+      <div id="macos-build-phases" class="phases"></div>
+      <div id="macos-build-error" class="meta" style="color: var(--fail); margin-top: 8px;" hidden></div>
+    </div>
+
     <div class="tabs" role="tablist">
       <button class="tab active" data-tab="ai" type="button">AI output</button>
       <button class="tab" data-tab="console" type="button">Console</button>
@@ -315,6 +330,12 @@ const DATA_BASE = "/review-data";
 const POLL_IDLE_MS = 5000;
 const POLL_LIVE_MS = 1000;
 const PHASES = ["preparing", "ai_review", "building", "publishing", "done"];
+// Separate from PHASES above: the macOS build agent is a distinct, asynchronous side pipeline
+// (see macos/FocusLock/RELEASE.md's "Automated macOS builds" section) that only exists at all for
+// a run whose reviewed diff touched macos/ paths -- release.sh queues it, the household's Mac
+// build-agent account claims/builds/uploads it, and this host attests + publishes on success. Its
+// own status.json field (`macos_build`) is independent of, and can outlive, the main run's `phase`.
+const MACOS_PHASES = ["pending", "building", "uploading", "publishing", "done"];
 
 let pollTimer = null;
 let activeTab = "ai";
@@ -359,6 +380,56 @@ function phaseLabel(phase) {
     done: "Done",
     failed: "Failed",
   })[phase] || phase || "—";
+}
+
+function macosPhaseLabel(status) {
+  return ({
+    pending: "Queued for Mac",
+    building: "Building on Mac",
+    uploading: "Uploading",
+    publishing: "Publishing",
+    done: "Done",
+    failed: "Failed",
+  })[status] || status || "—";
+}
+
+// Same chip-row look as renderPhases, parameterized over MACOS_PHASES instead of PHASES, plus
+// a build-number chip and an error line -- the macOS pipeline can fail with a message worth
+// showing (e.g. a signing/notarization error) that the main run's phase bar has no room for.
+function renderMacosBuild(macos) {
+  const section = document.getElementById("macos-build-section");
+  if (!macos || !macos.status) {
+    section.hidden = true;
+    return;
+  }
+  section.hidden = false;
+
+  const versionText = macos.build_number
+    ? `Build ${macos.build_number}${macos.version_name ? ` (v${escapeHtml(macos.version_name)})` : ""}`
+    : "";
+  setChip(document.getElementById("macos-build-version"), versionText, !!versionText);
+
+  const wrap = document.getElementById("macos-build-phases");
+  const failed = macos.status === "failed";
+  const doneIdx = MACOS_PHASES.indexOf(failed ? "publishing" : macos.status);
+  wrap.innerHTML = MACOS_PHASES.map((p, idx) => {
+    let cls = "phase";
+    if (failed && p === "done") cls += " failed";
+    else if (macos.status === "done" && idx <= MACOS_PHASES.indexOf("done")) cls += " done";
+    else if (p === macos.status) cls += " active";
+    else if (doneIdx >= 0 && idx < doneIdx) cls += " done";
+    const label = p === "done" && failed ? "Failed" : macosPhaseLabel(p);
+    return `<span class="${cls}">${escapeHtml(label)}</span>`;
+  }).join("");
+
+  const errorEl = document.getElementById("macos-build-error");
+  if (macos.error) {
+    errorEl.hidden = false;
+    errorEl.textContent = macos.error;
+  } else {
+    errorEl.hidden = true;
+    errorEl.textContent = "";
+  }
 }
 
 function setChip(el, text, show) {
@@ -504,6 +575,7 @@ function renderStatus(data) {
   document.getElementById("meta").innerHTML = parts.join(" · ") || "No release has run yet.";
 
   renderPhases(data.phase, data.state, data.verdict);
+  renderMacosBuild(data.macos_build);
   renderAi(data);
   renderFiles(data.files_changed);
 
@@ -530,18 +602,24 @@ function renderHistory(list) {
     const cls = badgeClassFor(entry.state, entry.verdict);
     const label = labelFor(entry.state, entry.verdict);
     const files = Array.isArray(entry.files_changed) ? entry.files_changed.length : "";
+    const macos = entry.macos_build;
+    const macosCell = macos && macos.build_number
+      ? `v${escapeHtml(macos.version_name || "?")} (build ${escapeHtml(String(macos.build_number))})`
+      // A run whose diff never touched macos/ has no macos_build at all -- "—", not a failure state.
+      : (macos && macos.status ? `<span class="badge ${macos.status === "failed" ? "fail" : "pending"}">${escapeHtml(macosPhaseLabel(macos.status))}</span>` : "—");
     return `<tr>
       <td><span class="badge ${cls}"><span class="dot"></span>${escapeHtml(label)}</span></td>
       <td><code>${escapeHtml((entry.commit_sha || "").slice(0, 12))}</code></td>
       <td>${escapeHtml(entry.commit_message || "")}</td>
       <td>${escapeHtml(entry.review_range || "")}</td>
       <td>${escapeHtml(entry.published_version ? "v" + entry.published_version : "")}</td>
+      <td>${macosCell}</td>
       <td>${files !== "" ? files : "—"}</td>
       <td>${formatTime(entry.finished_at || entry.started_at)}</td>
     </tr>`;
   }).join("");
   container.innerHTML = `<table>
-    <thead><tr><th>Verdict</th><th>Commit</th><th>Message</th><th>Range</th><th>Version</th><th>Files</th><th>When</th></tr></thead>
+    <thead><tr><th>Verdict</th><th>Commit</th><th>Message</th><th>Range</th><th>Version</th><th>macOS build</th><th>Files</th><th>When</th></tr></thead>
     <tbody>${rows}</tbody>
   </table>`;
 }
