@@ -107,11 +107,24 @@ enum UpdateManager {
     }
 
     /// Called after a successful install: restarts the watchdog (a separate LaunchDaemon job, so
-    /// it must be told explicitly) so it also picks up its freshly-installed binary, then exits --
-    /// `KeepAlive=true` in this daemon's own plist relaunches it immediately, this time running the
-    /// new `FocusLockHelperd` binary that was just swapped into place. Never returns.
+    /// it must be told explicitly) so it also picks up its freshly-installed binary, then forces
+    /// THIS job to restart too, before finally exiting itself. Never returns.
+    ///
+    /// Explicitly `kickstart -k`s this job's own label rather than relying only on `exit(0)` +
+    /// `KeepAlive=true` to get relaunched passively -- confirmed live 2026-08-30: after a real
+    /// swapped-in update, a daemon that had been running for hours never actually restarted despite
+    /// (apparently) reaching this function repeatedly across several successive automatic-update
+    /// cycles, staying on old code indefinitely while the on-disk binary moved on to newer builds --
+    /// `active count` in `launchctl print` never incremented. `kickstart -k` forces an immediate
+    /// restart unconditionally (bypassing whatever launchd-side throttling or stale cached job
+    /// state a passive self-exit might be silently subject to), the same command a Guardian running
+    /// this by hand would reach for -- so this makes the daemon do to itself, deterministically,
+    /// exactly what manual recovery already required, instead of hoping KeepAlive notices in time.
+    /// The trailing `exit(0)` is now just a safety net for the (expected) case where the kickstart
+    /// below kills this process before it gets there.
     static func restartAfterInstall() -> Never {
         ProcessRunner.runSilently("/bin/launchctl", ["kickstart", "-k", "system/\(FocusLockConstants.watchdogBundleIdentifier)"])
+        ProcessRunner.runSilently("/bin/launchctl", ["kickstart", "-k", "system/\(FocusLockConstants.helperBundleIdentifier)"])
         exit(0)
     }
 
