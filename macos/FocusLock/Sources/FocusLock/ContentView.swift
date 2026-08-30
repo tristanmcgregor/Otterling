@@ -695,9 +695,12 @@ struct ContentView: View {
             assistantAvatar
             VStack(alignment: .leading, spacing: 10) {
                 if result.steps.isEmpty {
+                    // No status pill here on purpose: this is the normal shape of a plain chat
+                    // reply (a greeting, a clarifying question, small talk) as much as it is a
+                    // refusal or a failed translation -- a "No commands to run" badge under every
+                    // one made even an ordinary "hi" back look like an error state.
                     Text(result.translationExplanation)
                         .font(.system(size: 13)).foregroundStyle(Otter.onSurface)
-                    Pill(text: "No commands to run", variant: .neutral)
                 }
                 // Each step's `roundExplanation` is only populated on the first command of a new
                 // round (see AssistantStep's doc comment), so this naturally renders as "reasoning,
