@@ -227,6 +227,17 @@ final class FocusLockViewModel: NSObject, ObservableObject, UNUserNotificationCe
         }
     }
 
+    /// The build actually protecting this Mac right now -- see `FocusLockState.daemonVersionCode`'s
+    /// doc comment for why this, not `FocusLockConstants.appVersionCode` (this GUI process's own
+    /// compiled-in value), is the only number safe to show anywhere as "the current build." `0` is
+    /// its "not yet known" sentinel -- either no `getStatus` reply has landed yet (a moment after
+    /// launch), or it landed from a daemon still running a build that predates this field entirely
+    /// (i.e. the daemon side of an update hasn't actually restarted yet even though this GUI has) --
+    /// never a real build number, so it's never shown as one.
+    var currentBuildLabel: String {
+        state.daemonVersionCode > 0 ? "\(state.daemonVersionCode)" : "…"
+    }
+
     func checkForUpdate() {
         updateChecking = true
         updateStatusText = "Checking..."
@@ -238,7 +249,7 @@ final class FocusLockViewModel: NSObject, ObservableObject, UNUserNotificationCe
                 // The daemon that just answered this check is the authority on its own version --
                 // not this GUI process's own compiled-in appVersionCode, which can genuinely differ
                 // if the two haven't restarted in lockstep. See FocusLockState.daemonVersionCode.
-                updateStatusText = "Up to date (build \(state.daemonVersionCode))."
+                updateStatusText = "Up to date (build \(currentBuildLabel))."
             case .updateAvailable(let manifest):
                 pendingUpdateManifest = manifest
                 updateAvailable = true
@@ -247,7 +258,7 @@ final class FocusLockViewModel: NSObject, ObservableObject, UNUserNotificationCe
                 // FocusLockState.daemonVersionCode's doc comment describes; spelling out what this
                 // is actually being compared against makes a GUI/daemon version mismatch visible
                 // instead of just looking wrong.
-                updateStatusText = "Update available: \(manifest.versionName) (currently running build \(state.daemonVersionCode))."
+                updateStatusText = "Update available: \(manifest.versionName) (currently running build \(currentBuildLabel))."
             case .error(let message):
                 updateStatusText = "Check failed: \(message)"
             case nil:

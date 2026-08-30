@@ -18,15 +18,6 @@ struct ContentView: View {
     @State private var pendingPasscodeAction: ((String) -> Void)?
     @State private var passcodePromptText: String = ""
 
-    /// The build actually protecting this Mac right now, i.e. what the privileged daemon answering
-    /// `getStatus` is compiled as -- NOT `FocusLockConstants.appVersionCode` read directly, which
-    /// would be this GUI process's own (possibly different, if the two haven't restarted in
-    /// lockstep) compiled-in value. See `FocusLockState.daemonVersionCode`'s doc comment. "…" before
-    /// the first live status reply lands, never a stale/wrong number.
-    private var currentBuildLabel: String {
-        viewModel.state.daemonVersionCode > 0 ? "\(viewModel.state.daemonVersionCode)" : "…"
-    }
-
     enum Screen: String, CaseIterable, Identifiable {
         case overview, apps, sites, protectedApps, filter, updates, terminal, assistant, multiUser
         var id: String { rawValue }
@@ -182,7 +173,7 @@ struct ContentView: View {
 
             // Footer: build + theme note
             Divider().overlay(Otter.outlineVariant.opacity(0.4))
-            Text("🦦 Otterling — Build \(currentBuildLabel)")
+            Text("🦦 Otterling — Build \(viewModel.currentBuildLabel)")
                 .font(.system(size: 10))
                 .foregroundStyle(Otter.onSurfaceVariant)
                 .padding(.horizontal, 16).padding(.vertical, 10)
@@ -503,7 +494,7 @@ struct ContentView: View {
             Text("Checked automatically every hour; this is the same check, run on demand. A verified update's SHA-256 and code-signing Team ID must both match before anything installs.")
                 .font(.system(size: 11)).foregroundStyle(Otter.onSurfaceVariant)
             HStack(spacing: 8) {
-                Pill(text: "Build \(currentBuildLabel)", variant: .info)
+                Pill(text: "Build \(viewModel.currentBuildLabel)", variant: .info)
                 Spacer()
                 Button("Check for update") { viewModel.checkForUpdate() }
                     .buttonStyle(OtterOutlined())
