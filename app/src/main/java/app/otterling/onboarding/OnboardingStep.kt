@@ -26,7 +26,8 @@ fun resolveOnboardingStep(context: Context): OnboardingStep {
 
     val restrictionsManager = DeviceRestrictionsManager(context)
     val restrictionsDone = Restriction.entries.all { restrictionsManager.isEnabled(it) } &&
-        restrictionsManager.isUninstallBlocked()
+        restrictionsManager.isUninstallBlocked() &&
+        restrictionsManager.isChromeIncognitoBlocked()
     if (!restrictionsDone) return OnboardingStep.Restrictions
 
     if (!VpnFilterManager(context).wasEnabledByUser()) return OnboardingStep.ContentFilter

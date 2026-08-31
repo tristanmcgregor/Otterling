@@ -231,6 +231,7 @@ fun RestrictionsSection(
         Restriction.entries.associateWith { restrictionsManager.isEnabled(it) }
     }
     val uninstallBlocked = remember(refreshTrigger) { restrictionsManager.isUninstallBlocked() }
+    val chromeIncognitoBlocked = remember(refreshTrigger) { restrictionsManager.isChromeIncognitoBlocked() }
     val restrictionPreferences = remember { RestrictionPreferences(context) }
     val batteryExempt = remember(refreshTrigger) { batteryManager.isExempt() }
     LaunchedEffect(refreshTrigger) {
@@ -280,6 +281,21 @@ fun RestrictionsSection(
                 "Managed by dashboard — a change here reverts automatically within 5 minutes"
             } else {
                 "Require Device Owner to remove protected apps"
+            },
+            emphasizeLabel = true,
+        )
+
+        SwitchRow(
+            label = "Block Chrome incognito mode",
+            checked = chromeIncognitoBlocked,
+            onCheckedChange = {
+                restrictionsManager.setChromeIncognitoBlocked(it)
+                refreshTrigger++
+            },
+            description = if (restrictionPreferences.isChromeIncognitoBlockDashboardManaged()) {
+                "Managed by dashboard — a change here reverts automatically within 5 minutes"
+            } else {
+                "Removes Chrome's \"New Incognito tab\" option entirely"
             },
             emphasizeLabel = true,
         )

@@ -189,14 +189,17 @@ private fun RestrictionsStep(context: Context, onContinue: () -> Unit) {
     val restrictionsManager = remember { DeviceRestrictionsManager(context) }
     var refreshTrigger by remember { mutableIntStateOf(0) }
     val satisfied = remember(refreshTrigger) {
-        Restriction.entries.all { restrictionsManager.isEnabled(it) } && restrictionsManager.isUninstallBlocked()
+        Restriction.entries.all { restrictionsManager.isEnabled(it) } &&
+            restrictionsManager.isUninstallBlocked() &&
+            restrictionsManager.isChromeIncognitoBlocked()
     }
 
     WizardScaffold(
         title = "Tamper resistance",
         subtitle = "Blocks Safe Mode boot, factory reset, USB debugging, and additional user " +
-            "accounts, and stops Otterling itself from being uninstalled. Standard Android " +
-            "Device Owner restrictions -- reversible only by the Guardian.",
+            "accounts; stops Otterling itself from being uninstalled; and disables Chrome's " +
+            "incognito mode. Standard Android Device Owner restrictions -- reversible only by " +
+            "the Guardian.",
         onContinue = if (satisfied) onContinue else null,
     ) {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {

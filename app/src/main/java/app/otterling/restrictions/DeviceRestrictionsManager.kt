@@ -3,6 +3,7 @@ package app.otterling.restrictions
 import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Context
+import android.os.Bundle
 import android.util.Log
 import app.otterling.admin.DeviceAdminReceiverImpl
 import app.otterling.tamper.TamperEventLogger
@@ -94,22 +95,72 @@ class DeviceRestrictionsManager(private val context: Context) {
         }
     }
 
+    /**
+     * Chrome reads its own "IncognitoModeAvailability" managed-configuration key on launch (and
+     * whenever it changes); a device owner can set it for any app via
+     * [DevicePolicyManager.setApplicationRestrictions] without Chrome needing to be "managed"
+     * beforehand. 1 = disabled (greys out the "New Incognito tab" menu item entirely), matching
+     * https://chromeenterprise.google/policies/#IncognitoModeAvailability. This closes the
+     * private-browsing bypass the same way [Restriction.CONFIG_VPN] closes the VPN one: Chrome's
+     * own history/data controls mean nothing if the kid can just open an incognito tab.
+     */
+    fun isChromeIncognitoBlocked(): Boolean =
+        devicePolicyManager?.getApplicationRestrictions(adminComponent, CHROME_PACKAGE)
+            ?.getInt(KEY_INCOGNITO_MODE_AVAILABILITY, INCOGNITO_AVAILABILITY_ENABLED) ==
+            INCOGNITO_AVAILABILITY_DISABLED
+
+    /** Same pattern as [setUninstallBlocked]: applies immediately and alerts on a front-door disable. */
+    fun setChromeIncognitoBlocked(blocked: Boolean) {
+        val wasBlocked = isChromeIncognitoBlocked()
+        preferences.setChromeIncognitoBlockDesired(blocked)
+        applyChromeIncognitoBlockToSystem(blocked)
+        if (!blocked && wasBlocked) {
+            alertScope.launch {
+                runCatching {
+                    TamperEventLogger(context).log(
+                        type = "CHROME_INCOGNITO_UNBLOCKED_BY_USER",
+                        details = "Chrome incognito mode re-enabled via Settings",
+                    )
+                }
+            }
+        }
+    }
+
+    private fun applyChromeIncognitoBlockToSystem(blocked: Boolean) {
+        val dpm = devicePolicyManager ?: return
+        try {
+            val restrictions = Bundle().apply {
+                putInt(
+                    KEY_INCOGNITO_MODE_AVAILABILITY,
+                    if (blocked) INCOGNITO_AVAILABILITY_DISABLED else INCOGNITO_AVAILABILITY_ENABLED,
+                )
+            }
+            dpm.setApplicationRestrictions(adminComponent, CHROME_PACKAGE, restrictions)
+            Log.i(TAG, "Chrome incognito blocked set to $blocked")
+        } catch (error: SecurityException) {
+            Log.e(TAG, "Not authorized to set Chrome app restrictions (device owner not active yet?)", error)
+        }
+    }
+
     /** Clears every tamper restriction from the live system without changing stored preferences. */
     fun clearAllFromSystem() {
         Restriction.entries.forEach { applyToSystem(it, enabled = false) }
         applyUninstallBlockedToSystem(blocked = false)
+        applyChromeIncognitoBlockToSystem(blocked = false)
     }
 
     /** Re-applies whatever is stored in preferences (used when protection is turned back on). */
     fun reapplyDesiredFromPreferences() {
         Restriction.entries.forEach { applyToSystem(it, preferences.isDesired(it)) }
         applyUninstallBlockedToSystem(preferences.isUninstallBlockDesired())
+        applyChromeIncognitoBlockToSystem(preferences.isChromeIncognitoBlockDesired())
     }
 
     /** Called once from [DeviceAdminReceiverImpl.onEnabled] so protection is on by default. */
     fun applyDefaults() {
         Restriction.entries.forEach { setEnabled(it, true) }
         setUninstallBlocked(true)
+        setChromeIncognitoBlocked(true)
         Log.i(TAG, "Applied default tamper-resistance restrictions")
     }
 
@@ -137,6 +188,12 @@ class DeviceRestrictionsManager(private val context: Context) {
             applyUninstallBlockedToSystem(desiredUninstallBlocked)
         }
 
+        val desiredChromeIncognitoBlocked = preferences.isChromeIncognitoBlockDesired()
+        if (isChromeIncognitoBlocked() != desiredChromeIncognitoBlocked) {
+            drifted += "Block Chrome incognito mode"
+            applyChromeIncognitoBlockToSystem(desiredChromeIncognitoBlocked)
+        }
+
         if (drifted.isEmpty()) return
         logger.log(
             type = "RESTRICTION_DRIFT",
@@ -146,5 +203,9 @@ class DeviceRestrictionsManager(private val context: Context) {
 
     private companion object {
         const val TAG = "DeviceRestrictionsManager"
+        const val CHROME_PACKAGE = "com.android.chrome"
+        const val KEY_INCOGNITO_MODE_AVAILABILITY = "IncognitoModeAvailability"
+        const val INCOGNITO_AVAILABILITY_ENABLED = 0
+        const val INCOGNITO_AVAILABILITY_DISABLED = 1
     }
 }

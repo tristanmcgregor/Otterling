@@ -53,6 +53,17 @@ class RestrictionPreferences(context: Context) {
     /** Same as [isDashboardManaged] but for [isUninstallBlockDesired]. */
     fun isUninstallBlockDashboardManaged(): Boolean = dashboardProtection(KEY_UNINSTALL_BLOCK_DASHBOARD) != null
 
+    fun isChromeIncognitoBlockDesired(): Boolean =
+        dashboardProtection(KEY_CHROME_INCOGNITO_BLOCK_DASHBOARD) ?: prefs.getBoolean(KEY_CHROME_INCOGNITO_BLOCKED, true)
+
+    fun setChromeIncognitoBlockDesired(desired: Boolean) {
+        prefs.edit().putBoolean(KEY_CHROME_INCOGNITO_BLOCKED, desired).apply()
+    }
+
+    /** Same as [isDashboardManaged] but for [isChromeIncognitoBlockDesired]. */
+    fun isChromeIncognitoBlockDashboardManaged(): Boolean =
+        dashboardProtection(KEY_CHROME_INCOGNITO_BLOCK_DASHBOARD) != null
+
     private fun dashboardProtection(key: String?): Boolean? {
         if (key == null) return null
         val protections = DashboardConfigStore(appContext).snapshot()?.optJSONObject("protections") ?: return null
@@ -63,5 +74,7 @@ class RestrictionPreferences(context: Context) {
         const val PREFS_NAME = "restriction_preferences"
         const val KEY_UNINSTALL_BLOCKED = "uninstall_blocked"
         const val KEY_UNINSTALL_BLOCK_DASHBOARD = "uninstallBlock"
+        const val KEY_CHROME_INCOGNITO_BLOCKED = "chrome_incognito_blocked"
+        const val KEY_CHROME_INCOGNITO_BLOCK_DASHBOARD = "chromeIncognitoBlock"
     }
 }

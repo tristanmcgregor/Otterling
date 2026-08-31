@@ -789,8 +789,9 @@ private suspend fun loadDashboardData(context: Context): DashboardData {
     return DashboardData(
         isDeviceOwner = ownerManager.currentStatus().isDeviceOwner,
         activeRestrictions = Restriction.entries.count { restrictions.isEnabled(it) } +
-            if (restrictions.isUninstallBlocked()) 1 else 0,
-        totalRestrictions = Restriction.entries.size + 1,
+            (if (restrictions.isUninstallBlocked()) 1 else 0) +
+            (if (restrictions.isChromeIncognitoBlocked()) 1 else 0),
+        totalRestrictions = Restriction.entries.size + 2,
         rules = rules,
         habits = habits,
         requirements = requirements,
