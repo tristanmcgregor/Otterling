@@ -60,16 +60,14 @@ enum DaemonRegistrar {
     }
 
     /// Per-user-agent equivalent of `launchdJobLoaded` below (which checks `system/<label>`) --
-    /// the scanner lives in the `gui/<uid>` launchd domain, not `system`.
+    /// the scanner lives in the `gui/<uid>` launchd domain, not `system`. Same "actually running,
+    /// not just registered" requirement -- see that function's doc comment for why exit-status-only
+    /// isn't enough.
     private static func scannerJobLoaded() -> Bool {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-        process.arguments = ["print", "gui/\(getuid())/\(FocusLockConstants.scannerBundleIdentifier)"]
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        guard (try? process.run()) != nil else { return false }
-        process.waitUntilExit()
-        return process.terminationStatus == 0
+        let output = ProcessRunner.runCapturingStdout(
+            "/bin/launchctl", ["print", "gui/\(getuid())/\(FocusLockConstants.scannerBundleIdentifier)"]
+        )
+        return output.contains("state = running")
     }
 
     /// SMAppService's cached `.status` can go stale relative to what launchd actually has loaded
@@ -123,15 +121,19 @@ enum DaemonRegistrar {
     }
 
     /// The watchdog has no XPC service of its own to ping, so this is the next best check: does
-    /// launchd currently have the job loaded at all.
+    /// launchd currently have the job loaded AND actually running -- not just registered.
+    ///
+    /// A job whose `Program` points at a binary that's since disappeared (e.g. a build that lived
+    /// under `/tmp` and got cleaned up by the system, or `/Applications/Otterling.app` having been
+    /// reinstalled at a fresh path) still shows up in `launchctl print` and still exits 0: launchd
+    /// keeps retrying it forever with exponential backoff, reporting `state = spawn scheduled` and
+    /// `active count = 0`. Exit-status-only used to treat that as "loaded" -- SMAppService's own
+    /// `.status == .enabled` check has exactly the same blind spot (see this function's caller) --
+    /// so a daemon that can never actually spawn was never re-registered, silently, forever.
+    /// Confirmed live: `app.otterling.watchdog` and `app.otterling.scanner` both stuck exactly like
+    /// this, pointed at a deleted `/private/tmp/...` build, while `launchctl print` kept exiting 0.
     private static func launchdJobLoaded(label: String) -> Bool {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-        process.arguments = ["print", "system/\(label)"]
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        guard (try? process.run()) != nil else { return false }
-        process.waitUntilExit()
-        return process.terminationStatus == 0
+        let output = ProcessRunner.runCapturingStdout("/bin/launchctl", ["print", "system/\(label)"])
+        return output.contains("state = running")
     }
 }
