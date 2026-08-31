@@ -75,6 +75,20 @@ final class Watchdog {
             TamperReporter.report(type: "daemon_unloaded_recovered", details: "FocusLockHelperd was unreachable; watchdog re-bootstrapped it (\(summary))")
         } else {
             FileHandle.standardError.write("[FocusLockWatchdog] recovery failed -- \(summary)\n".data(using: .utf8)!)
+            // Every other failure mode in this app reaches the Guardian via TamperReporter --
+            // exhausting BOTH bootstrap fallbacks used to just write a line to a log file nobody
+            // reads, so protection could stay silently down indefinitely (confirmed live
+            // 2026-08-31: a stuck Background Task Management registration for the real label,
+            // left over from a since-deleted build, made both the real-label AND `.direct`-label
+            // bootstrap fail identically -- neither `launchctl bootout` nor `bootstrap` can clear
+            // that; only `SMAppService.unregister()`, which only runs when the GUI app is opened,
+            // actually can). `TamperReporter.report`'s own 5-minute de-dupe (by `type`) keeps this
+            // from spamming while the condition persists, but still re-alerts periodically instead
+            // of going silent after the first report.
+            TamperReporter.report(
+                type: "daemon_recovery_exhausted",
+                details: "FocusLockHelperd recovery failed (\(summary)) -- reopen Otterling.app to clear a stuck registration"
+            )
         }
     }
 }
