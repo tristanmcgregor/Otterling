@@ -33,4 +33,12 @@ enum class Restriction(val userManagerKey: String, val displayName: String, val 
         UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES_GLOBALLY,
         "Block other apps from installing apps on your behalf",
     ),
+
+    // Greys out Settings > Network > VPN entirely (can't add/edit/remove a VPN config, and can't
+    // flip another app's "Always-on VPN" toggle either) -- closes the bypass where the user leaves
+    // this app's VPN filter running but switches the system's "always-on VPN" designation to a
+    // different app (or to none), which silently stops routing traffic through the filter. This is
+    // the one Canopy has that we didn't: it doesn't just re-assert *our* always-on VPN, it removes
+    // the user's ability to touch VPN settings at all.
+    CONFIG_VPN(UserManager.DISALLOW_CONFIG_VPN, "Lock VPN settings (prevent switching or disabling the always-on VPN)"),
 }
