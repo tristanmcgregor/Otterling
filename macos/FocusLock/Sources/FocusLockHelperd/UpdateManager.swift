@@ -122,9 +122,24 @@ enum UpdateManager {
     /// exactly what manual recovery already required, instead of hoping KeepAlive notices in time.
     /// The trailing `exit(0)` is now just a safety net for the (expected) case where the kickstart
     /// below kills this process before it gets there.
+    ///
+    /// Also kickstarts each job's `.direct` label (see `DirectLabelBootstrap`) -- confirmed live
+    /// 2026-08-31: on a Mac whose real `app.otterling.watchdog` registration was stuck in
+    /// Background Task Management, `FocusLockWatchdog` had been running under the `.direct` label
+    /// fallback for hours. This function only ever kickstarted the real label, which no-ops
+    /// silently on a label nothing is registered under (`runSilently` discards the exit status) --
+    /// so the `.direct`-label watchdog kept running against the OLD (just-replaced-on-disk)
+    /// binary indefinitely. Its now-unresolvable code signature then made `XPCPeerValidator`
+    /// reject it as an "unrecognized process" the next time it polled the freshly-restarted
+    /// helperd -- a false-positive tamper report, not real tampering. Kickstarting both labels
+    /// restarts whichever one is actually active and is a harmless no-op on the other.
     static func restartAfterInstall() -> Never {
-        ProcessRunner.runSilently("/bin/launchctl", ["kickstart", "-k", "system/\(FocusLockConstants.watchdogBundleIdentifier)"])
-        ProcessRunner.runSilently("/bin/launchctl", ["kickstart", "-k", "system/\(FocusLockConstants.helperBundleIdentifier)"])
+        for label in [FocusLockConstants.watchdogBundleIdentifier, "\(FocusLockConstants.watchdogBundleIdentifier).direct"] {
+            ProcessRunner.runSilently("/bin/launchctl", ["kickstart", "-k", "system/\(label)"])
+        }
+        for label in [FocusLockConstants.helperBundleIdentifier, "\(FocusLockConstants.helperBundleIdentifier).direct"] {
+            ProcessRunner.runSilently("/bin/launchctl", ["kickstart", "-k", "system/\(label)"])
+        }
         exit(0)
     }
 
