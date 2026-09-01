@@ -84,9 +84,6 @@ from __future__ import annotations
 
 import base64
 import binascii
-import collections
-import hashlib
-import hmac
 import json
 import os
 import plistlib
@@ -107,105 +104,62 @@ import onnx_nsfw_pipeline
 import route_policy
 import session_token
 
-# Host-level AI reviewer for SudoBroker.swift's tier-3 fallback (see sudo_review_server.py's module
-# doc comment for why this has to be a separate host-level process rather than something this
-# container does itself). `host.docker.internal` needs docker-compose.yml's `extra_hosts:
-# ["host.docker.internal:host-gateway"]` on this service to resolve on Linux.
-SUDO_REVIEW_URL = os.environ.get("SUDO_REVIEW_URL", "http://host.docker.internal:9072/review")
-SUDO_TRANSLATE_URL = os.environ.get("SUDO_TRANSLATE_URL", "http://host.docker.internal:9072/translate")
-SUDO_REVIEW_TIMEOUT = 20
-SUDO_TRANSLATE_TIMEOUT = 25
+# Split out of this file (see each module's own doc comment for what it holds and why it's a leaf
+# module -- none of them import back from here, to avoid a circular import with the `from
+# lockprofile_X import ...` lines below).
+from lockprofile_device_identity import (  # noqa: E402
+    DEVICE_ID_ALIASES,
+    _canonicalize_device_id,
+    _detect_platform,
+)
+from lockprofile_auth import (  # noqa: E402
+    _dashboard_cookie_from_headers,
+    _dashboard_session_create,
+    _dashboard_session_valid,
+    _guardian_pin_value,
+    _load_guardian_pin,
+    _save_guardian_pin,
+)
+from lockprofile_device_logs import LOGS_DIR, _list_device_logs, _store_device_log  # noqa: E402
+from lockprofile_handoff_token import (  # noqa: E402
+    _clear_handoff_token,
+    _consume_handoff_token,
+    _load_handoff_token,
+    _save_handoff_token,
+)
+from lockprofile_logging import _LOG_BUFFER_MAX_LINES, _log, _log_buffer, _log_buffer_lock  # noqa: E402
+from lockprofile_screenshots import (  # noqa: E402
+    SCREENSHOT_ERRORS_DIR,
+    SCREENSHOT_SAFE_DIR,
+    SCREENSHOTS_DIR,
+    _record_screenshot_classification,
+    _screenshot_review_payload,
+    _store_error_screenshot,
+    _store_safe_screenshot,
+    _store_screenshot,
+)
+from lockprofile_reporting import (  # noqa: E402
+    REPORT_SUSPICION_LEVELS,
+    _effective_welcome_message,
+    _load_report_config,
+    _load_report_types_file,
+    _load_welcome_message_override,
+    _report_type_enabled,
+    _save_welcome_message_override,
+    _send_ntfy_notification,
+    _update_report_type,
+)
+from lockprofile_sudo_ai import _check_sudo_command, _translate_request  # noqa: E402
 
 DATA_DIR = os.environ.get("LOCKPROFILE_DATA_DIR", "/data")
 STATE_PATH = os.path.join(DATA_DIR, "state.json")
 ALERTS_PATH = os.path.join(DATA_DIR, "alerts", "events.jsonl")
-LOGS_DIR = os.path.join(DATA_DIR, "logs")
-# Flagged-only screenshot evidence for POST /screenshot-classify -- see that route's comment and
-# _store_screenshot below. Under DATA_DIR (not a new top-level path) so it inherits
-# deploy_filter_server.sh's existing `--exclude 'lockprofile-data/'` rsync protection for free.
-SCREENSHOTS_DIR = os.path.join(DATA_DIR, "screenshots")
-# Screenshots the classifier failed to classify at all (pipeline unavailable, ONNX exception,
-# etc.) -- unlike SCREENSHOTS_DIR, these are NOT a positive NSFW finding, just whatever app
-# happened to be open when classification errored, so a much smaller retention cap
-# (MAX_ERROR_SCREENSHOT_FILES_PER_DEVICE) applies. Exists so a 100%-erroring pipeline is
-# debuggable from the dashboard (see /screenshot-review/list) instead of only showing an "N
-# errored" count with nothing to actually look at.
-SCREENSHOT_ERRORS_DIR = os.path.join(DATA_DIR, "screenshot_errors")
-# Every screenshot classified "safe" -- previously discarded right after classification (only the
-# aggregate counters below survived). A guardian asked to see "all recent screenshots", not just
-# the flagged/errored ones, so these are now persisted too, with their own retention cap
-# (MAX_SAFE_SCREENSHOT_FILES_PER_DEVICE) -- see /screenshot-review/list.
-SCREENSHOT_SAFE_DIR = os.path.join(DATA_DIR, "screenshot_safe")
-# Lightweight per-device activity counters (total/safe/nsfw/error/skipped classifications, last
-# result) for every POST /screenshot-classify call -- unlike SCREENSHOTS_DIR, this tracks every
-# call, not just positive (NSFW) ones, and never stores image bytes. Backs the "is this actually
-# running" view in /screenshot-review/list -- see _record_screenshot_classification below.
-SCREENSHOT_STATS_PATH = os.path.join(DATA_DIR, "screenshot_stats.json")
+# Screenshot storage (SCREENSHOTS_DIR, SCREENSHOT_ERRORS_DIR, SCREENSHOT_SAFE_DIR,
+# SCREENSHOT_STATS_PATH) now lives in lockprofile_screenshots.py.
 
 LISTEN_HOST = os.environ.get("LOCKPROFILE_LISTEN_HOST", "0.0.0.0")
 LISTEN_PORT = int(os.environ.get("LOCKPROFILE_LISTEN_PORT", "8091"))
 TOKEN = os.environ.get("LOCKPROFILE_TOKEN", "")
-
-# In-memory ring buffer of this process's own diagnostic output (the _log() calls below), exposed
-# read-only via GET /debug/server-log for remote debugging. There is otherwise no way to see this
-# process's own diagnostics short of `docker logs`/journald on the host, which this container has
-# no access to (see SUDO_REVIEW_URL's comment on why host-level things stay out of this container).
-_LOG_BUFFER_MAX_LINES = 2000
-_log_buffer: collections.deque[str] = collections.deque(maxlen=_LOG_BUFFER_MAX_LINES)
-_log_buffer_lock = threading.Lock()
-
-
-def _log(message: str) -> None:
-    """Drop-in replacement for the old bare `print(..., flush=True)` calls this file used
-    everywhere: still writes to stdout (so `docker logs`/Caddy's log driver keep working exactly
-    as before), but also appends a timestamped copy to _log_buffer so GET /debug/server-log can
-    show recent diagnostics without shelling out to the host."""
-    line = f"{datetime.now(timezone.utc).isoformat(timespec='seconds')} {message}"
-    print(line, flush=True)
-    with _log_buffer_lock:
-        _log_buffer.append(line)
-
-
-# Hand-editable master list of every report/alert type (mac/server/android) -- see that file's
-# "_readme" for the full contract. Mounted read-only alongside the script (same pattern as
-# ai_classifier.py/domain_blocklist.py), not the gitignored DATA_DIR, because this is meant to be
-# tracked and hand-edited in the repo, not treated as generated runtime state. Ships each type's
-# *default* enabled/customMessage/suspicion/description/source -- never written to at runtime (see
-# REPORT_TYPES_OVERRIDES_PATH below for where a guardian's dashboard edit actually lands); a
-# release deploy rsyncs the git checkout straight over this file, so anything written here would
-# be silently wiped out on the next release.
-REPORT_TYPES_CONFIG_PATH = os.environ.get(
-    "REPORT_TYPES_CONFIG_PATH", os.path.join(os.path.dirname(os.path.abspath(__file__)), "report_types.json")
-)
-# Guardian PATCHes (POST /dashboard-api/report-types/<type>) land HERE instead, under the
-# gitignored DATA_DIR (bind-mounted from lockprofile-data/, which deploy_filter_server.sh's rsync
-# already excludes -- see SCREENSHOTS_DIR's comment above for the same protection) so a release
-# deploy can never revert a live edit the way overwriting REPORT_TYPES_CONFIG_PATH itself used to.
-# Sparse: only holds the keys (enabled/customMessage/suspicion) a guardian actually changed for a
-# given type -- see _merged_report_types().
-REPORT_TYPES_OVERRIDES_PATH = os.path.join(DATA_DIR, "report_types_overrides.json")
-
-# Guardian-editable override for the one-time welcome SMS (see AlertReporter.kt's
-# sendWelcomeMessage, sent the first time a phone number is added as an accountability partner).
-# Same gitignored-DATA_DIR-file pattern as REPORT_TYPES_OVERRIDES_PATH, for the same reason: a
-# release deploy must never revert a live edit. Missing file/key means "use
-# DEFAULT_WELCOME_MESSAGE" -- see _effective_welcome_message().
-WELCOME_MESSAGE_OVERRIDE_PATH = os.path.join(DATA_DIR, "welcome_message_override.json")
-
-# Fallback wording, kept in sync with AlertReporter.kt's own DEFAULT_WELCOME_MESSAGE constant
-# (that copy is what actually ships in the APK and is used if the phone has never fetched
-# /report-config yet -- this one is only what the dashboard shows/sends as the starting point for
-# a guardian who hasn't customized it).
-DEFAULT_WELCOME_MESSAGE = (
-    "Otterling: you've been added as an accountability partner. From now on you may get SMS "
-    "alerts here when something on the monitored device needs attention. Each one is tagged with "
-    "how concerning it is:\n\n"
-    "[HIGH SUSPICION] — there's a high likelihood of an attempt to bypass Otterling. Please check "
-    "in.\n\n"
-    "[MEDIUM SUSPICION] — could be a false positive, but check in to be safe.\n\n"
-    "[LOW SUSPICION] — most likely nothing, but still worth checking in.\n\n"
-    "Thanks for helping with accountability."
-)
 
 # Separate secret for the Fleet failing-policy webhook. Fleet's webhook can't send an Authorization
 # header, so that one route authenticates on a `?token=` query secret instead of the Bearer TOKEN
@@ -224,84 +178,8 @@ FLEET_WEBHOOK_SECRET = os.environ.get("FLEET_WEBHOOK_SECRET", "")
 # here because the cookie-setting docstring below refers to it.
 DASHBOARD_SESSION_MAX_AGE_SECONDS = session_token.MAX_AGE_SECONDS  # 30 days
 
-# One-time handoff link: lets whoever currently holds a guardian dashboard session (see
-# POST /dashboard-api/handoff-link below) generate a single-use, expiring, unguessable (256-bit)
-# token that lets someone WITHOUT the current PIN set a brand-new one at
-# GET /handoff/?token=... -> POST /handoff-auth/set-pin -- for the one-time "I'm done setting this
-# up, here's a link to claim the account" handoff moment, not an ongoing PIN-reset mechanism.
-# Deliberately does NOT require knowing the current PIN (that's the whole point -- the person
-# using the link is meant to be someone who doesn't have it), unlike the regular
-# POST /dashboard-api/pin change flow (which is guardian-session-gated instead). Setting a new PIN
-# this way has the exact same effect as that route (_save_guardian_pin), including invalidating
-# every existing dashboard session, same as any other PIN change. This does NOT protect against
-# someone who retains actual server/filesystem access after generating a link (the PIN is still stored in
-# plaintext, same as every other secret this file manages) -- it's a clean handoff ceremony, not a
-# technical guarantee against a host operator who keeps root.
-HANDOFF_TOKEN_PATH = os.path.join(DATA_DIR, "password_handoff_token.json")
-HANDOFF_TOKEN_TTL_SECONDS = 48 * 60 * 60  # 48 hours
-
-
-def _guardian_pin_value() -> str:
-    """The Guardian PIN as a string, or "" if none is set yet -- see GUARDIAN_PIN_PATH's comment.
-    Single read path shared by device Settings-unlock verification AND the dashboard login
-    below, so there is exactly one secret to keep in sync."""
-    return _load_guardian_pin().get("pin") or ""
-
-
-def _load_handoff_token() -> dict | None:
-    """None if no pending token, or the stored one has expired (expiry is checked here, not just
-    at consume-time, so GET /dashboard-api/handoff-link -- used to show "link pending" status --
-    doesn't report a stale expired token as still active)."""
-    try:
-        with open(HANDOFF_TOKEN_PATH, "r", encoding="utf-8") as fh:
-            data = json.load(fh)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return None
-    if not isinstance(data, dict) or data.get("expiresAt", 0) < time.time():
-        return None
-    return data
-
-
-def _save_handoff_token() -> dict:
-    """Generates a fresh 256-bit token, overwriting any previous pending one (only one valid
-    handoff link at a time -- generating a new one implicitly invalidates whatever was sent out
-    before, so an old leaked/forgotten link can't still be used)."""
-    with _handoff_token_lock:
-        data = {"token": secrets.token_urlsafe(32), "expiresAt": time.time() + HANDOFF_TOKEN_TTL_SECONDS}
-        os.makedirs(DATA_DIR, exist_ok=True)
-        tmp_path = HANDOFF_TOKEN_PATH + ".tmp"
-        with open(tmp_path, "w", encoding="utf-8") as fh:
-            json.dump(data, fh)
-        os.replace(tmp_path, HANDOFF_TOKEN_PATH)
-        return data
-
-
-def _clear_handoff_token() -> None:
-    with _handoff_token_lock:
-        try:
-            os.remove(HANDOFF_TOKEN_PATH)
-        except FileNotFoundError:
-            pass
-
-
-def _consume_handoff_token(token: str) -> bool:
-    """Single-use: validates `token` against the pending one (constant-time compare) and, if it
-    matches and hasn't expired, clears it so it can never be used again -- even a second attempt
-    with the exact same token fails once this returns True once. Returns False for "no such
-    token" and "expired" alike, same as an incorrect token -- no need to distinguish those for
-    the caller, which just shows one generic error either way."""
-    with _handoff_token_lock:
-        data = _load_handoff_token()
-        if data is None or not secrets.compare_digest(token, data["token"]):
-            return False
-        try:
-            os.remove(HANDOFF_TOKEN_PATH)
-        except FileNotFoundError:
-            pass
-        return True
-
-NTFY_SERVER = os.environ.get("NTFY_SERVER", "https://ntfy.sh").rstrip("/")
-NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "")
+# One-time handoff link: see lockprofile_handoff_token.py's module doc comment for the full design
+# rationale (why it doesn't require the current PIN, what it does and doesn't protect against).
 
 # FCM (Firebase Cloud Messaging) push: lets this server wake the phone the instant a tamper event
 # lands, so the accountability partner is alerted in seconds instead of on MacTamperPollWorker's
@@ -319,54 +197,6 @@ FCM_CREDENTIALS_PATH = os.environ.get(
 )
 FCM_SCOPE = "https://www.googleapis.com/auth/firebase.messaging"
 
-# (title, priority, tag) per tamper event type -- see TamperReporter.swift / LockProfileGuard.swift
-# / FocusLockWatchdog for the `type` values these correspond to. Falls back to a generic
-# medium-priority notification for any type not listed here, so a future new event type still
-# reaches the partner instead of silently not notifying.
-NTFY_EVENT_STYLE = {
-    "lock_profile_removed": ("Otterling: lock profile removed", "urgent", "warning"),
-    "lock_profile_installed": ("Otterling: lock profile installed", "default", "white_check_mark"),
-    # A VPN routes traffic around the DNS floor + hosts + pf, defeating the content filter itself
-    # (not just the alerting) -- urgent. `vpn_cleared` is the all-clear once it's down again.
-    "vpn_active": ("Otterling: VPN up — content filter bypassed", "urgent", "warning"),
-    "vpn_cleared": ("Otterling: VPN down — filter back in effect", "default", "white_check_mark"),
-    # A trigger word (the shared trigger_words list) was seen on a page the content filter blocked
-    # (server-side, from mitm_nsfw_addon.py) or on-screen on the Mac (FocusLockScanner's
-    # accessibility scan). Report-only, like the phone's TRIGGER_WORD alerts -- the content was
-    # already blocked/visible; this is the accountability heads-up, not an emergency.
-    "trigger_word_detected": ("Otterling: trigger word seen", "high", "eyes"),
-    "daemon_unloaded_recovered": ("Otterling: daemon was down, watchdog recovered it", "high", "robot"),
-    "watchdog_or_daemon_reregistered": ("Otterling: needed re-registration on GUI launch", "high", "warning"),
-    # Mac-side tamper signals from Fleet (see fleet/ + tamper-alerts/). A failing policy means the
-    # app was removed or its daemon stopped; "silent" means the Mac stopped checking in entirely,
-    # which is the quiet-bypass path (network cut / fleetd killed) the dead-man's switch catches.
-    "mac_tamper_policy": ("Otterling Mac: tamper policy failing", "urgent", "warning"),
-    "mac_silent": ("Otterling Mac: stopped checking in", "urgent", "warning"),
-    "mac_back": ("Otterling Mac: checking in again", "default", "white_check_mark"),
-    # The dead-man's switch itself is blind (can't reach Fleet) -- a monitor-health warning, not a
-    # tamper, and only after a sustained outage. See deadman.py.
-    "monitor_degraded": ("Otterling Mac: tamper monitor is blind", "high", "warning"),
-    # See `/integrity/checkin` below -- the daemon reported it was built from an uncommitted,
-    # locally-modified source tree. This is the actual "edited the code and installed it locally to
-    # dodge review" scenario the rest of this project's self-lockout design exists to catch.
-    "mac_code_tampered": ("Otterling Mac: running locally-modified code", "urgent", "warning"),
-    # The lock profile's DNS Settings payload can be switched off from System Settings > Network >
-    # VPN & Filters without removing the profile at all -- see LockProfileGuard.swift's
-    # `dnsFloorFunctionallyActive()` doc comment for how this is detected (the `profiles` CLI itself
-    # can't see it).
-    "dns_floor_disabled": ("Otterling Mac: DNS floor filter switched off", "urgent", "warning"),
-    "dns_floor_reenabled": ("Otterling Mac: DNS floor filter back on", "default", "white_check_mark"),
-    # SudoBroker.swift's decision pipeline -- see that file's doc comment. Reported for every
-    # decision, approved or denied, specifically so an AI-review approval still reaches the partner.
-    "sudo_request_approved": ("Otterling Mac: elevated command APPROVED", "urgent", "warning"),
-    "sudo_request_denied": ("Otterling Mac: elevated command denied", "default", "shield"),
-    "sudo_request_ai_reviewed": ("Otterling Mac: AI reviewed an elevated command", "high", "robot"),
-    # XPCService.killSwitch/.restoreFromKillSwitch -- the emergency stop for the WHOLE app (DNS,
-    # proxy, pf, blocked/protected apps, the scanner, the GUI app itself), not just filtering.
-    "kill_switch_activated": ("Otterling Mac: KILL SWITCH -- everything disabled", "urgent", "rotating_light"),
-    "kill_switch_restored": ("Otterling Mac: kill switch undone, protection back on", "default", "white_check_mark"),
-}
-
 PROFILE_IDENTIFIER = "app.otterling.lockprofile"
 DNS_PAYLOAD_IDENTIFIER = f"{PROFILE_IDENTIFIER}.dns"
 CHROME_DNS_PAYLOAD_IDENTIFIER = f"{PROFILE_IDENTIFIER}.chrome-dns"
@@ -379,23 +209,13 @@ MAX_BODY_BYTES = 16 * 1024
 # logcat lines -- so they get their own, much larger cap, plus a per-device file-count limit so a
 # device stuck retrying uploads can't fill the disk.
 MAX_LOG_BODY_BYTES = 2 * 1024 * 1024
-MAX_LOG_FILES_PER_DEVICE = 20
+# Retention cap (MAX_LOG_FILES_PER_DEVICE) now lives in lockprofile_device_logs.py.
 # A downscaled (720px max dimension), JPEG-compressed phone screenshot (see
 # FocusGuardAccessibilityService.kt's capture path) should be well under 1-2MB base64-encoded;
 # this caps the whole JSON request body, same pattern as MAX_LOG_BODY_BYTES above.
 MAX_SCREENSHOT_BODY_BYTES = 6 * 1024 * 1024
-# Only NSFW-classified screenshots are ever stored (see _store_screenshot) -- this is a "recent
-# incidents" cap, not a full history, so a much lower number than MAX_LOG_FILES_PER_DEVICE is fine.
-MAX_SCREENSHOT_FILES_PER_DEVICE = 50
-# Errored screenshots can arrive far more often than genuine NSFW hits (e.g. the whole classifier
-# pipeline down -- every single upload errors), so this stays well below
-# MAX_SCREENSHOT_FILES_PER_DEVICE: enough recent samples to debug why, not a running log of
-# whatever the device owner had on screen.
-MAX_ERROR_SCREENSHOT_FILES_PER_DEVICE = 12
-# Safe screenshots arrive far more often than either of the above (most classifications ARE
-# safe), so this is deliberately just "what's on screen recently" -- a short rolling window, not
-# an incident record like MAX_SCREENSHOT_FILES_PER_DEVICE/MAX_ERROR_SCREENSHOT_FILES_PER_DEVICE.
-MAX_SAFE_SCREENSHOT_FILES_PER_DEVICE = 30
+# Retention caps (MAX_SCREENSHOT_FILES_PER_DEVICE, MAX_ERROR_SCREENSHOT_FILES_PER_DEVICE,
+# MAX_SAFE_SCREENSHOT_FILES_PER_DEVICE) now live in lockprofile_screenshots.py.
 # Phone device ids come from Settings.Secure.ANDROID_ID -- always a 16-char lowercase hex string
 # in practice -- but _list_known_device_ids() also surfaces ids from non-phone reporters sharing
 # this same alerts/settings storage (e.g. IntegrityReporter.swift's Mac hostnames/IPs), which
@@ -405,47 +225,6 @@ MAX_SAFE_SCREENSHOT_FILES_PER_DEVICE = 30
 # since this becomes part of a filesystem path below (_store_device_log) -- a single "." is inert
 # with os.path.join, but ".." would let device_id escape LOGS_DIR.
 DEVICE_ID_RE = re.compile(r"^(?!.*\.\.)[A-Za-z0-9_.-]{1,128}$")
-
-# Neither client sends an explicit platform field today, so this is inferred purely from
-# device_id shape: the Mac's canonical id (TamperReporter.swift/install_lock_profile.py's
-# IOPlatformUUID) is always a dashed UUID; Android's ANDROID_ID (see comment above) is always a
-# bare hex token with no dashes. The two never collide for this fleet. Used to decide which
-# dashboard-api settings sections actually apply to a device -- most of device_settings.json
-# (protections, vpnFilter/vpnBypassApps, blockedWebsites, rules, habits, appBudgets,
-# triggerWords, blockedApps) is consumed ONLY by the Android app's DashboardConfigStore
-# consumers; nothing on the Mac reads dashboard-api at all today.
-_UUID_RE = re.compile(r"^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$")
-
-
-def _detect_platform(device_id: str) -> str:
-    return "macos" if _UUID_RE.match(device_id) else "android"
-
-# The Mac has no single canonical identity across every reporter: TamperReporter.swift/
-# install_lock_profile.py use IOPlatformUUID (the real, stable identity per-device settings are
-# provisioned under), but deadman.py's Fleet lookups key on a configurable hostname and
-# block_reporter.py (the mitm proxy addon, which only ever sees network-layer traffic) keys on
-# client IP -- so a hostname change or a new DHCP lease used to mint a brand-new "device" in the
-# dashboard for a machine that was never actually new. DEVICE_ID_ALIASES lets a deployer declare
-# "this hostname/IP is actually this device_id" so every reporting path collapses onto the same
-# entry. JSON object in the env var, e.g. {"192.168.0.115": "<canonical-id>", "old-hostname.local":
-# "<canonical-id>"} -- unset/invalid means no aliasing (today's behavior).
-def _load_device_id_aliases() -> dict:
-    raw = os.environ.get("DEVICE_ID_ALIASES", "").strip()
-    if not raw:
-        return {}
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError:
-        return {}
-    return {str(k): str(v) for k, v in parsed.items()} if isinstance(parsed, dict) else {}
-
-
-DEVICE_ID_ALIASES = _load_device_id_aliases()
-
-
-def _canonicalize_device_id(device_id: str) -> str:
-    return DEVICE_ID_ALIASES.get(device_id, device_id)
-
 
 # Keeps ALERTS_PATH from growing without bound -- see _rotate_alerts_if_needed().
 ALERTS_ROTATE_BYTES = 5 * 1024 * 1024
@@ -467,37 +246,10 @@ SETTINGS_PATH = os.path.join(DATA_DIR, "device_settings.json")
 DEFAULT_TEMPLATE_PATH = os.path.join(DATA_DIR, "default_device_settings.json")
 DEFAULT_TEMPLATE_ALLOWED_KEYS = {"protections", "vpnFilter", "frictionDelay"}
 
-# Guardian PIN is deliberately NOT part of per-device settings: it's one shared secret for a
-# guardian's whole fleet (see /dashboard-api/pin below), not something that varies per device.
-# Stored as plaintext on disk (a 4-digit PIN can't meaningfully be protected by hashing it at
-# rest anyway -- 10,000 combinations is nothing to brute force once a hash is in hand). What
-# matters is who can ask the server for it over the network: GET /dashboard-api/pin (which
-# returns the raw value) is guardian-browser-session-only, never reachable via the device
-# LOCKPROFILE_TOKEN bearer -- that token ships inside the APK and is trivially extractable by the
-# same person the PIN is meant to gate, so a device-reachable plaintext read would hand them the
-# real PIN directly. Devices instead call POST /dashboard-api/pin/verify (see below), which
-# checks a guess against this file server-side and returns only correct/incorrect, under
-# escalating lockout (_PIN_VERIFY_LOCKOUT) -- the PIN itself never crosses that boundary.
-#
-# This same value also gates the dashboard website login now (_guardian_pin_value(),
-# _handle_dashboard_login) -- the guardian asked to drop the separate login password and just
-# reuse the PIN everywhere. (/review used to check this same PIN too, until it was made
-# unauthenticated on 2026-08-26 -- see Caddyfile.) That folds two different threat models into one
-# secret: the PIN was originally sized (4 digits, escalating lockout) for a guardian to
-# fat-finger-enter on their own kid's phone, not to resist unlimited remote guessing against a
-# website login -- the escalating lockout on the login routes (_guardian_login_record_result) is
-# what keeps that acceptable, same mechanism as the on-device /pin/verify lockout above.
-GUARDIAN_PIN_PATH = os.path.join(DATA_DIR, "guardian_pin.json")
-
-# Bootstrap-only PIN for a brand-new deployment with no guardian_pin.json yet: since
-# POST /dashboard-api/pin (the normal way to set/change the PIN) is guardian-session-gated, and
-# dashboard login now requires a PIN to exist at all, a fresh install with nothing in
-# GUARDIAN_PIN's env var and no session yet would otherwise have no way to log in for the very
-# first time. Same role DASHBOARD_LOGIN_PASSWORD used to play for the old password -- an env-var
-# seed that only matters until the guardian sets a real PIN from Global Settings, at which point
-# GUARDIAN_PIN_PATH exists and always wins (see _load_guardian_pin below). Ignored if it isn't
-# exactly 4 digits, same format rule POST /dashboard-api/pin enforces.
-GUARDIAN_PIN_ENV_BOOTSTRAP = os.environ.get("GUARDIAN_PIN", "")
+# Guardian PIN storage (GUARDIAN_PIN_PATH, GUARDIAN_PIN_ENV_BOOTSTRAP, _load_guardian_pin,
+# _save_guardian_pin, _guardian_pin_value) and dashboard session tokens (_session_pin_binding,
+# _dashboard_session_create/_valid, _dashboard_cookie_from_headers) now live in
+# lockprofile_auth.py -- see that module's doc comment for the full design rationale.
 
 # HabitShare (the third-party habit-tracking app/service HabitShareApiClient.kt polls directly)
 # account credentials -- one shared login for the whole fleet, same "global, not per-device"
@@ -575,16 +327,12 @@ REMOVED_DEVICES_PATH = os.path.join(DATA_DIR, "removed_devices.json")
 _state_lock = threading.Lock()
 _alerts_lock = threading.Lock()
 _settings_lock = threading.Lock()
-_screenshot_stats_lock = threading.Lock()
-_pin_lock = threading.Lock()
 _habits_lock = threading.Lock()
 _habit_completions_lock = threading.Lock()
 _rules_lock = threading.Lock()
 _removed_devices_lock = threading.Lock()
 _website_usage_lock = threading.Lock()
 _habitshare_account_lock = threading.Lock()
-_report_types_lock = threading.Lock()
-_handoff_token_lock = threading.Lock()
 
 # Rate limit for POST /dashboard-api/pin/verify. Global (not per-device/IP): every device shares
 # the one LOCKPROFILE_TOKEN, so a guesser can't be told apart from a legitimate device by identity
@@ -821,163 +569,9 @@ def _rotate_alerts_if_needed() -> None:
     os.replace(tmp_path, ALERTS_PATH)
 
 
-def _load_report_types_base() -> dict:
-    """The raw, git-tracked report_types.json, unmerged with any guardian override -- re-read on
-    every call (not cached) so hand-editing the file in git takes effect immediately, with no
-    restart. Missing/malformed file -> the empty shape; callers merge this with
-    _load_report_types_overrides() rather than reading it directly (see _merged_report_types)."""
-    try:
-        with open(REPORT_TYPES_CONFIG_PATH, "r", encoding="utf-8") as fh:
-            data = json.load(fh)
-            return data if isinstance(data, dict) else {"_readme": [], "types": {}}
-    except (OSError, json.JSONDecodeError):
-        return {"_readme": [], "types": {}}
-
-
-def _load_report_types_overrides() -> dict:
-    """{type: {enabled?, customMessage?, suspicion?}} -- see REPORT_TYPES_OVERRIDES_PATH's own
-    comment for why this lives separately from the base file. Missing/malformed -> no overrides,
-    i.e. every type falls back to the base file's shipped defaults."""
-    try:
-        with open(REPORT_TYPES_OVERRIDES_PATH, "r", encoding="utf-8") as fh:
-            data = json.load(fh)
-            return data if isinstance(data, dict) else {}
-    except (OSError, json.JSONDecodeError):
-        return {}
-
-
-def _save_report_types_overrides(data: dict) -> None:
-    os.makedirs(os.path.dirname(REPORT_TYPES_OVERRIDES_PATH), exist_ok=True)
-    tmp_path = REPORT_TYPES_OVERRIDES_PATH + ".tmp"
-    with open(tmp_path, "w", encoding="utf-8") as fh:
-        json.dump(data, fh, indent=2, sort_keys=True)
-    os.replace(tmp_path, REPORT_TYPES_OVERRIDES_PATH)
-
-
-def _merged_report_types() -> dict:
-    """The base file's `types`, each entry overlaid with any guardian edit from the overrides file
-    -- the one view every reader (GET /dashboard-api/report-types, GET /report-config,
-    _report_type_enabled, _send_ntfy_notification's customMessage lookup) should use, instead of
-    ever reading REPORT_TYPES_CONFIG_PATH directly. An override for a type no longer present in
-    the base file (removed from report_types.json since the override was saved) is simply inert."""
-    base = _load_report_types_base()
-    types = {k: dict(v) for k, v in (base.get("types") or {}).items()}
-    for report_type, override in _load_report_types_overrides().items():
-        if report_type in types:
-            types[report_type].update(override)
-    return {"_readme": base.get("_readme", []), "types": types}
-
-
-def _load_report_config() -> dict:
-    """`types` only, merged -- what _report_type_enabled and _send_ntfy_notification's
-    customMessage lookup actually need."""
-    return _merged_report_types().get("types", {})
-
-
-def _report_type_enabled(report_type: str) -> bool:
-    entry = _load_report_config().get(report_type)
-    if entry is None:
-        return True
-    return entry.get("enabled", True) is not False
-
-
-def _load_report_types_file() -> dict:
-    """Merged view including `_readme` -- used by the dashboard's guardian-only GET below (the
-    plain `/report-config` route -- device-bearer-reachable, see Caddyfile -- deliberately only
-    ever returns the bare `{type: {enabled, customMessage, suspicion}}` map, never `_readme` or a
-    write capability; see the route handler below for why those two must never be merged)."""
-    return _merged_report_types()
-
-
-REPORT_SUSPICION_LEVELS = ("high", "medium", "low")
-
-
-def _update_report_type(report_type: str, updates: dict) -> dict | None:
-    """Updates an EXISTING type's `enabled` flag, `customMessage`, and/or `suspicion` -- never
-    adds/removes/renames a type via this path, keeping the API narrowly "edit something that's
-    already defined" rather than a general file editor. `updates` may contain any of `enabled`
-    (bool) / `customMessage` (str, "" clears back to the built-in default wording -- see
-    `customMessage`'s own comment in report_types.json's schema for where it's consulted) /
-    `suspicion` (one of REPORT_SUSPICION_LEVELS -- see that key's own comment in
-    report_types.json's schema; caller has already validated it's one of those three values).
-    Writes only to REPORT_TYPES_OVERRIDES_PATH (see its comment for why) -- never to the git-
-    tracked base file, which a release deploy would just overwrite again. Returns the merged file
-    (for the response), or None if report_type isn't a known key in the base file (caller sends
-    404) -- an override can only edit a type that actually exists, same as before."""
-    with _report_types_lock:
-        merged = _merged_report_types()
-        if report_type not in merged["types"]:
-            return None
-        overrides = _load_report_types_overrides()
-        entry = overrides.setdefault(report_type, {})
-        if "enabled" in updates:
-            entry["enabled"] = updates["enabled"]
-        if "customMessage" in updates:
-            entry["customMessage"] = updates["customMessage"]
-        if "suspicion" in updates:
-            entry["suspicion"] = updates["suspicion"]
-        _save_report_types_overrides(overrides)
-        return _merged_report_types()
-
-
-def _load_welcome_message_override() -> str:
-    """"" (empty) means "no override -- use DEFAULT_WELCOME_MESSAGE", same convention as
-    ReportType.customMessage. Missing/malformed file -> no override."""
-    try:
-        with open(WELCOME_MESSAGE_OVERRIDE_PATH, "r", encoding="utf-8") as fh:
-            data = json.load(fh)
-            message = data.get("message", "") if isinstance(data, dict) else ""
-            return message if isinstance(message, str) else ""
-    except (OSError, json.JSONDecodeError):
-        return ""
-
-
-def _save_welcome_message_override(message: str) -> None:
-    os.makedirs(os.path.dirname(WELCOME_MESSAGE_OVERRIDE_PATH), exist_ok=True)
-    tmp_path = WELCOME_MESSAGE_OVERRIDE_PATH + ".tmp"
-    with open(tmp_path, "w", encoding="utf-8") as fh:
-        json.dump({"message": message}, fh, indent=2)
-    os.replace(tmp_path, WELCOME_MESSAGE_OVERRIDE_PATH)
-
-
-def _effective_welcome_message() -> str:
-    """What actually gets sent -- the guardian's override if they've set one, else the built-in
-    default. Consulted by both GET /dashboard-api/welcome-message (dashboard display) and
-    GET /report-config (device fetch, see AlertReporter.kt's sendWelcomeMessage)."""
-    override = _load_welcome_message_override()
-    return override if override.strip() else DEFAULT_WELCOME_MESSAGE
-
-
-# ─── Dashboard session cookie (custom login, replacing Caddy basic_auth) ───────────────────────
-# Self-verifying token, `<expiry>.<hmac>` -- no server-side session store to lose on a restart or
-# keep in sync across a future second instance. `expiry` is a plain unix timestamp; `hmac` is
-# HMAC-SHA256 keyed on TOKEN (LOCKPROFILE_TOKEN), so a token can only have been minted by this
-# server and can't be forged or extended by a client tampering with the expiry.
-#
-# THE SIGNED PAYLOAD INCLUDES A DIGEST OF THE CURRENT PIN, and that is not incidental. Two comments
-# in this file (see HANDOFF_TOKEN_PATH and _handle_handoff_set_pin) claimed that changing the PIN
-# "invalidates every existing dashboard session". It did not: the signature was over the expiry
-# alone, keyed on a token no PIN change touches, so every previously-issued cookie stayed valid for
-# the full 30 days. That broke the one-time handoff flow at its whole purpose -- "I have finished
-# setting this up, you take over" left the previous holder logged in -- and made rotating a leaked
-# PIN useless. Binding the signature to the PIN means a change to the PIN changes what verifies,
-# with no session store and no new state file to migrate.
-def _session_pin_binding() -> str:
-    """Kept as a thin alias so existing call sites read unchanged -- the logic lives in
-    session_token.py so it can be unit-tested outside this container. See that module."""
-    return session_token.pin_binding(_guardian_pin_value())
-
-
-def _dashboard_session_create() -> str:
-    return session_token.create(TOKEN, _guardian_pin_value())
-
-
-def _dashboard_session_valid(token: str) -> bool:
-    return session_token.valid(token, TOKEN, _guardian_pin_value())
-
-
-def _dashboard_cookie_from_headers(headers) -> str | None:
-    return session_token.cookie_from_header(headers.get("Cookie", ""))
+# Report-type config (_load_report_types_base...REPORT_SUSPICION_LEVELS..._update_report_type)
+# and welcome-message override (_load_welcome_message_override, _save_welcome_message_override,
+# _effective_welcome_message) now live in lockprofile_reporting.py.
 
 
 def _append_alert(event: dict) -> dict | None:
@@ -1054,50 +648,8 @@ def _sanitize_installed_apps(raw: list) -> list:
     return result
 
 
-def _store_device_log(device_id: str, logs: str) -> str:
-    """Writes `logs` to a new timestamped file under LOGS_DIR/<device_id>/, then prunes to the
-    newest MAX_LOG_FILES_PER_DEVICE files for that device so a device stuck retrying uploads can't
-    fill the disk. Returns the filename written."""
-    device_dir = os.path.join(LOGS_DIR, device_id)
-    os.makedirs(device_dir, exist_ok=True)
-    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
-    filename = f"{stamp}.log"
-    path = os.path.join(device_dir, filename)
-    counter = 1
-    while os.path.exists(path):
-        filename = f"{stamp}-{counter}.log"
-        path = os.path.join(device_dir, filename)
-        counter += 1
-    with open(path, "w", encoding="utf-8") as fh:
-        fh.write(logs)
-    existing = sorted(os.listdir(device_dir))
-    for stale in existing[: max(0, len(existing) - MAX_LOG_FILES_PER_DEVICE)]:
-        try:
-            os.remove(os.path.join(device_dir, stale))
-        except OSError:
-            pass
-    return filename
-
-
-def _list_device_logs() -> dict:
-    if not os.path.isdir(LOGS_DIR):
-        return {}
-    result = {}
-    for device_id in sorted(os.listdir(LOGS_DIR)):
-        device_dir = os.path.join(LOGS_DIR, device_id)
-        if not os.path.isdir(device_dir):
-            continue
-        files = []
-        for filename in sorted(os.listdir(device_dir)):
-            path = os.path.join(device_dir, filename)
-            try:
-                stat = os.stat(path)
-            except OSError:
-                continue
-            files.append({"filename": filename, "size": stat.st_size, "mtime": stat.st_mtime})
-        result[device_id] = files
-    return result
-
+# Device log upload/storage (_store_device_log, _list_device_logs) now lives in
+# lockprofile_device_logs.py.
 
 # Guardian-facing GUI for GET /screenshot-review/list -- previously that route just returned the
 # raw {"devices": {...}} JSON _list_screenshots() produces, which meant "reviewing screenshots"
@@ -1337,192 +889,9 @@ refresh();
 """
 
 
-def _store_screenshot_in(
-    root_dir: str, max_files: int, device_id: str, package_name: str, image_bytes: bytes, reason: str | None = None,
-) -> str:
-    """Writes a screenshot to root_dir/<device_id>/, then prunes to the newest max_files for that
-    device. Shared by _store_screenshot (NSFW evidence, SCREENSHOTS_DIR) and
-    _store_error_screenshot (classifier-error samples, SCREENSHOT_ERRORS_DIR) -- see
-    POST /screenshot-classify. `package_name` is sanitized the same way _sanitize_installed_apps
-    caps a field, since it becomes part of a filename below.
-
-    `reason`, when given, is written to a same-name `.txt` sidecar (e.g. "foo.jpg" ->
-    "foo.jpg.txt") -- see _list_screenshots_in for how that's read back. Pruning below counts
-    only `.jpg` files toward max_files (a sidecar doesn't count as a second "screenshot") and
-    always removes a pruned image's sidecar alongside it, so the two can never desync."""
-    safe_package = "".join(c for c in package_name if c.isalnum() or c in "._-")[:200] or "unknown"
-    device_dir = os.path.join(root_dir, device_id)
-    os.makedirs(device_dir, exist_ok=True)
-    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
-    filename = f"{stamp}-{safe_package}.jpg"
-    path = os.path.join(device_dir, filename)
-    counter = 1
-    while os.path.exists(path):
-        filename = f"{stamp}-{safe_package}-{counter}.jpg"
-        path = os.path.join(device_dir, filename)
-        counter += 1
-    with open(path, "wb") as fh:
-        fh.write(image_bytes)
-    if reason:
-        with open(path + ".txt", "w", encoding="utf-8") as fh:
-            fh.write(reason[:500])
-    existing_images = sorted(f for f in os.listdir(device_dir) if f.endswith(".jpg"))
-    for stale in existing_images[: max(0, len(existing_images) - max_files)]:
-        for target in (stale, stale + ".txt"):
-            try:
-                os.remove(os.path.join(device_dir, target))
-            except OSError:
-                pass
-    return filename
-
-
-def _store_screenshot(device_id: str, package_name: str, image_bytes: bytes) -> str:
-    """Only ever called for a positive (NSFW) classification result; a safe/error result is never
-    written here at all -- see _store_error_screenshot for the separate error-sample path."""
-    return _store_screenshot_in(SCREENSHOTS_DIR, MAX_SCREENSHOT_FILES_PER_DEVICE, device_id, package_name, image_bytes)
-
-
-def _store_error_screenshot(device_id: str, package_name: str, image_bytes: bytes, reason: str | None) -> str:
-    """Only ever called when classify_screenshot() returns a None verdict (pipeline
-    unavailable/exception) -- see MAX_ERROR_SCREENSHOT_FILES_PER_DEVICE's comment for why this
-    keeps far fewer than _store_screenshot's NSFW evidence. `reason` is classify_screenshot()'s
-    error_reason, saved alongside the image so the review page can show why, not just that."""
-    return _store_screenshot_in(
-        SCREENSHOT_ERRORS_DIR, MAX_ERROR_SCREENSHOT_FILES_PER_DEVICE, device_id, package_name, image_bytes,
-        reason=reason,
-    )
-
-
-def _store_safe_screenshot(device_id: str, package_name: str, image_bytes: bytes) -> str:
-    """Only ever called for a "safe" classification result -- the review page's "recent
-    screenshots" feed, distinct from _store_screenshot's NSFW evidence. See
-    MAX_SAFE_SCREENSHOT_FILES_PER_DEVICE for why this keeps only a short rolling window."""
-    return _store_screenshot_in(
-        SCREENSHOT_SAFE_DIR, MAX_SAFE_SCREENSHOT_FILES_PER_DEVICE, device_id, package_name, image_bytes,
-    )
-
-
-def _list_screenshots_in(root_dir: str) -> dict:
-    """`.jpg.txt` sidecars (see _store_screenshot_in's `reason` param) are read into each entry's
-    `reason` key, not listed as their own file -- only SCREENSHOT_ERRORS_DIR ever has any."""
-    if not os.path.isdir(root_dir):
-        return {}
-    result = {}
-    for device_id in sorted(os.listdir(root_dir)):
-        device_dir = os.path.join(root_dir, device_id)
-        if not os.path.isdir(device_dir):
-            continue
-        files = []
-        for filename in sorted(os.listdir(device_dir)):
-            if not filename.endswith(".jpg"):
-                continue
-            path = os.path.join(device_dir, filename)
-            try:
-                stat = os.stat(path)
-            except OSError:
-                continue
-            entry = {"filename": filename, "size": stat.st_size, "mtime": stat.st_mtime}
-            try:
-                with open(path + ".txt", "r", encoding="utf-8") as fh:
-                    entry["reason"] = fh.read().strip()
-            except OSError:
-                pass
-            files.append(entry)
-        result[device_id] = files
-    return result
-
-
-def _list_screenshots() -> dict:
-    return _list_screenshots_in(SCREENSHOTS_DIR)
-
-
-def _list_error_screenshots() -> dict:
-    return _list_screenshots_in(SCREENSHOT_ERRORS_DIR)
-
-
-def _list_safe_screenshots() -> dict:
-    return _list_screenshots_in(SCREENSHOT_SAFE_DIR)
-
-
-def _load_screenshot_stats() -> dict:
-    try:
-        with open(SCREENSHOT_STATS_PATH, "r", encoding="utf-8") as fh:
-            return json.load(fh)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {}
-
-
-def _save_screenshot_stats(stats: dict) -> None:
-    os.makedirs(DATA_DIR, exist_ok=True)
-    tmp_path = SCREENSHOT_STATS_PATH + ".tmp"
-    with open(tmp_path, "w", encoding="utf-8") as fh:
-        json.dump(stats, fh, indent=2, sort_keys=True)
-    os.replace(tmp_path, SCREENSHOT_STATS_PATH)
-
-
-def _record_screenshot_classification(device_id: str, package_name: str, result: str) -> None:
-    """Tracks lightweight per-device activity counters for every POST /screenshot-classify call --
-    unlike _store_screenshot (only ever called for a positive NSFW verdict), this runs for every
-    result (safe/nsfw/error/skipped) and never touches image bytes. This is what lets
-    /screenshot-review/list show the feature is actually receiving and classifying uploads even on
-    a device that has never been flagged."""
-    with _screenshot_stats_lock:
-        stats = _load_screenshot_stats()
-        record = stats.setdefault(device_id, {"total": 0, "safe": 0, "nsfw": 0, "error": 0, "skipped": 0})
-        record[result] = record.get(result, 0) + 1
-        record["total"] = record.get("total", 0) + 1
-        record["lastClassifiedAt"] = int(time.time() * 1000)
-        record["lastResult"] = result
-        record["lastPackageName"] = package_name
-        _save_screenshot_stats(stats)
-
-
-def _screenshot_review_payload() -> dict:
-    """Combines the flagged-screenshot file listing with the activity counters above into what
-    /screenshot-review/data (fetched by the /screenshot-review/list GUI) actually returns."""
-    files_by_device = _list_screenshots()
-    error_files_by_device = _list_error_screenshots()
-    safe_files_by_device = _list_safe_screenshots()
-    stats = _load_screenshot_stats()
-    devices = []
-    for device_id in sorted(set(files_by_device) | set(error_files_by_device) | set(safe_files_by_device) | set(stats)):
-        files = sorted(files_by_device.get(device_id, []), key=lambda f: f["mtime"], reverse=True)
-        error_files = sorted(error_files_by_device.get(device_id, []), key=lambda f: f["mtime"], reverse=True)
-        safe_files = sorted(safe_files_by_device.get(device_id, []), key=lambda f: f["mtime"], reverse=True)
-        devices.append({
-            "deviceId": device_id,
-            "stats": stats.get(device_id, {}),
-            "screenshots": [
-                {
-                    "filename": f["filename"],
-                    "size": f["size"],
-                    "mtime": f["mtime"],
-                    "url": f"/screenshot-review/{device_id}/{f['filename']}",
-                }
-                for f in files
-            ],
-            "errorScreenshots": [
-                {
-                    "filename": f["filename"],
-                    "size": f["size"],
-                    "mtime": f["mtime"],
-                    "url": f"/screenshot-review/errors/{device_id}/{f['filename']}",
-                    "reason": f.get("reason", ""),
-                }
-                for f in error_files
-            ],
-            "safeScreenshots": [
-                {
-                    "filename": f["filename"],
-                    "size": f["size"],
-                    "mtime": f["mtime"],
-                    "url": f"/screenshot-review/safe/{device_id}/{f['filename']}",
-                }
-                for f in safe_files
-            ],
-        })
-    devices.sort(key=lambda d: d["stats"].get("lastClassifiedAt", 0), reverse=True)
-    return {"devices": devices}
+# Screenshot evidence storage (_store_screenshot_in..._record_screenshot_classification) and
+# the review-dashboard payload builder (_screenshot_review_payload) now live in
+# lockprofile_screenshots.py.
 
 
 # ─── Dashboard device settings (/dashboard-api/*) ──────────────────────────────────────────────
@@ -1671,27 +1040,6 @@ def _save_default_template(updates: dict) -> dict:
             json.dump(template, fh, indent=2, sort_keys=True)
         os.replace(tmp_path, DEFAULT_TEMPLATE_PATH)
         return template
-
-
-def _load_guardian_pin() -> dict:
-    try:
-        with open(GUARDIAN_PIN_PATH, "r", encoding="utf-8") as fh:
-            return json.load(fh)
-    except (FileNotFoundError, json.JSONDecodeError):
-        if re.fullmatch(r"\d{4}", GUARDIAN_PIN_ENV_BOOTSTRAP):
-            return {"pin": GUARDIAN_PIN_ENV_BOOTSTRAP, "updatedAt": None}
-        return {"pin": None, "updatedAt": None}
-
-
-def _save_guardian_pin(pin: str) -> dict:
-    with _pin_lock:
-        record = {"pin": pin, "updatedAt": time.time()}
-        os.makedirs(DATA_DIR, exist_ok=True)
-        tmp_path = GUARDIAN_PIN_PATH + ".tmp"
-        with open(tmp_path, "w", encoding="utf-8") as fh:
-            json.dump(record, fh, indent=2, sort_keys=True)
-        os.replace(tmp_path, GUARDIAN_PIN_PATH)
-        return record
 
 
 def _load_habitshare_account() -> dict:
@@ -2744,40 +2092,7 @@ def _list_known_device_ids() -> dict:
     return devices
 
 
-def _send_ntfy_notification(event: dict) -> None:
-    """Best-effort push via ntfy.sh -- see module docstring. Never raises: a down/unreachable ntfy
-    server must not turn an accepted tamper report into a failed request."""
-    if not NTFY_TOPIC:
-        return
-    title, priority, tag = NTFY_EVENT_STYLE.get(
-        event["type"], (f"Otterling: {event['type']}", "default", "warning")
-    )
-    # Guardian-editable override (report_types.json's customMessage, set via the dashboard's
-    # Report Types panel) replaces the default body wording -- `{details}` is substituted with
-    # this event's actual details text so a reworded message can still reference what happened,
-    # e.g. "Heads up: {details}". Falls back to the original default body when unset/blank, same
-    # as every other customMessage consumer (see AlertReporter.kt's formatBody for the Android
-    # side of this same mechanism).
-    custom_message = (_load_report_config().get(event["type"], {}) or {}).get("customMessage", "")
-    if custom_message.strip():
-        message = custom_message.replace("{details}", event.get("details") or "")
-    else:
-        message = f"{event['details']}\n(device {event['device_id']})" if event.get("details") else f"device {event['device_id']}"
-    request = urllib.request.Request(
-        f"{NTFY_SERVER}/{NTFY_TOPIC}",
-        data=message.encode("utf-8"),
-        method="POST",
-        headers={
-            "Title": title,
-            "Priority": priority,
-            "Tags": tag,
-        },
-    )
-    try:
-        urllib.request.urlopen(request, timeout=10).close()
-    except (urllib.error.URLError, OSError) as error:
-        _log(f"[lockprofile] ntfy push failed for {event['type']}: {error}")
-
+# ntfy.sh push (_send_ntfy_notification) now lives in lockprofile_reporting.py.
 
 # --- FCM push (optional) ---------------------------------------------------------------------
 
@@ -2932,48 +2247,6 @@ def _send_fcm_wake(event: dict, tokens: list[str] | None = None) -> int:
         except (urllib.error.URLError, OSError) as error:
             _log(f"[lockprofile] FCM send failed for {event.get('type')}: {error}")
     return sent
-
-
-def _check_sudo_command(command: str, reason: str) -> tuple[str, str]:
-    """Calls out to the host-level `sudo_review_server.py` (see its own doc comment for why this
-    can't happen inside this container). ANY failure -- unreachable, timeout, malformed response --
-    is "deny", never "allow": this is the one place in the whole system that fails closed on purpose,
-    since an admin command denied on a hiccup is safe and recoverable, unlike DNS/proxy enforcement
-    failing open elsewhere in this project."""
-    payload = json.dumps({"command": command, "reason": reason}).encode("utf-8")
-    request = urllib.request.Request(
-        SUDO_REVIEW_URL, data=payload, method="POST", headers={"Content-Type": "application/json"}
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=SUDO_REVIEW_TIMEOUT) as response:
-            parsed = json.loads(response.read().decode("utf-8"))
-    except (urllib.error.URLError, OSError, json.JSONDecodeError, UnicodeDecodeError) as error:
-        return "deny", f"Could not reach the AI reviewer ({error}) -- denying on failure."
-
-    verdict = str(parsed.get("verdict", "")).lower()
-    explanation = str(parsed.get("explanation", "(no explanation)"))
-    if verdict not in ("allow", "deny"):
-        return "deny", f"Reviewer returned an unrecognized verdict -- denying on ambiguity. {explanation}"
-    return verdict, explanation
-
-
-def _translate_request(request_text: str) -> tuple[list[str], str]:
-    """Calls out to the host-level reviewer's `/translate` route -- pure natural-language-to-shell
-    translation, no safety reasoning (see that route's own doc comment for why). Every command it
-    returns still goes through `_check_sudo_command` individually before anything executes."""
-    payload = json.dumps({"request": request_text}).encode("utf-8")
-    request = urllib.request.Request(
-        SUDO_TRANSLATE_URL, data=payload, method="POST", headers={"Content-Type": "application/json"}
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=SUDO_TRANSLATE_TIMEOUT) as response:
-            parsed = json.loads(response.read().decode("utf-8"))
-    except (urllib.error.URLError, OSError, json.JSONDecodeError, UnicodeDecodeError) as error:
-        return [], f"Could not reach the AI assistant ({error})."
-    commands = parsed.get("commands", [])
-    if not isinstance(commands, list):
-        return [], "Assistant returned a malformed response."
-    return [str(c) for c in commands], str(parsed.get("explanation", ""))
 
 
 def _push_event(event: dict) -> None:
