@@ -11,7 +11,7 @@
 # call (Python's subprocess.run(user=...)), to this dedicated unprivileged
 # account -- CLAUDE_RUNNER_USER in ai_classifier.py must match the username
 # created here.
-FROM python:3.12-slim
+FROM python:3.12-slim@sha256:2fe5997d249a808b8eeea52c58a1dbffbba28754dc11699ef5c029f2d818ce79
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends curl ca-certificates gnupg && \

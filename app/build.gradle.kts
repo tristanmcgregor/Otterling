@@ -4,6 +4,7 @@ plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
     id("com.google.devtools.ksp")
+    id("io.gitlab.arturbosch.detekt")
 }
 
 val localProperties = Properties().apply {
@@ -170,4 +171,10 @@ dependencies {
 // checkout without it still builds (FCM inert) rather than failing outright.
 if (googleServicesJson.exists()) {
     apply(plugin = "com.google.gms.google-services")
+}
+
+detekt {
+    buildUponDefaultConfig = true
+    config.setFrom(rootProject.file("config/detekt/detekt.yml"))
+    baseline = rootProject.file("config/detekt/baseline-app.xml")
 }

@@ -1,0 +1,28 @@
+<?xml version="1.0" ?>
+<SmellBaseline>
+  <ManuallySuppressedIssues/>
+  <CurrentIssues>
+    <ID>CyclomaticComplexMethod:ProxyTestVpnService.kt$ProxyTestVpnService$private fun runPacketLoop(tun: ParcelFileDescriptor, settings: ProxyTestSettings)</ID>
+    <ID>CyclomaticComplexMethod:TcpRelayManager.kt$TcpRelayManager$private suspend fun establish(connection: Connection, synPacket: IpPacket)</ID>
+    <ID>LoopWithTooManyJumpStatements:ProxyTestVpnService.kt$ProxyTestVpnService$while</ID>
+    <ID>LoopWithTooManyJumpStatements:UdpRelayManager.kt$UdpRelayManager$while</ID>
+    <ID>MaxLineLength:TcpRelayManager.kt$TcpRelayManager$"${connection.key.dstIp}:${connection.key.dstPort} closed: ${connection.bytesFromSocket}B in ${elapsedMs}ms "</ID>
+    <ID>MaxLineLength:TcpRelayManager.kt$TcpRelayManager$"${connection.key.dstIp}:${connection.key.dstPort} window scale: client offered=${synPacket.tcpWindowScale}, negotiated=${connection.ourShift != null}"</ID>
+    <ID>MaxLineLength:TcpRelayManager.kt$TcpRelayManager$"${if (useProxy) "Proxy CONNECT via ${proxyConfig.host}:${proxyConfig.port} to" else "TCP connect to"} "</ID>
+    <ID>MaxLineLength:TcpRelayManager.kt$TcpRelayManager$"(%.1fMbps), reads=${connection.readCount}, socket-read=${connection.socketReadMillis}ms, ".format(mbps)</ID>
+    <ID>MaxLineLength:TcpRelayManager.kt$TcpRelayManager$"tun-write=${connection.tunWriteMillis}ms, window-wait=${connection.windowWaitMillis}ms, shift=${connection.ourShift}"</ID>
+    <ID>MaxLineLength:TcpRelayManager.kt$TcpRelayManager$Log.d(TAG, "${connection.key.dstIp}:${connection.key.dstPort} MITM-exempt (uid=$ownerUid) -- connecting directly")</ID>
+    <ID>MaxLineLength:TcpRelayManager.kt$TcpRelayManager$socket.connect(InetSocketAddress(InetAddress.getByName(connection.key.dstIp), connection.key.dstPort), CONNECT_TIMEOUT_MS)</ID>
+    <ID>MaxLineLength:TcpRelayManager.kt$TcpRelayManager$val credentials = Base64.getEncoder().encodeToString("${proxyConfig.user}:${proxyConfig.password}".toByteArray())</ID>
+    <ID>MaxLineLength:TcpRelayManager.kt$TcpRelayManager$writeToTun(packet.buildTcpSegment(connection.serverSeq, ackValue, IpPacket.TCP_ACK, encodedWindow(connection)))</ID>
+    <ID>NestedBlockDepth:UdpRelayManager.kt$UdpRelayManager$private suspend fun receiveLoop(key: FlowKey, flow: Flow)</ID>
+    <ID>SwallowedException:TcpRelayManager.kt$TcpRelayManager$error: IOException</ID>
+    <ID>SwallowedException:UdpRelayManager.kt$UdpRelayManager$error: IOException</ID>
+    <ID>SwallowedException:UdpRelayManager.kt$UdpRelayManager$timeout: SocketTimeoutException</ID>
+    <ID>ThrowsCount:TcpRelayManager.kt$TcpRelayManager$private fun performHttpConnect(socket: Socket, targetHost: String, targetPort: Int): BufferedInputStream</ID>
+    <ID>TooGenericExceptionCaught:ProxyTestVpnService.kt$ProxyTestVpnService$error: Exception</ID>
+    <ID>TooGenericExceptionCaught:TcpRelayManager.kt$TcpRelayManager$error: Exception</ID>
+    <ID>TooManyFunctions:IpPacket.kt$IpPacket$Companion</ID>
+    <ID>TooManyFunctions:TcpRelayManager.kt$TcpRelayManager</ID>
+  </CurrentIssues>
+</SmellBaseline>

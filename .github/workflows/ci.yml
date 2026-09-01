@@ -58,6 +58,13 @@ jobs:
       - name: swift build
         working-directory: macos/FocusLock
         run: swift build
+      - name: SwiftLint
+        working-directory: macos/FocusLock
+        # Advisory only for now -- see .swiftlint.yml's trailing comment: this codebase's existing
+        # violation count hasn't been triaged yet, so a first run shouldn't be able to block CI.
+        run: |
+          brew install swiftlint
+          swiftlint lint --reporter github-actions-logging || true
       - name: swift test
         working-directory: macos/FocusLock
         # Covers CommandPolicy (what may run as root), HostsFileBlock (what gets written to
@@ -104,6 +111,11 @@ jobs:
         # (MitmExemptionPolicy, PinningFailureHeuristic, blocklist parsing, the TCP relay's
         # CONNECT buffering).
         run: ./gradlew :app:testDebugUnitTest --no-daemon
+      - name: detekt
+        # Baselined against this codebase's state when detekt was introduced (config/detekt/
+        # baseline-*.xml), so this only fails on newly introduced findings, not the existing
+        # backlog -- see config/detekt/detekt.yml.
+        run: ./gradlew :app:detekt :proxytest:detekt --no-daemon
 
   dashboard:
     name: Dashboard (build)

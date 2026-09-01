@@ -1,0 +1,19 @@
+included:
+  - Sources
+  - Tests
+
+disabled_rules:
+  - line_length
+  - file_length
+  - type_body_length
+  - function_body_length
+  - cyclomatic_complexity
+  - todo
+
+opt_in_rules:
+  - empty_count
+  - force_unwrapping
+
+# Advisory for now (see .github/workflows/ci.yml) -- this codebase hasn't been run through
+# SwiftLint before, so the existing violation count is unknown. Tighten disabled_rules above and
+# switch the CI step to blocking once a first pass has triaged what it reports.

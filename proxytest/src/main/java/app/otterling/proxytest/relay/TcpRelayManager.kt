@@ -32,15 +32,26 @@ data class ProxyConfig(
 )
 
 /**
- * NAT-relays TCP connections captured by [VpnFilterService]'s tun: for each new SYN, opens a real
- * (protected, i.e. bypassing the tun) [Socket] and bridges bytes between that socket and a minimal
- * hand-rolled TCP peer speaking to the client over the tun. When [proxyConfig] is enabled and the
- * destination port is 80 or 443, that socket connects to the filter proxy instead of the real
- * destination, performs an HTTP CONNECT handshake first, and only then starts bridging bytes --
- * from that point on the proxy sees exactly what a direct connection's peer would have, since the
- * bytes past the CONNECT handshake are the same TLS/HTTP the client itself sent. A failed CONNECT
- * (auth rejected, proxy unreachable, etc.) fails that flow closed (RST) rather than silently
- * connecting directly, so a proxy outage can't be used to bypass filtering.
+ * Standalone copy for the `:proxytest` relay-only test harness -- NOT kept in sync with the
+ * production relay at app/src/main/java/app/otterling/content/TcpRelayManager.kt, and
+ * intentionally so: [ProxyTestVpnService] hardcodes `isBlockedDestination = { false }` ("no
+ * filtering -- relay-only test harness"), this module isn't built or tested by CI, and it never
+ * ships to a device. It exists to manually exercise the CONNECT-tunnel/NAT-relay mechanics in
+ * isolation, so it deliberately omits production's [ProxyOutageTracker]-driven retry/fallback (a
+ * failed CONNECT here just fails the flow, no retry, no direct-connect fallback) and the
+ * destination-port-aware `isBlockedDestination(host, port)` signature. If you're looking for the
+ * enforcement-relevant relay logic, read the production file instead -- this one is a debugging
+ * tool, not a second implementation of the real thing.
+ *
+ * NAT-relays TCP connections captured by [ProxyTestVpnService]'s tun: for each new SYN, opens a
+ * real (protected, i.e. bypassing the tun) [Socket] and bridges bytes between that socket and a
+ * minimal hand-rolled TCP peer speaking to the client over the tun. When [proxyConfig] is enabled
+ * and the destination port is 80 or 443, that socket connects to the filter proxy instead of the
+ * real destination, performs an HTTP CONNECT handshake first, and only then starts bridging bytes
+ * -- from that point on the proxy sees exactly what a direct connection's peer would have, since
+ * the bytes past the CONNECT handshake are the same TLS/HTTP the client itself sent. A failed
+ * CONNECT (auth rejected, proxy unreachable, etc.) fails that flow closed (RST) rather than
+ * silently connecting directly.
  *
  * This exists because a [android.net.VpnService] that captures all app traffic (needed so every
  * app's DNS goes through our filter) but only has routes for a handful of specific IPs makes every

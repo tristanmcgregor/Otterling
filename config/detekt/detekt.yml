@@ -1,0 +1,11 @@
+style:
+  MagicNumber:
+    active: false # noisy on Android (dimensions, SDK levels, HTTP codes) without much payoff
+  ReturnCount:
+    active: false # early-return guard clauses are the house style here (see AGENTS.md)
+
+complexity:
+  LongMethod:
+    active: false # several enforcement/policy functions are long by necessity; revisit later
+  LongParameterList:
+    active: false

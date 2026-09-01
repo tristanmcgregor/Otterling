@@ -15,7 +15,9 @@
 # dns_classify_mux.py, anything that does still shell out to `claude` drops privileges for just
 # that subprocess call (ai_classifier.py's CLAUDE_RUNNER_USER) to this dedicated
 # unprivileged account.
-FROM python:3.12-slim
+FROM python:3.12-slim@sha256:2fe5997d249a808b8eeea52c58a1dbffbba28754dc11699ef5c029f2d818ce79
+
+COPY requirements-lockprofile.txt /tmp/requirements-lockprofile.txt
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends curl ca-certificates gnupg && \
@@ -25,7 +27,7 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/* && \
     useradd --create-home --home-dir /home/claude-runner --shell /usr/sbin/nologin claude-runner && \
     useradd --create-home --home-dir /home/lockprofile --shell /usr/sbin/nologin lockprofile && \
-    pip install --no-cache-dir google-auth requests onnxruntime numpy Pillow
+    pip install --no-cache-dir -r /tmp/requirements-lockprofile.txt
 
 # Runs unprivileged. Unlike dns-classifier (which must stay root to bind port 53), this service
 # listens on 8091 -- an unprivileged port -- so root bought nothing while this container serves
