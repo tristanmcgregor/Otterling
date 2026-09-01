@@ -21,8 +21,12 @@ import urllib.request
 # ["host.docker.internal:host-gateway"]` on this service to resolve on Linux.
 SUDO_REVIEW_URL = os.environ.get("SUDO_REVIEW_URL", "http://host.docker.internal:9072/review")
 SUDO_TRANSLATE_URL = os.environ.get("SUDO_TRANSLATE_URL", "http://host.docker.internal:9072/translate")
-SUDO_REVIEW_TIMEOUT = 20
-SUDO_TRANSLATE_TIMEOUT = 25
+# sudo_review_server.py's own `claude` call can itself take up to ai_classifier.CLAUDE_TIMEOUT_SECONDS
+# (25s), and once on a CLAUDE_CODE_OAUTH_TOKEN_BACKUP retry, up to twice that -- these have to
+# comfortably clear that worst case (and AIReviewClient.swift's own timeout, one hop further out,
+# has to clear this one in turn) or every real review would time out before it ever completes.
+SUDO_REVIEW_TIMEOUT = 55
+SUDO_TRANSLATE_TIMEOUT = 55
 
 
 def _check_sudo_command(command: str, reason: str) -> tuple[str, str]:

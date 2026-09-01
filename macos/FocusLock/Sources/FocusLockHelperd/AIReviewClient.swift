@@ -15,7 +15,11 @@ import FocusLockShared
 /// an unreachable reviewer as "approved" would make cutting network access the master bypass for
 /// the entire broker. Every failure path below returns `approved: false`.
 enum AIReviewClient {
-    private static let timeout: TimeInterval = 20
+    // Has to clear the filter-server's own SUDO_REVIEW_TIMEOUT (lockprofile_sudo_ai.py) with room
+    // to spare, which itself has to clear sudo_review_server.py's worst-case `claude` call latency
+    // (a timed-out primary attempt plus a full backup-token retry) -- see that timeout's own
+    // comment for the chain this has to stay ahead of.
+    private static let timeout: TimeInterval = 60
 
     static func review(command: String, reason: String) -> ElevatedCommandResult {
         let host = nonEmpty(readTrimmed(FocusLockConstants.lockProfileHostPath))
