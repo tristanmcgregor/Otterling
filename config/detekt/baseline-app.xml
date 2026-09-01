@@ -1,0 +1,262 @@
+<?xml version="1.0" ?>
+<SmellBaseline>
+  <ManuallySuppressedIssues/>
+  <CurrentIssues>
+    <ID>ComplexCondition:FocusGuardAccessibilityService.kt$FocusGuardAccessibilityService$!bounds.isEmpty &amp;&amp; bounds.height() &gt;= minHeight &amp;&amp; bounds.width() &gt;= minWidth &amp;&amp; bounds.height() &gt; bounds.width() &amp;&amp; bounds.top &lt; screenHeight * 0.1f</ID>
+    <ID>ComplexCondition:FocusGuardAccessibilityService.kt$FocusGuardAccessibilityService$!bounds.isEmpty &amp;&amp; bounds.height() &gt;= minHeight &amp;&amp; bounds.width() &gt;= minWidth &amp;&amp; bounds.top &lt; screenHeight * 0.2f</ID>
+    <ID>ComplexCondition:FocusGuardAccessibilityService.kt$FocusGuardAccessibilityService$className.contains("View", ignoreCase = true) || className.contains("Video", ignoreCase = true) || className.contains("Image", ignoreCase = true) || id.contains("video") || id.contains("media") || id.contains("reel")</ID>
+    <ID>ComplexCondition:FocusGuardAccessibilityService.kt$FocusGuardAccessibilityService$className.contains("View", ignoreCase = true) || className.contains("Video", ignoreCase = true) || className.contains("Texture", ignoreCase = true) || className.contains("Surface", ignoreCase = true)</ID>
+    <ID>CyclomaticComplexMethod:DebugUnsuspendReceiver.kt$DebugUnsuspendReceiver$override fun onReceive(context: Context, intent: Intent?)</ID>
+    <ID>CyclomaticComplexMethod:FocusGuardAccessibilityService.kt$FocusGuardAccessibilityService$private fun hasFullscreenPortraitVideoSurface(root: AccessibilityNodeInfo): Boolean</ID>
+    <ID>CyclomaticComplexMethod:FocusGuardAccessibilityService.kt$FocusGuardAccessibilityService$private fun hasFullscreenReelsViewer( root: AccessibilityNodeInfo, screenWidth: Int, screenHeight: Int, ): Boolean</ID>
+    <ID>CyclomaticComplexMethod:FocusSettingsSections.kt$@Composable fun HabitRuleWizardHost( context: Context, ruleToEdit: HabitRule? = null, onDismiss: () -&gt; Unit, onSaved: () -&gt; Unit, )</ID>
+    <ID>CyclomaticComplexMethod:FocusSettingsSections.kt$@Composable fun HabitRulesSection(context: Context)</ID>
+    <ID>CyclomaticComplexMethod:HabitRuleManager.kt$HabitRuleManager$private fun dashboardRules(): List&lt;HabitRule&gt;</ID>
+    <ID>CyclomaticComplexMethod:HabitShareApiClient.kt$HabitShareApiClient$private fun trackerListHasToday(list: JSONArray, todayLocal: LocalDate, todayUtc: LocalDate): Boolean</ID>
+    <ID>CyclomaticComplexMethod:MacTamperPollWorker.kt$MacTamperPollWorker$private fun severityAndLabel(macType: String): Pair&lt;AlertSeverity, String&gt;</ID>
+    <ID>CyclomaticComplexMethod:TcpRelayManager.kt$TcpRelayManager$private suspend fun establish(connection: Connection, synPacket: IpPacket)</ID>
+    <ID>CyclomaticComplexMethod:VpnFilterSection.kt$@Composable fun VpnFilterSection(context: Context)</ID>
+    <ID>CyclomaticComplexMethod:VpnFilterService.kt$VpnFilterService$private fun runPacketLoop( tun: ParcelFileDescriptor, blocklist: DomainBlocklistManager, classifiedDomains: ServerClassifiedDomainsManager, cloudFilterSettings: CloudFilterSettings, alertSettings: GuardianAlertSettings, relayScope: CoroutineScope, )</ID>
+    <ID>CyclomaticComplexMethod:VpnFilterService.kt$VpnFilterService$private suspend fun handleDnsPacket( packet: IpPacket, writeToTun: suspend (ByteArray) -&gt; Unit, blocklist: DomainBlocklistManager, classifiedDomains: ServerClassifiedDomainsManager, cloudFilterSettings: CloudFilterSettings, alertSettings: GuardianAlertSettings, ownerUidResolver: AppUidResolver, mitmExemptUids: Set&lt;Int&gt;, isProxyUnavailable: () -&gt; Boolean, )</ID>
+    <ID>EmptyFunctionBlock:AccessibilityGuardActivity.kt$AccessibilityGuardActivity.&lt;no name provided&gt;${}</ID>
+    <ID>EmptyFunctionBlock:FrictionActivity.kt$FrictionActivity.&lt;no name provided&gt;${}</ID>
+    <ID>FunctionNaming:AccessibilityGuardActivity.kt$@Composable private fun AccessibilityGuardScreen(onOpenSettings: () -&gt; Unit, onResolved: () -&gt; Unit)</ID>
+    <ID>FunctionNaming:AccountabilityPartnerSection.kt$@Composable fun AccountabilityPartnerSection(context: Context)</ID>
+    <ID>FunctionNaming:AppShell.kt$@Composable private fun ScrollingTabContent(content: @Composable androidx.compose.foundation.layout.ColumnScope.() -&gt; Unit)</ID>
+    <ID>FunctionNaming:AppShell.kt$@OptIn(ExperimentalMaterial3Api::class) @Composable fun AppShell( context: Context, batteryOptimizationLauncher: ActivityResultLauncher&lt;Intent&gt;, onExit: () -&gt; Unit, )</ID>
+    <ID>FunctionNaming:DashboardScreen.kt$@Composable fun BlockedWebsitesSettingsSection(context: Context)</ID>
+    <ID>FunctionNaming:DashboardScreen.kt$@Composable fun DashboardScreen(context: Context, onOpenSettings: () -&gt; Unit)</ID>
+    <ID>FunctionNaming:DashboardScreen.kt$@Composable private fun AddBlockedWebsiteDialog( manager: CustomBlocklistManager, onDismiss: () -&gt; Unit, onAdded: () -&gt; Unit, )</ID>
+    <ID>FunctionNaming:DashboardScreen.kt$@Composable private fun DebugLogsDialog(onDismiss: () -&gt; Unit)</ID>
+    <ID>FunctionNaming:DashboardScreen.kt$@Composable private fun ProtectionStatus(context: Context, data: DashboardData, onRestored: () -&gt; Unit)</ID>
+    <ID>FunctionNaming:DashboardScreen.kt$@Composable private fun RuleCard(context: Context, data: DashboardData, rule: HabitRule, now: Long)</ID>
+    <ID>FunctionNaming:DashboardScreen.kt$@Composable private fun RuleFooter(icon: androidx.compose.ui.graphics.vector.ImageVector, text: String, tint: androidx.compose.ui.graphics.Color)</ID>
+    <ID>FunctionNaming:DashboardScreen.kt$@Composable private fun RulesOverview( context: Context, data: DashboardData, now: Long, isRefreshing: Boolean, onRefresh: () -&gt; Unit, )</ID>
+    <ID>FunctionNaming:DashboardScreen.kt$@Composable private fun TimeBudgetOverview(data: DashboardData)</ID>
+    <ID>FunctionNaming:DeviceRemovedActivity.kt$@Composable private fun DeviceRemovedScreen(onUninstall: () -&gt; Unit)</ID>
+    <ID>FunctionNaming:DeviceSettingsSections.kt$@Composable fun DeviceOwnerSection(context: Context)</ID>
+    <ID>FunctionNaming:DeviceSettingsSections.kt$@Composable fun DisabledAppsSection(context: Context)</ID>
+    <ID>FunctionNaming:DeviceSettingsSections.kt$@Composable fun HabitShareNavSection(onOpen: () -&gt; Unit)</ID>
+    <ID>FunctionNaming:DeviceSettingsSections.kt$@Composable fun KnoxSetupSection(context: Context)</ID>
+    <ID>FunctionNaming:DeviceSettingsSections.kt$@Composable fun ProtectionControlSection(context: Context)</ID>
+    <ID>FunctionNaming:DeviceSettingsSections.kt$@Composable fun RestrictionsSection( context: Context, batteryOptimizationLauncher: ActivityResultLauncher&lt;Intent&gt;, )</ID>
+    <ID>FunctionNaming:DeviceSettingsSections.kt$@Composable fun UninstallProtectionSection(context: Context)</ID>
+    <ID>FunctionNaming:DeviceSettingsSections.kt$@Composable private fun CodeBlock(text: String)</ID>
+    <ID>FunctionNaming:FocusSettingsSections.kt$@Composable fun AccessibilityServiceSection(context: Context)</ID>
+    <ID>FunctionNaming:FocusSettingsSections.kt$@Composable fun HabitRuleWizardHost( context: Context, ruleToEdit: HabitRule? = null, onDismiss: () -&gt; Unit, onSaved: () -&gt; Unit, )</ID>
+    <ID>FunctionNaming:FocusSettingsSections.kt$@Composable fun HabitRulesSection(context: Context)</ID>
+    <ID>FunctionNaming:FocusSettingsSections.kt$@Composable fun HabitShareAccountSection(context: Context)</ID>
+    <ID>FunctionNaming:FocusSettingsSections.kt$@Composable fun HabitShareSettingsScreen(context: Context, onBack: () -&gt; Unit)</ID>
+    <ID>FunctionNaming:FocusSettingsSections.kt$@Composable fun HabitShareVerificationSection(context: Context)</ID>
+    <ID>FunctionNaming:FocusSettingsSections.kt$@Composable fun MindfulAppsSection(context: Context)</ID>
+    <ID>FunctionNaming:FocusSettingsSections.kt$@Composable fun TimeBudgetsSection(context: Context)</ID>
+    <ID>FunctionNaming:FocusSettingsSections.kt$@Composable private fun AppRow(app: InstalledAppInfo, selected: Boolean, onClick: () -&gt; Unit)</ID>
+    <ID>FunctionNaming:FocusSettingsSections.kt$@Composable private fun DayOfWeekPicker(selectedDays: Set&lt;DayOfWeek&gt;, onToggle: (DayOfWeek) -&gt; Unit)</ID>
+    <ID>FunctionNaming:FocusSettingsSections.kt$@Composable private fun HabitProofLogRow(log: HabitProofLog, onRemove: () -&gt; Unit)</ID>
+    <ID>FunctionNaming:FocusSettingsSections.kt$@Composable private fun HabitRuleRow( rule: HabitRule, triggerLabel: String, targetLabel: String, now: Long, dashboardManaged: Boolean, onEdit: () -&gt; Unit, onEnabledChange: (Boolean) -&gt; Unit, onRemove: () -&gt; Unit, )</ID>
+    <ID>FunctionNaming:FocusSettingsSections.kt$@Composable private fun ProofRequirementRow( habitName: String, requirement: HabitProofRequirement?, onSetRequirement: (required: Boolean, referencePhotoPath: String?) -&gt; Unit, modifier: Modifier = Modifier, )</ID>
+    <ID>FunctionNaming:FocusSettingsSections.kt$@Composable private fun SelectablePill(text: String, selected: Boolean, onClick: () -&gt; Unit)</ID>
+    <ID>FunctionNaming:FocusSettingsSections.kt$@Composable private fun TimeBudgetInputDialog( packageName: String, onDismiss: () -&gt; Unit, onConfirm: (dailyLimitMinutes: Int, subLimitMinutes: Int?, subLimitLabel: String?) -&gt; Unit, )</ID>
+    <ID>FunctionNaming:FocusSettingsSections.kt$@Composable private fun WizardHeading(title: String, subtitle: String)</ID>
+    <ID>FunctionNaming:FocusSettingsSections.kt$@Composable private fun WizardStepHabits( habitOptions: List&lt;String&gt;, selected: Set&lt;String&gt;, onToggle: (String) -&gt; Unit, )</ID>
+    <ID>FunctionNaming:FocusSettingsSections.kt$@Composable private fun WizardStepSchedule( windowEnabled: Boolean, onWindowEnabledChange: (Boolean) -&gt; Unit, startText: String, onStartChange: (String) -&gt; Unit, endText: String, onEndChange: (String) -&gt; Unit, minutesText: String, onMinutesChange: (String) -&gt; Unit, selectedDays: Set&lt;DayOfWeek&gt;, onToggleDay: (DayOfWeek) -&gt; Unit, )</ID>
+    <ID>FunctionNaming:FocusSettingsSections.kt$@Composable private fun WizardStepTarget( apps: List&lt;InstalledAppInfo&gt;, query: String, onQueryChange: (String) -&gt; Unit, selectedPackages: Set&lt;String&gt;, onToggle: (InstalledAppInfo) -&gt; Unit, )</ID>
+    <ID>FunctionNaming:FrictionActivity.kt$@Composable private fun FrictionScreen(delaySeconds: Int, onContinue: () -&gt; Unit, onGoHome: () -&gt; Unit)</ID>
+    <ID>FunctionNaming:HabitProofActivity.kt$@Composable private fun HabitProofScreen( habitName: String, matchState: ProofMatchState, preview: Bitmap?, onTakePhoto: () -&gt; Unit, onSkip: () -&gt; Unit, )</ID>
+    <ID>FunctionNaming:HabitProofActivity.kt$@Composable private fun NoReferencePhotoScreen(habitName: String, onDismiss: () -&gt; Unit)</ID>
+    <ID>FunctionNaming:HabitProofActivity.kt$@Composable private fun ResultBadge(color: Color, matched: Boolean)</ID>
+    <ID>FunctionNaming:InstalledAppPicker.kt$@Composable fun AppPickerDialog( apps: List&lt;InstalledAppInfo&gt;, initialQuery: String = "", onDismiss: () -&gt; Unit, onSelect: (InstalledAppInfo) -&gt; Unit, )</ID>
+    <ID>FunctionNaming:MacTamperAlertSection.kt$@Composable fun MacTamperAlertSection(context: Context)</ID>
+    <ID>FunctionNaming:OnboardingWizard.kt$@Composable fun OnboardingWizard(context: Context, onComplete: () -&gt; Unit)</ID>
+    <ID>FunctionNaming:OnboardingWizard.kt$@Composable private fun AccessibilityStep(context: Context, onContinue: () -&gt; Unit)</ID>
+    <ID>FunctionNaming:OnboardingWizard.kt$@Composable private fun AccountabilityPartnerSmsStep(context: Context, onContinue: () -&gt; Unit)</ID>
+    <ID>FunctionNaming:OnboardingWizard.kt$@Composable private fun ContentFilterStep(context: Context, onContinue: () -&gt; Unit)</ID>
+    <ID>FunctionNaming:OnboardingWizard.kt$@Composable private fun DeviceOwnerStep(context: Context, onContinue: () -&gt; Unit)</ID>
+    <ID>FunctionNaming:OnboardingWizard.kt$@Composable private fun DoneStep(onFinish: () -&gt; Unit)</ID>
+    <ID>FunctionNaming:OnboardingWizard.kt$@Composable private fun OverlayStep(context: Context, onContinue: () -&gt; Unit)</ID>
+    <ID>FunctionNaming:OnboardingWizard.kt$@Composable private fun RestrictionsStep(context: Context, onContinue: () -&gt; Unit)</ID>
+    <ID>FunctionNaming:OnboardingWizard.kt$@Composable private fun WelcomeStep(onContinue: () -&gt; Unit)</ID>
+    <ID>FunctionNaming:OnboardingWizard.kt$@Composable private fun WizardCodeBlock(text: String)</ID>
+    <ID>FunctionNaming:OnboardingWizard.kt$@Composable private fun WizardScaffold( title: String, subtitle: String, onContinue: (() -&gt; Unit)?, continueLabel: String = "Continue", content: @Composable ColumnScope.() -&gt; Unit, )</ID>
+    <ID>FunctionNaming:OtterlingComponents.kt$@Composable fun FilledPillButton( text: String, onClick: () -&gt; Unit, modifier: Modifier = Modifier, icon: ImageVector? = null, enabled: Boolean = true, )</ID>
+    <ID>FunctionNaming:OtterlingComponents.kt$@Composable fun OutlinedPillButton( text: String, onClick: () -&gt; Unit, modifier: Modifier = Modifier, icon: ImageVector? = null, enabled: Boolean = true, )</ID>
+    <ID>FunctionNaming:OtterlingComponents.kt$@Composable fun StatTile( value: String, label: String, modifier: Modifier = Modifier, caption: String? = null, )</ID>
+    <ID>FunctionNaming:OtterlingComponents.kt$@Composable fun TextPillButton(text: String, onClick: () -&gt; Unit, modifier: Modifier = Modifier, enabled: Boolean = true)</ID>
+    <ID>FunctionNaming:OtterlingComponents.kt$@Composable fun TonalPillButton( text: String, onClick: () -&gt; Unit, modifier: Modifier = Modifier, icon: ImageVector? = null, enabled: Boolean = true, )</ID>
+    <ID>FunctionNaming:OtterlingComponents.kt$@Composable private fun PillButtonContent(text: String, icon: ImageVector?)</ID>
+    <ID>FunctionNaming:PinLockScreen.kt$@Composable fun PinLockScreen( pinAuthManager: PinAuthManager, onUnlocked: () -&gt; Unit, onCancel: () -&gt; Unit, )</ID>
+    <ID>FunctionNaming:PinLockScreen.kt$@Composable private fun KeyButton( onClick: () -&gt; Unit, filled: Boolean = true, accent: Boolean = false, content: @Composable () -&gt; Unit, )</ID>
+    <ID>FunctionNaming:PinLockScreen.kt$@Composable private fun Keypad( onDigit: (String) -&gt; Unit, onBackspace: () -&gt; Unit, onSubmit: () -&gt; Unit, submitEnabled: Boolean, )</ID>
+    <ID>FunctionNaming:PinLockScreen.kt$@Composable private fun NoPinYetScreen(onContinue: () -&gt; Unit, onCancel: () -&gt; Unit)</ID>
+    <ID>FunctionNaming:PinLockScreen.kt$@Composable private fun PinDots(count: Int, filled: Int, error: Boolean)</ID>
+    <ID>FunctionNaming:SectionCard.kt$@Composable fun Pill(text: String, variant: PillVariant = PillVariant.Default, modifier: Modifier = Modifier)</ID>
+    <ID>FunctionNaming:SectionCard.kt$@Composable fun SectionCard( title: String, icon: ImageVector, modifier: Modifier = Modifier, subtitle: String? = null, action: @Composable (() -&gt; Unit)? = null, content: @Composable ColumnScope.() -&gt; Unit, )</ID>
+    <ID>FunctionNaming:SectionCard.kt$@Composable fun SettingsSectionHeader(text: String, modifier: Modifier = Modifier)</ID>
+    <ID>FunctionNaming:SectionCard.kt$@Composable fun StatusText(label: String, isGood: Boolean)</ID>
+    <ID>FunctionNaming:SectionCard.kt$@Composable fun SwitchRow( label: String, checked: Boolean, onCheckedChange: (Boolean) -&gt; Unit, description: String? = null, emphasizeLabel: Boolean = false, )</ID>
+    <ID>FunctionNaming:SectionCard.kt$@Composable fun SwitchRow(label: String, checked: Boolean, onCheckedChange: (Boolean) -&gt; Unit)</ID>
+    <ID>FunctionNaming:SectionCard.kt$@Composable fun TimeBudgetBar(fraction: Float, low: Boolean, modifier: Modifier = Modifier)</ID>
+    <ID>FunctionNaming:Theme.kt$@Composable fun FamilyGuardTheme( darkTheme: Boolean = isSystemInDarkTheme(), content: @Composable () -&gt; Unit, )</ID>
+    <ID>FunctionNaming:UpdateSection.kt$@Composable fun CheckForUpdatesDialog(context: Context, onDismiss: () -&gt; Unit)</ID>
+    <ID>FunctionNaming:UpdateSection.kt$@Composable fun UpdateSection(context: Context)</ID>
+    <ID>FunctionNaming:VpnFilterSection.kt$@Composable fun VpnFilterSection(context: Context)</ID>
+    <ID>FunctionNaming:VpnFilterSection.kt$@Composable private fun ExemptAppsDialog( exemptPackages: Set&lt;String&gt;, dashboardManaged: Set&lt;String&gt;, autoExemptCount: Int, appLabel: (String) -&gt; String, onAdd: () -&gt; Unit, onRemove: (String) -&gt; Unit, onDismiss: () -&gt; Unit, )</ID>
+    <ID>LoopWithTooManyJumpStatements:AlertReporter.kt$AlertReporter$for</ID>
+    <ID>LoopWithTooManyJumpStatements:AppTimeBudgetManager.kt$AppTimeBudgetManager$for</ID>
+    <ID>LoopWithTooManyJumpStatements:DebugUnsuspendReceiver.kt$DebugUnsuspendReceiver$for</ID>
+    <ID>LoopWithTooManyJumpStatements:FocusGuardAccessibilityService.kt$FocusGuardAccessibilityService$while</ID>
+    <ID>LoopWithTooManyJumpStatements:HabitRuleManager.kt$HabitRuleManager$for</ID>
+    <ID>LoopWithTooManyJumpStatements:HabitShareApiClient.kt$HabitShareApiClient$for</ID>
+    <ID>LoopWithTooManyJumpStatements:ImageMatcher.kt$ImageMatcher$for</ID>
+    <ID>LoopWithTooManyJumpStatements:ProtectionController.kt$ProtectionController$for</ID>
+    <ID>LoopWithTooManyJumpStatements:UdpRelayManager.kt$UdpRelayManager$while</ID>
+    <ID>LoopWithTooManyJumpStatements:VpnFilterService.kt$VpnFilterService$while</ID>
+    <ID>MatchingDeclarationName:InstalledAppPicker.kt$InstalledAppInfo</ID>
+    <ID>MaxLineLength:AccessibilityGuardActivity.kt$AccessibilityGuardActivity.Companion$.</ID>
+    <ID>MaxLineLength:AccountabilityPartnerSection.kt$details = "SMS alerts turned off (was texting ${goingSilentNumbers.size} number(s))"</ID>
+    <ID>MaxLineLength:AlertReporter.kt$AlertReporter$"Otterling: daily SMS cap (${AccountabilityPartnerSettings.DAILY_SMS_CAP}) reached; further alerts logged only."</ID>
+    <ID>MaxLineLength:AlertReporter.kt$AlertReporter$outboxDao.update(entry.copy(sent = true, lastAttemptMillis = now, attemptCount = entry.attemptCount + 1))</ID>
+    <ID>MaxLineLength:AppShell.kt$Tab$private enum</ID>
+    <ID>MaxLineLength:AppSuspensionManager.kt$AppSuspensionManager$if (pkg in dashboardPackages) BlockedApp(packageName = pkg, blocked = true) else localByPackage.getValue(pkg)</ID>
+    <ID>MaxLineLength:AppSuspensionManager.kt$AppSuspensionManager$val hidden = dpm?.let { runCatching { it.isApplicationHidden(admin, packageName) }.getOrDefault(false) } ?: false</ID>
+    <ID>MaxLineLength:AppTimeBudgetManager.kt$AppTimeBudgetManager$dashboardLimitMinutes != null -&gt; AppTimeBudget(packageName = packageName, dailyLimitMinutes = dashboardLimitMinutes)</ID>
+    <ID>MaxLineLength:AppTimeBudgetManager.kt$AppTimeBudgetManager$return packages.mapNotNull { packageName -&gt; merge(packageName, localByPackage[packageName], dashboard[packageName]) }</ID>
+    <ID>MaxLineLength:AppUidResolver.kt$AppUidResolver$fun</ID>
+    <ID>MaxLineLength:CloudFilterSettings.kt$CloudFilterSettings$fun proxyUser(): String</ID>
+    <ID>MaxLineLength:CustomBlocklistManager.kt$CustomBlocklistManager$val websites = DashboardConfigStore(appContext).snapshot()?.optJSONArray("blockedWebsites") ?: return emptyList()</ID>
+    <ID>MaxLineLength:CustomBlocklistManager.kt$CustomBlocklistManager.Companion$}</ID>
+    <ID>MaxLineLength:DashboardScreen.kt$private</ID>
+    <ID>MaxLineLength:DashboardScreen.kt$val onContainer = if (good) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onErrorContainer</ID>
+    <ID>MaxLineLength:DeviceRemovedActivity.kt$DeviceRemovedActivity.Companion$.</ID>
+    <ID>MaxLineLength:FcmTokenRegistrar.kt$FcmTokenRegistrar$Log.w(TAG, "Firebase not configured (no google-services.json) -- instant tamper alerts disabled, falling back to the 15-minute poll", error)</ID>
+    <ID>MaxLineLength:FcmTokenRegistrar.kt$FcmTokenRegistrar$if (!MacTamperPollSettings(appContext).isConfigured()) return</ID>
+    <ID>MaxLineLength:FcmTokenRegistrar.kt$FcmTokenRegistrar$val</ID>
+    <ID>MaxLineLength:FocusSettingsSections.kt$"-&gt; ${formatDaysOfWeek(daysOfWeek)} ${formatMinuteOfDay(windowStart)}-${formatMinuteOfDay(windowEnd)}, no habit needed"</ID>
+    <ID>MaxLineLength:FocusSettingsSections.kt$"-&gt; only enforced ${formatDaysOfWeek(daysOfWeek)} ${formatMinuteOfDay(windowStart)}-${formatMinuteOfDay(windowEnd)}"</ID>
+    <ID>MaxLineLength:FocusSettingsSections.kt$Row</ID>
+    <ID>MaxLineLength:FocusSettingsSections.kt$Text("Nothing detected yet -- open the habit tracker app first.", style = MaterialTheme.typography.bodySmall)</ID>
+    <ID>MaxLineLength:FocusSettingsSections.kt$contentColor = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant</ID>
+    <ID>MaxLineLength:FocusSettingsSections.kt$context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))</ID>
+    <ID>MaxLineLength:FocusSettingsSections.kt$if (timeOnly) "$targetLabel blocked" else "$targetLabel blocked until \"$conditionLabel\" done in $triggerLabel"</ID>
+    <ID>MaxLineLength:FocusSettingsSections.kt$if (unlocked) "Outside its window right now" else if (timeOnly) "Inside its window -- blocked" else "Inside its window -- blocked until done"</ID>
+    <ID>MaxLineLength:FocusSettingsSections.kt$private</ID>
+    <ID>MaxLineLength:FocusSettingsSections.kt$selectedHabits = if (name in selectedHabits) selectedHabits - name else selectedHabits + name</ID>
+    <ID>MaxLineLength:FocusSettingsSections.kt$val container = if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceVariant</ID>
+    <ID>MaxLineLength:FocusSettingsSections.kt$val content = if (selected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant</ID>
+    <ID>MaxLineLength:FocusSettingsSections.kt$val subText = budget.subLimitMinutes?.let { " (${budget.subLimitLabel ?: "sub-limit"}: ${it} min)" } ?: ""</ID>
+    <ID>MaxLineLength:FocusSettingsSections.kt$var bitmap by remember(ref.absolutePath, ref.lastModified()) { mutableStateOf&lt;android.graphics.Bitmap?&gt;(null) }</ID>
+    <ID>MaxLineLength:HabitProofActivity.kt$HabitProofActivity.Companion$.</ID>
+    <ID>MaxLineLength:HabitProofActivity.kt$Text("No reference photo set for \"$habitName\"", style = MaterialTheme.typography.headlineSmall, textAlign = TextAlign.Center)</ID>
+    <ID>MaxLineLength:HabitProofPrompter.kt$HabitProofPrompter$.</ID>
+    <ID>MaxLineLength:HabitRuleManager.kt$HabitRuleManager$(0 until apps.length()).mapNotNull { apps.optJSONObject(it)?.optString("appId")?.takeIf(String::isNotBlank) }</ID>
+    <ID>MaxLineLength:HabitRuleManager.kt$HabitRuleManager$details = "Unlocked ${rule.targetPackageNames().joinToString()} for ${rule.unlockMinutes} minutes after $condition."</ID>
+    <ID>MaxLineLength:HabitShareApiClient.kt$HabitShareApiClient$if (code == 400 || code == 401 || code == 403) LoginResult.InvalidCredentials else LoginResult.NetworkError</ID>
+    <ID>MaxLineLength:MainActivity.kt$MainActivity$if (onboardingState.isComplete() &amp;&amp; deviceOwnerActive) Screen.Home else Screen.Onboarding</ID>
+    <ID>MaxLineLength:MitmExemptionPolicyTest.kt$MitmExemptionPolicyTest$MitmExemptionPolicy.isExempt(ownerUid = 99999, exemptUids = setOf(10001), hostname = "youtube.com", exemptHostSuffixes = suffixes)</ID>
+    <ID>MaxLineLength:MitmExemptionPolicyTest.kt$MitmExemptionPolicyTest$MitmExemptionPolicy.isExempt(ownerUid = null, exemptUids = setOf(10001), hostname = "notgooglevideo.com", exemptHostSuffixes = suffixes)</ID>
+    <ID>MaxLineLength:MitmExemptionPolicyTest.kt$MitmExemptionPolicyTest$MitmExemptionPolicy.isExempt(ownerUid = null, exemptUids = setOf(10001), hostname = "rr3---sn-abc.googlevideo.com", exemptHostSuffixes = suffixes)</ID>
+    <ID>MaxLineLength:MitmExemptionPolicyTest.kt$MitmExemptionPolicyTest$assertFalse(MitmExemptionPolicy.isExempt(ownerUid = 42, exemptUids = emptySet(), hostname = "youtube.com", exemptHostSuffixes = suffixes))</ID>
+    <ID>MaxLineLength:MitmExemptionPolicyTest.kt$MitmExemptionPolicyTest$assertFalse(MitmExemptionPolicy.isExempt(ownerUid = null, exemptUids = emptySet(), hostname = "youtube.com", exemptHostSuffixes = suffixes))</ID>
+    <ID>MaxLineLength:MitmExemptionPolicyTest.kt$MitmExemptionPolicyTest$assertFalse(MitmExemptionPolicy.isExempt(ownerUid = null, exemptUids = setOf(10001), hostname = "", exemptHostSuffixes = suffixes))</ID>
+    <ID>MaxLineLength:MitmExemptionPolicyTest.kt$MitmExemptionPolicyTest$assertFalse(MitmExemptionPolicy.isExempt(ownerUid = null, exemptUids = setOf(10001), hostname = "example.com", exemptHostSuffixes = suffixes))</ID>
+    <ID>MaxLineLength:MitmExemptionPolicyTest.kt$MitmExemptionPolicyTest$assertFalse(MitmExemptionPolicy.isExempt(ownerUid = null, exemptUids = setOf(10001), hostname = null, exemptHostSuffixes = suffixes))</ID>
+    <ID>MaxLineLength:MitmExemptionPolicyTest.kt$MitmExemptionPolicyTest$assertTrue(MitmExemptionPolicy.isExempt(ownerUid = 10001, exemptUids = setOf(10001), hostname = "totally-unrelated.example", exemptHostSuffixes = suffixes))</ID>
+    <ID>MaxLineLength:MitmExemptionPolicyTest.kt$MitmExemptionPolicyTest$assertTrue(MitmExemptionPolicy.isExempt(ownerUid = 10001, exemptUids = setOf(10001), hostname = null, exemptHostSuffixes = suffixes))</ID>
+    <ID>MaxLineLength:MitmExemptionPolicyTest.kt$MitmExemptionPolicyTest$assertTrue(MitmExemptionPolicy.isExempt(ownerUid = null, exemptUids = setOf(10001), hostname = "YOUTUBE.COM", exemptHostSuffixes = suffixes))</ID>
+    <ID>MaxLineLength:MitmExemptionPolicyTest.kt$MitmExemptionPolicyTest$assertTrue(MitmExemptionPolicy.isExempt(ownerUid = null, exemptUids = setOf(10001), hostname = "www.youtube.com", exemptHostSuffixes = suffixes))</ID>
+    <ID>MaxLineLength:MitmExemptionPolicyTest.kt$MitmExemptionPolicyTest$assertTrue(MitmExemptionPolicy.isExempt(ownerUid = null, exemptUids = setOf(10001), hostname = "youtube.com", exemptHostSuffixes = suffixes))</ID>
+    <ID>MaxLineLength:OnboardingStep.kt$OnboardingStep</ID>
+    <ID>MaxLineLength:OnboardingWizard.kt$OnboardingStep.Accessibility -&gt; AccessibilityStep(context, onContinue = { currentStep = OnboardingStep.Overlay })</ID>
+    <ID>MaxLineLength:OnboardingWizard.kt$OnboardingStep.AccountabilityPartnerSms -&gt; AccountabilityPartnerSmsStep(context, onContinue = { currentStep = OnboardingStep.Accessibility })</ID>
+    <ID>MaxLineLength:OnboardingWizard.kt$OnboardingStep.ContentFilter -&gt; ContentFilterStep(context, onContinue = { currentStep = OnboardingStep.AccountabilityPartnerSms })</ID>
+    <ID>MaxLineLength:OnboardingWizard.kt$OnboardingStep.DeviceOwner -&gt; DeviceOwnerStep(context, onContinue = { currentStep = OnboardingStep.Restrictions })</ID>
+    <ID>MaxLineLength:OnboardingWizard.kt$OnboardingStep.Restrictions -&gt; RestrictionsStep(context, onContinue = { currentStep = OnboardingStep.ContentFilter })</ID>
+    <ID>MaxLineLength:OnboardingWizard.kt$context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))</ID>
+    <ID>MaxLineLength:PinningFailureTracker.kt$PinningFailureTracker$Log.i(TAG, "Auto-exempted $pkg (uid=$uid) from MITM after ${recentFailures.size} suspected pinning rejections")</ID>
+    <ID>MaxLineLength:ProtectionController.kt$ProtectionController$pm.getInstalledApplications(PackageManager.MATCH_DISABLED_COMPONENTS or PackageManager.MATCH_UNINSTALLED_PACKAGES)</ID>
+    <ID>MaxLineLength:ProtectionEnforcementService.kt$ProtectionEnforcementService$runCatching { EnforcementCoordinator.runExclusive { restrictionsManager.detectDriftAndReapply(tamperLogger) } }</ID>
+    <ID>MaxLineLength:ProxyOutageTrackerTest.kt$ProxyOutageTrackerTest$assertTrue(tracker.recordFailure("203.0.113.${10 + ProxyOutageTracker.OUTAGE_DISTINCT_DESTINATIONS_THRESHOLD - 1}"))</ID>
+    <ID>MaxLineLength:RestrictionPreferences.kt$RestrictionPreferences$dashboardProtection(KEY_CHROME_INCOGNITO_BLOCK_DASHBOARD) ?: prefs.getBoolean(KEY_CHROME_INCOGNITO_BLOCKED, true)</ID>
+    <ID>MaxLineLength:SmsOutboxMigration18to19Test.kt$SmsOutboxMigration18to19Test$"INSERT INTO sms_outbox (createdAtMillis, body, attemptCount, lastAttemptMillis, sent, recipientOverride) "</ID>
+    <ID>MaxLineLength:TcpRelayManager.kt$TcpRelayManager$"${connection.key.dstIp}:${connection.key.dstPort} closed: ${connection.bytesFromSocket}B in ${elapsedMs}ms "</ID>
+    <ID>MaxLineLength:TcpRelayManager.kt$TcpRelayManager$"${connection.key.dstIp}:${connection.key.dstPort} proxy looks down -- falling back to a direct connection"</ID>
+    <ID>MaxLineLength:TcpRelayManager.kt$TcpRelayManager$"${connection.key.dstIp}:${connection.key.dstPort} window scale: client offered=${synPacket.tcpWindowScale}, negotiated=${connection.ourShift != null}"</ID>
+    <ID>MaxLineLength:TcpRelayManager.kt$TcpRelayManager$"${if (useProxy) "Proxy CONNECT via ${proxyConfig.host}:${proxyConfig.port} to" else "TCP connect to"} "</ID>
+    <ID>MaxLineLength:TcpRelayManager.kt$TcpRelayManager$"(%.1fMbps), reads=${connection.readCount}, socket-read=${connection.socketReadMillis}ms, ".format(mbps)</ID>
+    <ID>MaxLineLength:TcpRelayManager.kt$TcpRelayManager$"tun-write=${connection.tunWriteMillis}ms, window-wait=${connection.windowWaitMillis}ms, shift=${connection.ourShift}"</ID>
+    <ID>MaxLineLength:TcpRelayManager.kt$TcpRelayManager$Log.d(TAG, "${connection.key.dstIp}:${connection.key.dstPort} MITM-exempt (uid=$ownerUid) -- connecting directly")</ID>
+    <ID>MaxLineLength:TcpRelayManager.kt$TcpRelayManager$socket.connect(InetSocketAddress(InetAddress.getByName(connection.key.dstIp), connection.key.dstPort), CONNECT_TIMEOUT_MS)</ID>
+    <ID>MaxLineLength:TcpRelayManager.kt$TcpRelayManager$val credentials = Base64.getEncoder().encodeToString("${proxyConfig.user}:${proxyConfig.password}".toByteArray())</ID>
+    <ID>MaxLineLength:TcpRelayManager.kt$TcpRelayManager$writeToTun(packet.buildTcpSegment(connection.serverSeq, ackValue, IpPacket.TCP_ACK, encodedWindow(connection)))</ID>
+    <ID>MaxLineLength:TcpRelayManagerConnectBufferingTest.kt$TcpRelayManagerConnectBufferingTest$assertTrue("expected a SYN-ACK (retry succeeded), got flags=${reply.tcpFlags}", reply.isSyn &amp;&amp; reply.isAck &amp;&amp; !reply.isRst)</ID>
+    <ID>MaxLineLength:TcpRelayManagerConnectBufferingTest.kt$TcpRelayManagerConnectBufferingTest$client.getOutputStream().write("HTTP/1.1 200 Connection established\r\n\r\n".toByteArray(Charsets.US_ASCII))</ID>
+    <ID>MaxLineLength:TcpRelayManagerConnectBufferingTest.kt$TcpRelayManagerConnectBufferingTest$proxyConfig = ProxyConfig(enabled = true, host = "127.0.0.1", port = server.localPort, user = "u", password = "p")</ID>
+    <ID>MaxLineLength:TcpRelayManagerConnectBufferingTest.kt$TcpRelayManagerConnectBufferingTest$proxyConfig = ProxyConfig(enabled = true, host = "vpn.bartholomew.help", port = 8090, user = "otterling", password = password!!)</ID>
+    <ID>MaxLineLength:TcpRelayManagerConnectBufferingTest.kt$TcpRelayManagerConnectBufferingTest$val response = "HTTP/1.1 200 Connection established\r\n\r\n".toByteArray(Charsets.US_ASCII) + pipelinedPayload</ID>
+    <ID>MaxLineLength:UdpRelayManager.kt$UdpRelayManager$if (isBlockedDestination(key.dstIp, key.dstPort)) return</ID>
+    <ID>MaxLineLength:UpdateInstallResultReceiver.kt$UpdateInstallResultReceiver$severity = if (status == PackageInstaller.STATUS_SUCCESS) AlertSeverity.INFO else AlertSeverity.WARNING</ID>
+    <ID>MaxLineLength:UpdateSection.kt$Text("Current version: ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})", style = MaterialTheme.typography.bodySmall)</ID>
+    <ID>MaxLineLength:UpdateSection.kt$context.startActivity(Intent(Intent.ACTION_VIEW, uri).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))</ID>
+    <ID>MaxLineLength:VpnFilterSection.kt$Text("Local blocklist: $domainCount domains (updated: $lastUpdatedText)", style = MaterialTheme.typography.bodySmall)</ID>
+    <ID>MaxLineLength:VpnFilterSection.kt$proxyStatusMessage = if (reachable) "Proxy reachable." else "Proxy unreachable (check host/port/credentials)."</ID>
+    <ID>MaxLineLength:VpnFilterService.kt$VpnFilterService$Log.d(TAG, "DNS: unparseable query (${packet.payload.size} bytes) from ${packet.sourceAddress}:${packet.sourcePort}")</ID>
+    <ID>MaxLineLength:VpnFilterService.kt$VpnFilterService$details = "Filter proxy CONNECT failing across multiple destinations -- filter server may be unreachable"</ID>
+    <ID>MaxLineLength:VpnFilterService.kt$VpnFilterService$runCatching { runPacketLoop(tun, blocklist, classifiedDomains, cloudFilterSettings, alertSettings, generationScope) }</ID>
+    <ID>NestedBlockDepth:BrowserPackages.kt$BrowserPackages$fun resolve(context: Context, floor: Set&lt;String&gt;): Set&lt;String&gt;</ID>
+    <ID>NestedBlockDepth:HabitShareApiClient.kt$HabitShareApiClient$private fun trackerListHasToday(list: JSONArray, todayLocal: LocalDate, todayUtc: LocalDate): Boolean</ID>
+    <ID>NestedBlockDepth:UdpRelayManager.kt$UdpRelayManager$private suspend fun receiveLoop(key: FlowKey, flow: Flow)</ID>
+    <ID>SwallowedException:CaCertInstaller.kt$CaCertInstaller$error: SecurityException</ID>
+    <ID>SwallowedException:HabitShareApiClient.kt$HabitShareApiClient$error: Exception</ID>
+    <ID>SwallowedException:TcpRelayManager.kt$TcpRelayManager$error: IOException</ID>
+    <ID>SwallowedException:UdpRelayManager.kt$UdpRelayManager$error: IOException</ID>
+    <ID>SwallowedException:UdpRelayManager.kt$UdpRelayManager$timeout: SocketTimeoutException</ID>
+    <ID>SwallowedException:VpnFilterManager.kt$VpnFilterManager$error: SecurityException</ID>
+    <ID>SwallowedException:VpnFilterService.kt$VpnFilterService$error: PackageManager.NameNotFoundException</ID>
+    <ID>ThrowsCount:CustomBlocklistManager.kt$CustomBlocklistManager.Companion$fun normalize(input: String): BlocklistEntry</ID>
+    <ID>ThrowsCount:TcpRelayManager.kt$TcpRelayManager$private fun performHttpConnect(socket: Socket, targetHost: String, targetPort: Int): BufferedInputStream</ID>
+    <ID>TooGenericExceptionCaught:ActiveAdminRemover.kt$ActiveAdminRemover$error: RuntimeException</ID>
+    <ID>TooGenericExceptionCaught:AppUidResolver.kt$AppUidResolver$error: Exception</ID>
+    <ID>TooGenericExceptionCaught:AppVersionReporter.kt$AppVersionReporter$error: Exception</ID>
+    <ID>TooGenericExceptionCaught:ApprovedUpdateManager.kt$ApprovedUpdateManager$error: Exception</ID>
+    <ID>TooGenericExceptionCaught:BrowserPackages.kt$BrowserPackages$error: Exception</ID>
+    <ID>TooGenericExceptionCaught:CaCertInstaller.kt$CaCertInstaller$error: Exception</ID>
+    <ID>TooGenericExceptionCaught:CloudFilterSettings.kt$CloudFilterSettings$error: Exception</ID>
+    <ID>TooGenericExceptionCaught:DashboardConfigStore.kt$DashboardConfigStore$error: Exception</ID>
+    <ID>TooGenericExceptionCaught:DebugUnsuspendReceiver.kt$DebugUnsuspendReceiver$t: Throwable</ID>
+    <ID>TooGenericExceptionCaught:FcmTokenRegistrar.kt$FcmTokenRegistrar$error: Exception</ID>
+    <ID>TooGenericExceptionCaught:GuardianSmsSender.kt$GuardianSmsSender$error: Exception</ID>
+    <ID>TooGenericExceptionCaught:HabitShareApiClient.kt$HabitShareApiClient$error: Exception</ID>
+    <ID>TooGenericExceptionCaught:ImageMatcher.kt$ImageMatcher$t: Throwable</ID>
+    <ID>TooGenericExceptionCaught:InstalledAppsReporter.kt$InstalledAppsReporter$error: Exception</ID>
+    <ID>TooGenericExceptionCaught:MacTamperPollWorker.kt$MacTamperPollWorker$error: Exception</ID>
+    <ID>TooGenericExceptionCaught:PinAuthManager.kt$PinAuthManager$error: Exception</ID>
+    <ID>TooGenericExceptionCaught:PinningFailureTracker.kt$PinningFailureTracker$error: Exception</ID>
+    <ID>TooGenericExceptionCaught:ReportConfigStore.kt$ReportConfigStore$error: Exception</ID>
+    <ID>TooGenericExceptionCaught:TcpRelayManager.kt$TcpRelayManager$error: Exception</ID>
+    <ID>TooGenericExceptionCaught:VpnFilterService.kt$VpnFilterService$error: Exception</ID>
+    <ID>TooManyFunctions:AccountabilityPartnerSettings.kt$AccountabilityPartnerSettings</ID>
+    <ID>TooManyFunctions:AppDatabase.kt$AppDatabase : RoomDatabase</ID>
+    <ID>TooManyFunctions:AppTimeBudgetManager.kt$AppTimeBudgetManager</ID>
+    <ID>TooManyFunctions:ApprovedUpdateManager.kt$ApprovedUpdateManager</ID>
+    <ID>TooManyFunctions:CloudFilterSettings.kt$CloudFilterSettings</ID>
+    <ID>TooManyFunctions:CustomBlocklistManager.kt$CustomBlocklistManager</ID>
+    <ID>TooManyFunctions:DashboardScreen.kt$app.otterling.ui.DashboardScreen.kt</ID>
+    <ID>TooManyFunctions:DeviceRestrictionsManager.kt$DeviceRestrictionsManager</ID>
+    <ID>TooManyFunctions:FocusGuardAccessibilityService.kt$FocusGuardAccessibilityService : AccessibilityService</ID>
+    <ID>TooManyFunctions:FocusSettingsSections.kt$app.otterling.ui.FocusSettingsSections.kt</ID>
+    <ID>TooManyFunctions:GuardianAlertSettings.kt$GuardianAlertSettings</ID>
+    <ID>TooManyFunctions:HabitProofManager.kt$HabitProofManager</ID>
+    <ID>TooManyFunctions:HabitRuleManager.kt$HabitRuleManager</ID>
+    <ID>TooManyFunctions:HabitShareAccountManager.kt$HabitShareAccountManager</ID>
+    <ID>TooManyFunctions:HabitShareApiClient.kt$HabitShareApiClient</ID>
+    <ID>TooManyFunctions:IpPacket.kt$IpPacket$Companion</ID>
+    <ID>TooManyFunctions:MacTamperPollSettings.kt$MacTamperPollSettings</ID>
+    <ID>TooManyFunctions:MitmExemptManager.kt$MitmExemptManager</ID>
+    <ID>TooManyFunctions:OnboardingWizard.kt$app.otterling.ui.OnboardingWizard.kt</ID>
+    <ID>TooManyFunctions:PackageDisableStore.kt$PackageDisableStore</ID>
+    <ID>TooManyFunctions:TcpRelayManager.kt$TcpRelayManager</ID>
+    <ID>TooManyFunctions:VpnFilterManager.kt$VpnFilterManager</ID>
+    <ID>TooManyFunctions:VpnFilterService.kt$VpnFilterService : VpnService</ID>
+    <ID>UnusedPrivateClass:FocusSettingsSections.kt$HabitRuleEditContext</ID>
+  </CurrentIssues>
+</SmellBaseline>

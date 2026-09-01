@@ -29,7 +29,20 @@ object FcmTokenRegistrar {
     fun registerCurrentToken(context: Context) {
         val appContext = context.applicationContext
         if (!MacTamperPollSettings(appContext).isConfigured()) return // No server/token yet -- nothing to register with.
-        FirebaseMessaging.getInstance().token
+        // FirebaseMessaging.getInstance() throws IllegalStateException synchronously when no
+        // google-services.json was present at build time (see app/build.gradle.kts's
+        // googleServicesJson comment) -- there's no default FirebaseApp to back it. Both call
+        // sites (MainActivity, DeviceAdminReceiverImpl) call this unguarded, so without this catch
+        // a build shipped without google-services.json crashes app launch and device-admin
+        // onEnabled instead of just falling back to MacTamperPollWorker's 15-minute poll as
+        // documented above.
+        val messaging = try {
+            FirebaseMessaging.getInstance()
+        } catch (error: IllegalStateException) {
+            Log.w(TAG, "Firebase not configured (no google-services.json) -- instant tamper alerts disabled, falling back to the 15-minute poll", error)
+            return
+        }
+        messaging.token
             .addOnSuccessListener { token -> register(appContext, token) }
             .addOnFailureListener { error -> Log.w(TAG, "Could not obtain FCM token", error) }
     }

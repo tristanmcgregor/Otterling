@@ -1,0 +1,9 @@
+# Pinned deps for lockprofile.Dockerfile (google-auth, requests: lockprofile_service.py;
+# onnxruntime, numpy, Pillow: onnx_nsfw_pipeline.py). Previously installed unpinned, so a routine
+# image rebuild could silently pick up a new onnxruntime/numpy/Pillow release and break the NSFW
+# classifier pipeline with no CI signal until it was live. Bump deliberately, not by rebuilding.
+google-auth==2.57.0
+requests==2.34.2
+onnxruntime==1.29.0
+numpy==2.4.6
+Pillow==12.3.0

@@ -1,5 +1,6 @@
 plugins {
     id("com.android.application")
+    id("io.gitlab.arturbosch.detekt")
 }
 
 android {
@@ -28,4 +29,10 @@ dependencies {
     // Not pulled in transitively here the way it is for :app (via Room/WorkManager) -- this
     // module has none of those, just the coroutine-based relay code itself.
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
+}
+
+detekt {
+    buildUponDefaultConfig = true
+    config.setFrom(rootProject.file("config/detekt/detekt.yml"))
+    baseline = rootProject.file("config/detekt/baseline-proxytest.xml")
 }
