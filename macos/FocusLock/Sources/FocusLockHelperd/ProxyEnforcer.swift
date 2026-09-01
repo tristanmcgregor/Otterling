@@ -23,6 +23,43 @@ enum ProxyEnforcer {
     /// `EnforcementLoop` so `PFBlocker` can keep the proxy itself reachable when force-through is on.
     private(set) static var lastResolvedProxyIPs: [String] = []
 
+    /// Debounced reachability signal for the current `target` -- same pattern (and same
+    /// `requiredConsecutiveSamples` threshold) as `HomeLANState`, added for the same class of
+    /// reason: a single slow/dropped 2s TCP probe against a proxy that's actually fine was flipping
+    /// the *system-wide* HTTP/HTTPS proxy off and back on almost every tick, and each flip runs
+    /// `networksetup -setwebproxystate ... off/on`, which silently drops every connection currently
+    /// tunnelled through the proxy -- including whatever the user is mid-download on. A proxy that's
+    /// merely flaky must ride out a few bad probes before this tears the system proxy down; one
+    /// that's genuinely down still fails open within a few ticks, same as before.
+    private static let requiredConsecutiveReachabilitySamples = 3
+    private static var lastProbedTarget: String?
+    private static var debouncedReachableState = false
+    private static var consecutiveOppositeReachability = 0
+
+    private static func debouncedReachable(host: String, port: Int) -> Bool {
+        // A different target (e.g. home-LAN vs. public host swap) has no bearing on the previous
+        // target's reachability history -- start that debounce fresh rather than carrying over a
+        // stale streak that was measuring a different address entirely.
+        let key = "\(host):\(port)"
+        if key != lastProbedTarget {
+            lastProbedTarget = key
+            debouncedReachableState = false
+            consecutiveOppositeReachability = 0
+        }
+
+        let raw = isReachable(host: host, port: port)
+        if raw == debouncedReachableState {
+            consecutiveOppositeReachability = 0
+        } else {
+            consecutiveOppositeReachability += 1
+            if consecutiveOppositeReachability >= requiredConsecutiveReachabilitySamples {
+                debouncedReachableState = raw
+                consecutiveOppositeReachability = 0
+            }
+        }
+        return debouncedReachableState
+    }
+
     /// Returns true iff the system proxy is now set AND pointed at a reachable mitmproxy. False means
     /// "not enforcing" (disabled, no password, or unreachable) and the proxy has been removed.
     /// `onHomeLAN` is `HomeLANState`'s DEBOUNCED signal -- see that type's doc comment for the
@@ -47,7 +84,7 @@ enum ProxyEnforcer {
 
         let target = (host == FocusLockConstants.defaultCloudFilterHost && onHomeLAN) ? FocusLockConstants.homeLANHost : host
 
-        guard let ips = resolveIPv4(target), !ips.isEmpty, isReachable(host: target, port: port) else {
+        guard let ips = resolveIPv4(target), !ips.isEmpty, debouncedReachable(host: target, port: port) else {
             FileHandle.standardError.write(
                 "[proxy] mitmproxy \(target):\(port) is not reachable -- NOT setting the proxy (fail open)\n".data(using: .utf8)!
             )
