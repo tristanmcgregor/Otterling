@@ -9,9 +9,9 @@
     <ID>CyclomaticComplexMethod:DebugUnsuspendReceiver.kt$DebugUnsuspendReceiver$override fun onReceive(context: Context, intent: Intent?)</ID>
     <ID>CyclomaticComplexMethod:FocusGuardAccessibilityService.kt$FocusGuardAccessibilityService$private fun hasFullscreenPortraitVideoSurface(root: AccessibilityNodeInfo): Boolean</ID>
     <ID>CyclomaticComplexMethod:FocusGuardAccessibilityService.kt$FocusGuardAccessibilityService$private fun hasFullscreenReelsViewer( root: AccessibilityNodeInfo, screenWidth: Int, screenHeight: Int, ): Boolean</ID>
-    <ID>CyclomaticComplexMethod:FocusSettingsSections.kt$@Composable fun HabitRuleWizardHost( context: Context, ruleToEdit: HabitRule? = null, onDismiss: () -&gt; Unit, onSaved: () -&gt; Unit, )</ID>
-    <ID>CyclomaticComplexMethod:FocusSettingsSections.kt$@Composable fun HabitRulesSection(context: Context)</ID>
     <ID>CyclomaticComplexMethod:HabitRuleManager.kt$HabitRuleManager$private fun dashboardRules(): List&lt;HabitRule&gt;</ID>
+    <ID>CyclomaticComplexMethod:HabitRuleWizard.kt$@Composable fun HabitRuleWizardHost( context: Context, ruleToEdit: HabitRule? = null, onDismiss: () -&gt; Unit, onSaved: () -&gt; Unit, )</ID>
+    <ID>CyclomaticComplexMethod:HabitRulesSection.kt$@Composable fun HabitRulesSection(context: Context)</ID>
     <ID>CyclomaticComplexMethod:HabitShareApiClient.kt$HabitShareApiClient$private fun trackerListHasToday(list: JSONArray, todayLocal: LocalDate, todayUtc: LocalDate): Boolean</ID>
     <ID>CyclomaticComplexMethod:MacTamperPollWorker.kt$MacTamperPollWorker$private fun severityAndLabel(macType: String): Pair&lt;AlertSeverity, String&gt;</ID>
     <ID>CyclomaticComplexMethod:TcpRelayManager.kt$TcpRelayManager$private suspend fun establish(connection: Connection, synPacket: IpPacket)</ID>
@@ -43,28 +43,28 @@
     <ID>FunctionNaming:DeviceSettingsSections.kt$@Composable fun UninstallProtectionSection(context: Context)</ID>
     <ID>FunctionNaming:DeviceSettingsSections.kt$@Composable private fun CodeBlock(text: String)</ID>
     <ID>FunctionNaming:FocusSettingsSections.kt$@Composable fun AccessibilityServiceSection(context: Context)</ID>
-    <ID>FunctionNaming:FocusSettingsSections.kt$@Composable fun HabitRuleWizardHost( context: Context, ruleToEdit: HabitRule? = null, onDismiss: () -&gt; Unit, onSaved: () -&gt; Unit, )</ID>
-    <ID>FunctionNaming:FocusSettingsSections.kt$@Composable fun HabitRulesSection(context: Context)</ID>
-    <ID>FunctionNaming:FocusSettingsSections.kt$@Composable fun HabitShareAccountSection(context: Context)</ID>
-    <ID>FunctionNaming:FocusSettingsSections.kt$@Composable fun HabitShareSettingsScreen(context: Context, onBack: () -&gt; Unit)</ID>
-    <ID>FunctionNaming:FocusSettingsSections.kt$@Composable fun HabitShareVerificationSection(context: Context)</ID>
     <ID>FunctionNaming:FocusSettingsSections.kt$@Composable fun MindfulAppsSection(context: Context)</ID>
     <ID>FunctionNaming:FocusSettingsSections.kt$@Composable fun TimeBudgetsSection(context: Context)</ID>
-    <ID>FunctionNaming:FocusSettingsSections.kt$@Composable private fun AppRow(app: InstalledAppInfo, selected: Boolean, onClick: () -&gt; Unit)</ID>
-    <ID>FunctionNaming:FocusSettingsSections.kt$@Composable private fun DayOfWeekPicker(selectedDays: Set&lt;DayOfWeek&gt;, onToggle: (DayOfWeek) -&gt; Unit)</ID>
-    <ID>FunctionNaming:FocusSettingsSections.kt$@Composable private fun HabitProofLogRow(log: HabitProofLog, onRemove: () -&gt; Unit)</ID>
-    <ID>FunctionNaming:FocusSettingsSections.kt$@Composable private fun HabitRuleRow( rule: HabitRule, triggerLabel: String, targetLabel: String, now: Long, dashboardManaged: Boolean, onEdit: () -&gt; Unit, onEnabledChange: (Boolean) -&gt; Unit, onRemove: () -&gt; Unit, )</ID>
-    <ID>FunctionNaming:FocusSettingsSections.kt$@Composable private fun ProofRequirementRow( habitName: String, requirement: HabitProofRequirement?, onSetRequirement: (required: Boolean, referencePhotoPath: String?) -&gt; Unit, modifier: Modifier = Modifier, )</ID>
-    <ID>FunctionNaming:FocusSettingsSections.kt$@Composable private fun SelectablePill(text: String, selected: Boolean, onClick: () -&gt; Unit)</ID>
     <ID>FunctionNaming:FocusSettingsSections.kt$@Composable private fun TimeBudgetInputDialog( packageName: String, onDismiss: () -&gt; Unit, onConfirm: (dailyLimitMinutes: Int, subLimitMinutes: Int?, subLimitLabel: String?) -&gt; Unit, )</ID>
-    <ID>FunctionNaming:FocusSettingsSections.kt$@Composable private fun WizardHeading(title: String, subtitle: String)</ID>
-    <ID>FunctionNaming:FocusSettingsSections.kt$@Composable private fun WizardStepHabits( habitOptions: List&lt;String&gt;, selected: Set&lt;String&gt;, onToggle: (String) -&gt; Unit, )</ID>
-    <ID>FunctionNaming:FocusSettingsSections.kt$@Composable private fun WizardStepSchedule( windowEnabled: Boolean, onWindowEnabledChange: (Boolean) -&gt; Unit, startText: String, onStartChange: (String) -&gt; Unit, endText: String, onEndChange: (String) -&gt; Unit, minutesText: String, onMinutesChange: (String) -&gt; Unit, selectedDays: Set&lt;DayOfWeek&gt;, onToggleDay: (DayOfWeek) -&gt; Unit, )</ID>
-    <ID>FunctionNaming:FocusSettingsSections.kt$@Composable private fun WizardStepTarget( apps: List&lt;InstalledAppInfo&gt;, query: String, onQueryChange: (String) -&gt; Unit, selectedPackages: Set&lt;String&gt;, onToggle: (InstalledAppInfo) -&gt; Unit, )</ID>
     <ID>FunctionNaming:FrictionActivity.kt$@Composable private fun FrictionScreen(delaySeconds: Int, onContinue: () -&gt; Unit, onGoHome: () -&gt; Unit)</ID>
     <ID>FunctionNaming:HabitProofActivity.kt$@Composable private fun HabitProofScreen( habitName: String, matchState: ProofMatchState, preview: Bitmap?, onTakePhoto: () -&gt; Unit, onSkip: () -&gt; Unit, )</ID>
     <ID>FunctionNaming:HabitProofActivity.kt$@Composable private fun NoReferencePhotoScreen(habitName: String, onDismiss: () -&gt; Unit)</ID>
     <ID>FunctionNaming:HabitProofActivity.kt$@Composable private fun ResultBadge(color: Color, matched: Boolean)</ID>
+    <ID>FunctionNaming:HabitRuleWizard.kt$@Composable fun HabitRuleWizardHost( context: Context, ruleToEdit: HabitRule? = null, onDismiss: () -&gt; Unit, onSaved: () -&gt; Unit, )</ID>
+    <ID>FunctionNaming:HabitRuleWizard.kt$@Composable private fun AppRow(app: InstalledAppInfo, selected: Boolean, onClick: () -&gt; Unit)</ID>
+    <ID>FunctionNaming:HabitRuleWizard.kt$@Composable private fun DayOfWeekPicker(selectedDays: Set&lt;DayOfWeek&gt;, onToggle: (DayOfWeek) -&gt; Unit)</ID>
+    <ID>FunctionNaming:HabitRuleWizard.kt$@Composable private fun SelectablePill(text: String, selected: Boolean, onClick: () -&gt; Unit)</ID>
+    <ID>FunctionNaming:HabitRuleWizard.kt$@Composable private fun WizardHeading(title: String, subtitle: String)</ID>
+    <ID>FunctionNaming:HabitRuleWizard.kt$@Composable private fun WizardStepHabits( habitOptions: List&lt;String&gt;, selected: Set&lt;String&gt;, onToggle: (String) -&gt; Unit, )</ID>
+    <ID>FunctionNaming:HabitRuleWizard.kt$@Composable private fun WizardStepSchedule( windowEnabled: Boolean, onWindowEnabledChange: (Boolean) -&gt; Unit, startText: String, onStartChange: (String) -&gt; Unit, endText: String, onEndChange: (String) -&gt; Unit, minutesText: String, onMinutesChange: (String) -&gt; Unit, selectedDays: Set&lt;DayOfWeek&gt;, onToggleDay: (DayOfWeek) -&gt; Unit, )</ID>
+    <ID>FunctionNaming:HabitRuleWizard.kt$@Composable private fun WizardStepTarget( apps: List&lt;InstalledAppInfo&gt;, query: String, onQueryChange: (String) -&gt; Unit, selectedPackages: Set&lt;String&gt;, onToggle: (InstalledAppInfo) -&gt; Unit, )</ID>
+    <ID>FunctionNaming:HabitRulesSection.kt$@Composable fun HabitRulesSection(context: Context)</ID>
+    <ID>FunctionNaming:HabitRulesSection.kt$@Composable private fun HabitProofLogRow(log: HabitProofLog, onRemove: () -&gt; Unit)</ID>
+    <ID>FunctionNaming:HabitRulesSection.kt$@Composable private fun HabitRuleRow( rule: HabitRule, triggerLabel: String, targetLabel: String, now: Long, dashboardManaged: Boolean, onEdit: () -&gt; Unit, onEnabledChange: (Boolean) -&gt; Unit, onRemove: () -&gt; Unit, )</ID>
+    <ID>FunctionNaming:HabitShareSettingsSections.kt$@Composable fun HabitShareAccountSection(context: Context)</ID>
+    <ID>FunctionNaming:HabitShareSettingsSections.kt$@Composable fun HabitShareSettingsScreen(context: Context, onBack: () -&gt; Unit)</ID>
+    <ID>FunctionNaming:HabitShareSettingsSections.kt$@Composable fun HabitShareVerificationSection(context: Context)</ID>
+    <ID>FunctionNaming:HabitShareSettingsSections.kt$@Composable private fun ProofRequirementRow( habitName: String, requirement: HabitProofRequirement?, onSetRequirement: (required: Boolean, referencePhotoPath: String?) -&gt; Unit, modifier: Modifier = Modifier, )</ID>
     <ID>FunctionNaming:InstalledAppPicker.kt$@Composable fun AppPickerDialog( apps: List&lt;InstalledAppInfo&gt;, initialQuery: String = "", onDismiss: () -&gt; Unit, onSelect: (InstalledAppInfo) -&gt; Unit, )</ID>
     <ID>FunctionNaming:MacTamperAlertSection.kt$@Composable fun MacTamperAlertSection(context: Context)</ID>
     <ID>FunctionNaming:OnboardingWizard.kt$@Composable fun OnboardingWizard(context: Context, onComplete: () -&gt; Unit)</ID>
@@ -131,26 +131,26 @@
     <ID>MaxLineLength:FcmTokenRegistrar.kt$FcmTokenRegistrar$Log.w(TAG, "Firebase not configured (no google-services.json) -- instant tamper alerts disabled, falling back to the 15-minute poll", error)</ID>
     <ID>MaxLineLength:FcmTokenRegistrar.kt$FcmTokenRegistrar$if (!MacTamperPollSettings(appContext).isConfigured()) return</ID>
     <ID>MaxLineLength:FcmTokenRegistrar.kt$FcmTokenRegistrar$val</ID>
-    <ID>MaxLineLength:FocusSettingsSections.kt$"-&gt; ${formatDaysOfWeek(daysOfWeek)} ${formatMinuteOfDay(windowStart)}-${formatMinuteOfDay(windowEnd)}, no habit needed"</ID>
-    <ID>MaxLineLength:FocusSettingsSections.kt$"-&gt; only enforced ${formatDaysOfWeek(daysOfWeek)} ${formatMinuteOfDay(windowStart)}-${formatMinuteOfDay(windowEnd)}"</ID>
-    <ID>MaxLineLength:FocusSettingsSections.kt$Row</ID>
-    <ID>MaxLineLength:FocusSettingsSections.kt$Text("Nothing detected yet -- open the habit tracker app first.", style = MaterialTheme.typography.bodySmall)</ID>
-    <ID>MaxLineLength:FocusSettingsSections.kt$contentColor = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant</ID>
     <ID>MaxLineLength:FocusSettingsSections.kt$context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))</ID>
-    <ID>MaxLineLength:FocusSettingsSections.kt$if (timeOnly) "$targetLabel blocked" else "$targetLabel blocked until \"$conditionLabel\" done in $triggerLabel"</ID>
-    <ID>MaxLineLength:FocusSettingsSections.kt$if (unlocked) "Outside its window right now" else if (timeOnly) "Inside its window -- blocked" else "Inside its window -- blocked until done"</ID>
-    <ID>MaxLineLength:FocusSettingsSections.kt$private</ID>
-    <ID>MaxLineLength:FocusSettingsSections.kt$selectedHabits = if (name in selectedHabits) selectedHabits - name else selectedHabits + name</ID>
-    <ID>MaxLineLength:FocusSettingsSections.kt$val container = if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceVariant</ID>
-    <ID>MaxLineLength:FocusSettingsSections.kt$val content = if (selected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant</ID>
     <ID>MaxLineLength:FocusSettingsSections.kt$val subText = budget.subLimitMinutes?.let { " (${budget.subLimitLabel ?: "sub-limit"}: ${it} min)" } ?: ""</ID>
-    <ID>MaxLineLength:FocusSettingsSections.kt$var bitmap by remember(ref.absolutePath, ref.lastModified()) { mutableStateOf&lt;android.graphics.Bitmap?&gt;(null) }</ID>
     <ID>MaxLineLength:HabitProofActivity.kt$HabitProofActivity.Companion$.</ID>
     <ID>MaxLineLength:HabitProofActivity.kt$Text("No reference photo set for \"$habitName\"", style = MaterialTheme.typography.headlineSmall, textAlign = TextAlign.Center)</ID>
     <ID>MaxLineLength:HabitProofPrompter.kt$HabitProofPrompter$.</ID>
     <ID>MaxLineLength:HabitRuleManager.kt$HabitRuleManager$(0 until apps.length()).mapNotNull { apps.optJSONObject(it)?.optString("appId")?.takeIf(String::isNotBlank) }</ID>
     <ID>MaxLineLength:HabitRuleManager.kt$HabitRuleManager$details = "Unlocked ${rule.targetPackageNames().joinToString()} for ${rule.unlockMinutes} minutes after $condition."</ID>
+    <ID>MaxLineLength:HabitRuleWizard.kt$contentColor = if (selected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant</ID>
+    <ID>MaxLineLength:HabitRuleWizard.kt$selectedHabits = if (name in selectedHabits) selectedHabits - name else selectedHabits + name</ID>
+    <ID>MaxLineLength:HabitRuleWizard.kt$val container = if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceVariant</ID>
+    <ID>MaxLineLength:HabitRuleWizard.kt$val content = if (selected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant</ID>
+    <ID>MaxLineLength:HabitRulesSection.kt$"-&gt; ${formatDaysOfWeek(daysOfWeek)} ${formatMinuteOfDay(windowStart)}-${formatMinuteOfDay(windowEnd)}, no habit needed"</ID>
+    <ID>MaxLineLength:HabitRulesSection.kt$"-&gt; only enforced ${formatDaysOfWeek(daysOfWeek)} ${formatMinuteOfDay(windowStart)}-${formatMinuteOfDay(windowEnd)}"</ID>
+    <ID>MaxLineLength:HabitRulesSection.kt$Row</ID>
+    <ID>MaxLineLength:HabitRulesSection.kt$Text("Nothing detected yet -- open the habit tracker app first.", style = MaterialTheme.typography.bodySmall)</ID>
+    <ID>MaxLineLength:HabitRulesSection.kt$if (timeOnly) "$targetLabel blocked" else "$targetLabel blocked until \"$conditionLabel\" done in $triggerLabel"</ID>
+    <ID>MaxLineLength:HabitRulesSection.kt$if (unlocked) "Outside its window right now" else if (timeOnly) "Inside its window -- blocked" else "Inside its window -- blocked until done"</ID>
+    <ID>MaxLineLength:HabitRulesSection.kt$private</ID>
     <ID>MaxLineLength:HabitShareApiClient.kt$HabitShareApiClient$if (code == 400 || code == 401 || code == 403) LoginResult.InvalidCredentials else LoginResult.NetworkError</ID>
+    <ID>MaxLineLength:HabitShareSettingsSections.kt$var bitmap by remember(ref.absolutePath, ref.lastModified()) { mutableStateOf&lt;android.graphics.Bitmap?&gt;(null) }</ID>
     <ID>MaxLineLength:MainActivity.kt$MainActivity$if (onboardingState.isComplete() &amp;&amp; deviceOwnerActive) Screen.Home else Screen.Onboarding</ID>
     <ID>MaxLineLength:MitmExemptionPolicyTest.kt$MitmExemptionPolicyTest$MitmExemptionPolicy.isExempt(ownerUid = 99999, exemptUids = setOf(10001), hostname = "youtube.com", exemptHostSuffixes = suffixes)</ID>
     <ID>MaxLineLength:MitmExemptionPolicyTest.kt$MitmExemptionPolicyTest$MitmExemptionPolicy.isExempt(ownerUid = null, exemptUids = setOf(10001), hostname = "notgooglevideo.com", exemptHostSuffixes = suffixes)</ID>
@@ -243,7 +243,6 @@
     <ID>TooManyFunctions:DashboardScreen.kt$app.otterling.ui.DashboardScreen.kt</ID>
     <ID>TooManyFunctions:DeviceRestrictionsManager.kt$DeviceRestrictionsManager</ID>
     <ID>TooManyFunctions:FocusGuardAccessibilityService.kt$FocusGuardAccessibilityService : AccessibilityService</ID>
-    <ID>TooManyFunctions:FocusSettingsSections.kt$app.otterling.ui.FocusSettingsSections.kt</ID>
     <ID>TooManyFunctions:GuardianAlertSettings.kt$GuardianAlertSettings</ID>
     <ID>TooManyFunctions:HabitProofManager.kt$HabitProofManager</ID>
     <ID>TooManyFunctions:HabitRuleManager.kt$HabitRuleManager</ID>
@@ -257,6 +256,6 @@
     <ID>TooManyFunctions:TcpRelayManager.kt$TcpRelayManager</ID>
     <ID>TooManyFunctions:VpnFilterManager.kt$VpnFilterManager</ID>
     <ID>TooManyFunctions:VpnFilterService.kt$VpnFilterService : VpnService</ID>
-    <ID>UnusedPrivateClass:FocusSettingsSections.kt$HabitRuleEditContext</ID>
+    <ID>UnusedPrivateClass:HabitRuleWizard.kt$HabitRuleEditContext</ID>
   </CurrentIssues>
 </SmellBaseline>
