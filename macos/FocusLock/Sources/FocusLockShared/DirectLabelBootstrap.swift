@@ -27,6 +27,12 @@ public enum DirectLabelBootstrap {
         return targetPath
     }
 
+    /// Removes a previously-written `.direct`-label plist, if any, so it can't survive to the next
+    /// boot and reload itself via `RunAtLoad` after the real label has recovered.
+    private static func removeDirectLabelPlist(originalLabel: String) {
+        try? FileManager.default.removeItem(atPath: "/Library/LaunchDaemons/\(originalLabel).direct.plist")
+    }
+
     /// Bootstraps `label` from `plistPath` under the system domain, falling back to the
     /// `.direct`-label workaround if the real label is stuck. Returns a human-readable summary of
     /// what happened (bootstrapped normally / bootstrapped under `.direct` / failed entirely) for
@@ -45,6 +51,15 @@ public enum DirectLabelBootstrap {
         ProcessRunner.runSilently("/bin/launchctl", ["bootout", "system/\(label).direct"])
         let result = ProcessRunner.run("/bin/launchctl", ["bootstrap", "system", plistPath])
         if result.status == 0 {
+            // Booting the `.direct` job out above only unloads it for this session -- its plist,
+            // if one was ever written by a previous fallback, is still sitting in
+            // `/Library/LaunchDaemons` with `RunAtLoad = true`. Confirmed live 2026-09-02: left in
+            // place, launchd happily reloads it on the very next boot (before this code ever runs
+            // again to boot it back out), producing a second live process racing the real label for
+            // the same Mach service every time the machine restarts. Deleting it here, the one place
+            // that knows the real label just came back up cleanly, is what actually makes the
+            // `.direct` fallback temporary instead of a permanent, silently-reappearing duplicate.
+            removeDirectLabelPlist(originalLabel: label)
             return "\(label): bootstrapped"
         }
 
