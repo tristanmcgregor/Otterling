@@ -34,7 +34,8 @@ enum ProxyEnforcer {
     private static let requiredConsecutiveReachabilitySamples = 3
     private static var lastProbedTarget: String?
     private static var debouncedReachableState = false
-    private static var consecutiveOppositeReachability = 0
+    private static var consecutiveReachable = 0
+    private static var consecutiveUnreachable = 0
 
     private static func debouncedReachable(host: String, port: Int) -> Bool {
         // A different target (e.g. home-LAN vs. public host swap) has no bearing on the previous
@@ -44,18 +45,34 @@ enum ProxyEnforcer {
         if key != lastProbedTarget {
             lastProbedTarget = key
             debouncedReachableState = false
-            consecutiveOppositeReachability = 0
+            consecutiveReachable = 0
+            consecutiveUnreachable = 0
         }
 
-        let raw = isReachable(host: host, port: port)
-        if raw == debouncedReachableState {
-            consecutiveOppositeReachability = 0
+        // Streaks are counted against the RAW signal's own run, never against "does this sample
+        // match what we currently believe" -- confirmed live 2026-09-02: the previous version reset
+        // its one shared counter to 0 every time a sample agreed with the CURRENT debounced state,
+        // which means once that state was `true` (proxy up), any interspersed success reset the
+        // failure count to 0 before it could reach the threshold. A proxy that's degraded rather
+        // than cleanly down -- e.g. succeeding on only every third probe -- produced exactly that
+        // pattern (fail, fail, succeed, fail, fail, succeed, ...) and NEVER accumulated 3 consecutive
+        // failures, so `debouncedReachableState` stayed stuck at "reachable" forever: the system
+        // proxy (and firewall force-through) stayed on indefinitely while most real traffic silently
+        // hung, with no automatic recovery -- the fail-open this debounce exists to preserve never
+        // fired. Tracking each direction's own streak independently means 3 consecutive raw failures
+        // flip it regardless of which direction the currently-held state happens to be biased toward.
+        if isReachable(host: host, port: port) {
+            consecutiveReachable += 1
+            consecutiveUnreachable = 0
         } else {
-            consecutiveOppositeReachability += 1
-            if consecutiveOppositeReachability >= requiredConsecutiveReachabilitySamples {
-                debouncedReachableState = raw
-                consecutiveOppositeReachability = 0
-            }
+            consecutiveUnreachable += 1
+            consecutiveReachable = 0
+        }
+
+        if !debouncedReachableState, consecutiveReachable >= requiredConsecutiveReachabilitySamples {
+            debouncedReachableState = true
+        } else if debouncedReachableState, consecutiveUnreachable >= requiredConsecutiveReachabilitySamples {
+            debouncedReachableState = false
         }
         return debouncedReachableState
     }

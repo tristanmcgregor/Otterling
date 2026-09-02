@@ -14,13 +14,14 @@ import FocusLockShared
 /// DNS/proxy configuration and reload the firewall -- repeated over hours, that reload-on-every-flap
 /// pattern is the suspected cause of a severe, escalating connectivity outage that night.
 ///
-/// Requires `requiredConsecutiveSamples` consecutive readings in the SAME (opposite-of-current)
-/// direction before the exposed state actually changes -- a lone outlier reading, in either
-/// direction, is absorbed and never reaches a caller.
+/// Requires `requiredConsecutiveSamples` consecutive readings in the same direction before the
+/// exposed state actually changes -- a lone outlier reading, in either direction, is absorbed and
+/// never reaches a caller.
 enum HomeLANState {
     private static let requiredConsecutiveSamples = 3
 
     private static var current = false
+    private static var consecutiveSame = 0
     private static var consecutiveOpposite = 0
 
     /// Runs the live check and returns the DEBOUNCED state, which may differ from this sample's own
@@ -32,14 +33,25 @@ enum HomeLANState {
         let raw = HomeLANVerifier.verify(
             ip: FocusLockConstants.homeLANHost, hostname: FocusLockConstants.defaultCloudFilterHost
         )
-        if raw == current {
+        // Streaks are counted against the RAW signal's own run, never against "does this sample
+        // agree with the CURRENT debounced state" -- see `ProxyEnforcer.debouncedReachable`'s doc
+        // comment (same bug, same fix, confirmed live 2026-09-02 there): the old version reset its
+        // one shared counter to 0 whenever a sample agreed with `current`, so a signal that's
+        // genuinely flapping rather than cleanly flipped (e.g. two-out-of-three readings opposite,
+        // one agreeing, on repeat) could reset the streak before it ever reached the threshold and
+        // never converge in either direction.
+        if raw {
+            consecutiveSame += 1
             consecutiveOpposite = 0
         } else {
             consecutiveOpposite += 1
-            if consecutiveOpposite >= requiredConsecutiveSamples {
-                current = raw
-                consecutiveOpposite = 0
-            }
+            consecutiveSame = 0
+        }
+
+        if !current, consecutiveSame >= requiredConsecutiveSamples {
+            current = true
+        } else if current, consecutiveOpposite >= requiredConsecutiveSamples {
+            current = false
         }
         return current
     }
