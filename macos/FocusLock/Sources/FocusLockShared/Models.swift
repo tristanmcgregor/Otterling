@@ -195,6 +195,13 @@ public struct FocusLockState: Codable, Sendable {
     /// `VPNGuard.lastKnownState` the same way `lockProfileInstalled` is, for the same reason.
     public var vpnActive: Bool
 
+    /// Live status, not persisted config: whether `DNSEnforcer` last actually reached the cloud
+    /// filter host, as opposed to falling back to Cloudflare Family. Overlaid by `XPCService.getStatus`
+    /// from `DNSEnforcer.cloudFilterHostReachable` the same way `lockProfileInstalled` is. Defaults
+    /// to `true` (both here and when missing from an old state.json) so a value that hasn't been
+    /// overlaid yet never LOOKS like an outage that isn't real.
+    public var cloudFilterHostReachable: Bool
+
     /// Live status, not persisted config: `FocusLockConstants.appVersionCode` as compiled into the
     /// DAEMON binary actually answering this `getStatus` call -- overlaid the same way
     /// `lockProfileInstalled` is. The GUI and daemon are separate processes/binaries that don't
@@ -284,6 +291,7 @@ public struct FocusLockState: Codable, Sendable {
         proxyPort: Int = FocusLockConstants.defaultProxyPort,
         lockProfileInstalled: Bool = false,
         vpnActive: Bool = false,
+        cloudFilterHostReachable: Bool = true,
         daemonVersionCode: Int = 0,
         guardianPasscode: PasscodeRecord? = nil,
         passcodeConfigured: Bool = false,
@@ -308,6 +316,7 @@ public struct FocusLockState: Codable, Sendable {
         self.proxyPort = proxyPort
         self.lockProfileInstalled = lockProfileInstalled
         self.vpnActive = vpnActive
+        self.cloudFilterHostReachable = cloudFilterHostReachable
         self.daemonVersionCode = daemonVersionCode
         self.guardianPasscode = guardianPasscode
         self.passcodeConfigured = passcodeConfigured
@@ -345,6 +354,7 @@ public struct FocusLockState: Codable, Sendable {
         proxyPort = try container.decodeIfPresent(Int.self, forKey: .proxyPort) ?? FocusLockConstants.defaultProxyPort
         lockProfileInstalled = try container.decodeIfPresent(Bool.self, forKey: .lockProfileInstalled) ?? false
         vpnActive = try container.decodeIfPresent(Bool.self, forKey: .vpnActive) ?? false
+        cloudFilterHostReachable = try container.decodeIfPresent(Bool.self, forKey: .cloudFilterHostReachable) ?? true
         daemonVersionCode = try container.decodeIfPresent(Int.self, forKey: .daemonVersionCode) ?? 0
         guardianPasscode = try container.decodeIfPresent(PasscodeRecord.self, forKey: .guardianPasscode)
         // Present in a `getStatus` payload (where `guardianPasscode` has deliberately been stripped,
@@ -376,7 +386,7 @@ public struct FocusLockState: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case blockedApps, blockedDomains, protectedApps, dnsEnforcementEnabled
-        case cloudFilterHost, cloudFilterEnabled, lockProfileInstalled, vpnActive, daemonVersionCode
+        case cloudFilterHost, cloudFilterEnabled, lockProfileInstalled, vpnActive, cloudFilterHostReachable, daemonVersionCode
         case proxyEnforcementEnabled, forceProxyViaFirewall, proxyHost, proxyPort
         case guardianPasscode, passcodeConfigured
         case protectionEnabled, dashboardConfigCache, dashboardConfigLastFetchedAt

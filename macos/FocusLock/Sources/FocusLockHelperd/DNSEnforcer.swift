@@ -38,6 +38,15 @@ enum DNSEnforcer {
     /// `EnforcementLoop` to tell `PFBlocker` which IPs must stay explicitly reachable on :53.
     private(set) static var lastResolvedIPs: [String] = []
 
+    /// Whether the last `apply()` reached the cloud filter host itself, as opposed to falling back
+    /// to Cloudflare Family. `true` when disabled (nothing to be unreachable) so this only ever
+    /// reads as a problem when it's actually one. Overlaid into `FocusLockState.cloudFilterHostReachable`
+    /// by `XPCService.getStatus` (see that field's doc comment) so the GUI can alert on the
+    /// transition instead of this only ever showing up as a repeating stderr line nobody's watching
+    /// -- which is exactly how today's backend outage went unnoticed until symptoms turned up
+    /// elsewhere entirely (a hung update check, a stuck proxy) instead of at the source.
+    private(set) static var cloudFilterHostReachable = true
+
     /// Resolves `cloudHost` (when `cloudEnabled`) and points every active network service's DNS at
     /// it; falls back to Cloudflare Family if disabled or resolution fails, rather than leaving
     /// DNS unmanaged. `onHomeLAN` is `HomeLANState`'s DEBOUNCED signal (see that type's doc comment
@@ -50,10 +59,12 @@ enum DNSEnforcer {
            isDNSReachable(host: FocusLockConstants.homeLANHost) {
             servers = [FocusLockConstants.homeLANHost]
             lastResolvedIPs = servers
+            cloudFilterHostReachable = true
         } else if cloudEnabled, !cloudHost.isEmpty, let resolved = resolveIPv4(cloudHost), !resolved.isEmpty,
                   isDNSReachable(host: resolved[0]) {
             servers = resolved
             lastResolvedIPs = resolved
+            cloudFilterHostReachable = true
         } else {
             if cloudEnabled {
                 FileHandle.standardError.write(
@@ -62,6 +73,7 @@ enum DNSEnforcer {
             }
             servers = cloudflareFamilyDNS
             lastResolvedIPs = []
+            cloudFilterHostReachable = !cloudEnabled
         }
         for service in activeNetworkServices() {
             if currentDNSServers(for: service) != servers {

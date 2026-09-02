@@ -25,6 +25,15 @@ final class Watchdog {
     private static let failureThreshold = 3
 
     func tick() {
+        // Cheap (two local `launchctl print` calls, no network) and runs every tick regardless of
+        // whether `getStatus` below succeeds -- a duplicate can leave the daemon fully reachable
+        // (whichever job happens to hold the Mach service answers fine), so this can't be folded
+        // into the failure-recovery path below without missing exactly that case. See
+        // `DirectLabelBootstrap.reconcileDuplicateLabels`'s doc comment for why this exists as its
+        // own independent check rather than only cleaning up inside `recover()`.
+        DirectLabelBootstrap.reconcileDuplicateLabels(label: FocusLockConstants.helperBundleIdentifier)
+        DirectLabelBootstrap.reconcileDuplicateLabels(label: FocusLockConstants.watchdogBundleIdentifier)
+
         Task {
             if await client.getStatus() != nil {
                 consecutiveFailures = 0

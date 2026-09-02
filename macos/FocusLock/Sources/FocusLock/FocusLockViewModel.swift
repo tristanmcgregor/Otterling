@@ -18,6 +18,11 @@ final class FocusLockViewModel: NSObject, ObservableObject, UNUserNotificationCe
     @Published var updateChecking = false
     @Published var updateInstalling = false
     @Published var updateAvailable = false
+    // Snapshot of `DaemonRegistrar.pendingWarnings` taken once at startup (registration only ever
+    // runs once, in `FocusLockApp.init`, before this view model exists) -- shown as a persistent
+    // banner instead of the previous NSLog-only failure, so a stuck daemon/watchdog/scanner
+    // registration is visible on screen instead of requiring a trip to Console.app to notice.
+    let daemonWarnings: [String] = DaemonRegistrar.pendingWarnings
 
     // MARK: Sudo broker terminal (see SudoBroker.swift) -- inert until the account is converted to
     // Standard, but the UI works the same either way since it's just a front-end for the XPC call.
@@ -72,6 +77,12 @@ final class FocusLockViewModel: NSObject, ObservableObject, UNUserNotificationCe
     // per-bundle-identifier) so it survives the GUI being quit/relaunched, not just this process.
     private static let notifiedUpdateVersionKey = "otterling.lastNotifiedAutoUpdateVersion"
 
+    // Not persisted across launches (unlike the auto-update dedupe key above) -- on purpose. This
+    // is a live "is the backend reachable right now" signal, not a one-time event; starting fresh
+    // each launch means a GUI relaunch while the backend is already down still gets to notice and
+    // notify, rather than silently trusting a nil-turned-false transition it never actually saw.
+    private var lastKnownCloudFilterReachable: Bool?
+
     func startPolling() {
         guard pollTask == nil else { return }
         UNUserNotificationCenter.current().delegate = self
@@ -92,7 +103,36 @@ final class FocusLockViewModel: NSObject, ObservableObject, UNUserNotificationCe
                 didSeedHostText = true
             }
             notifyIfNewAutoUpdate(status)
+            notifyIfCloudFilterReachabilityChanged(status)
         }
+    }
+
+    /// Fires a local banner the moment this GUI process notices the cloud filter host transition
+    /// either direction -- reachable to unreachable, or back. Today this only ever showed up as a
+    /// repeating `[dns] ... falling back to Cloudflare Family` line in the daemon's own log file,
+    /// which is how a real backend outage went unnoticed for a long stretch even though the daemon
+    /// itself was behaving exactly as designed (failing open) the whole time. Debounced at the
+    /// source (`DNSEnforcer`/`XPCService`), so this only reacts to the same stable signal the
+    /// enforcement loop itself acts on, not raw per-tick noise.
+    private func notifyIfCloudFilterReachabilityChanged(_ status: FocusLockState) {
+        defer { lastKnownCloudFilterReachable = status.cloudFilterHostReachable }
+        guard let previous = lastKnownCloudFilterReachable, previous != status.cloudFilterHostReachable else { return }
+
+        let content = UNMutableNotificationContent()
+        if status.cloudFilterHostReachable {
+            content.title = "Content filter backend is back"
+            content.body = "\(status.cloudFilterHost) is reachable again."
+        } else {
+            content.title = "Content filter backend unreachable"
+            content.body = "Can't reach \(status.cloudFilterHost) -- DNS enforcement has fallen back to Cloudflare Family until it recovers."
+        }
+        content.sound = .default
+        let request = UNNotificationRequest(
+            identifier: "cloud-filter-reachability-\(status.cloudFilterHostReachable)-\(Date().timeIntervalSince1970)",
+            content: content,
+            trigger: nil
+        )
+        UNUserNotificationCenter.current().add(request)
     }
 
     /// Fires a local banner the first time this GUI process notices a NEW `lastAutoUpdateVersion`

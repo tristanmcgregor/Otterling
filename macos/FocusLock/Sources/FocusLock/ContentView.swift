@@ -224,8 +224,10 @@ struct ContentView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 header
-                // Ordered by urgency: a live filter bypass first, then the missing tripwire. Both
-                // show on every screen so they can't be missed.
+                // Ordered by urgency: a daemon/watchdog/scanner that failed to register means
+                // nothing else below can be trusted, so it leads even the live filter-bypass
+                // warning. Shown on every screen so it can't be missed.
+                ForEach(viewModel.daemonWarnings, id: \.self) { daemonWarningBanner($0) }
                 if viewModel.state.vpnActive {
                     vpnActiveWarningBanner
                 }
@@ -906,6 +908,20 @@ struct ContentView: View {
 
     /// `LockProfileGuard` (daemon-side) reports this within ~15s of the profile disappearing;
     /// surfacing it here is what makes it visible. See GUARDIAN_SETUP.md §5.
+    /// See `DaemonRegistrar.pendingWarnings`'s doc comment -- this is the on-screen half of what
+    /// used to be an `NSLog`-only failure. Persists until the app is quit and reopened (matching
+    /// how a registration failure would actually clear: either the user approves it in System
+    /// Settings > Login Items & Extensions, or a later launch's retry succeeds), rather than being
+    /// dismissible and then forgotten while the underlying problem is still live.
+    private func daemonWarningBanner(_ message: String) -> some View {
+        warningBanner(
+            icon: "exclamationmark.triangle.fill",
+            title: "Background service failed to register",
+            message: message + " Check System Settings > General > Login Items & Extensions, or quit and reopen Otterling.",
+            variant: .error
+        )
+    }
+
     private var lockProfileWarningBanner: some View {
         warningBanner(
             icon: "exclamationmark.triangle.fill",

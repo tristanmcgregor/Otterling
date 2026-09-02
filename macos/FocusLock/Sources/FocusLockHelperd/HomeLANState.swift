@@ -19,10 +19,17 @@ import FocusLockShared
 /// never reaches a caller.
 enum HomeLANState {
     private static let requiredConsecutiveSamples = 3
+    // Same absolute-time backstop as `ProxyEnforcer.debouncedReachable`, and for the same reason:
+    // being stuck reporting "on home LAN" long after that stopped being true points DNS/proxy at
+    // a LAN-only address from off the LAN, which is exactly the kind of silent, total-outage hang
+    // this whole debounce family exists to prevent -- not merely a missed optimization the way
+    // being stuck at "false" would be. One-directional on purpose: only forces true -> false.
+    private static let maxStaleOnLANInterval: TimeInterval = 90
 
     private static var current = false
     private static var consecutiveSame = 0
     private static var consecutiveOpposite = 0
+    private static var lastConfirmedOnLANAt: Date?
 
     /// Runs the live check and returns the DEBOUNCED state, which may differ from this sample's own
     /// raw result -- callers should treat the return value as "the current stable answer", not "what
@@ -43,6 +50,7 @@ enum HomeLANState {
         if raw {
             consecutiveSame += 1
             consecutiveOpposite = 0
+            lastConfirmedOnLANAt = Date()
         } else {
             consecutiveOpposite += 1
             consecutiveSame = 0
@@ -51,6 +59,12 @@ enum HomeLANState {
         if !current, consecutiveSame >= requiredConsecutiveSamples {
             current = true
         } else if current, consecutiveOpposite >= requiredConsecutiveSamples {
+            current = false
+        }
+
+        if current,
+           let lastConfirmed = lastConfirmedOnLANAt,
+           Date().timeIntervalSince(lastConfirmed) > maxStaleOnLANInterval {
             current = false
         }
         return current

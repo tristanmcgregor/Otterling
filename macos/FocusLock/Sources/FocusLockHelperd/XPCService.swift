@@ -106,6 +106,7 @@ final class XPCService: NSObject, FocusLockXPCProtocol {
         // Overlaid, not persisted -- see the field's doc comment on FocusLockState.
         state.lockProfileInstalled = LockProfileGuard.lastKnownState
         state.vpnActive = VPNGuard.lastKnownState
+        state.cloudFilterHostReachable = DNSEnforcer.cloudFilterHostReachable
         state.daemonVersionCode = FocusLockConstants.appVersionCode
         // Strips the passcode digest before it crosses the wire -- getStatus is ungated, so
         // anything left in here is readable by every account on the machine.

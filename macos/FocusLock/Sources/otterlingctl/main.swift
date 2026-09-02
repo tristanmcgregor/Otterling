@@ -143,7 +143,8 @@ func formatState(_ state: FocusLockState) -> String {
         lines.append("  - \(app.displayName) [\(app.executableName)] @ \(app.bundlePath)")
     }
     lines.append("DNS enforcement: \(state.dnsEnforcementEnabled ? "ON" : "off")")
-    lines.append("Cloud filter host: \(state.cloudFilterHost) (\(state.cloudFilterEnabled ? "enabled" : "disabled, Cloudflare Family fallback only"))")
+    let reachability = state.cloudFilterEnabled ? (state.cloudFilterHostReachable ? ", reachable" : ", UNREACHABLE -- falling back to Cloudflare Family") : ""
+    lines.append("Cloud filter host: \(state.cloudFilterHost) (\(state.cloudFilterEnabled ? "enabled" : "disabled, Cloudflare Family fallback only")\(reachability))")
     if state.proxyEnforcementEnabled {
         let force = state.forceProxyViaFirewall ? " + firewall force-through (:80/:443 locked to proxy)" : ""
         lines.append("Proxy enforcement: ON\(force) — \(state.proxyHost):\(state.proxyPort)")

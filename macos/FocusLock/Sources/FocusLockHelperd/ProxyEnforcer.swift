@@ -32,10 +32,19 @@ enum ProxyEnforcer {
     /// merely flaky must ride out a few bad probes before this tears the system proxy down; one
     /// that's genuinely down still fails open within a few ticks, same as before.
     private static let requiredConsecutiveReachabilitySamples = 3
+    // Independent, absolute-time backstop on top of the consecutive-sample counting below -- not a
+    // substitute for it, a guard against whatever pattern the streak counting itself doesn't
+    // anticipate. The streak logic already fixed one such pattern (see the comment below) by
+    // construction, but "guaranteed to fail open within N seconds no matter what" is a much easier
+    // safety property to hold onto than "correct for every conceivable sequence of raw samples,"
+    // and this is the machine's ENTIRE internet access on the line. If it's been this long since the
+    // last raw success, force the debounced state down regardless of streak state.
+    private static let maxStaleReachableInterval: TimeInterval = 90
     private static var lastProbedTarget: String?
     private static var debouncedReachableState = false
     private static var consecutiveReachable = 0
     private static var consecutiveUnreachable = 0
+    private static var lastRawSuccessAt: Date?
 
     private static func debouncedReachable(host: String, port: Int) -> Bool {
         // A different target (e.g. home-LAN vs. public host swap) has no bearing on the previous
@@ -47,6 +56,7 @@ enum ProxyEnforcer {
             debouncedReachableState = false
             consecutiveReachable = 0
             consecutiveUnreachable = 0
+            lastRawSuccessAt = nil
         }
 
         // Streaks are counted against the RAW signal's own run, never against "does this sample
@@ -64,6 +74,7 @@ enum ProxyEnforcer {
         if isReachable(host: host, port: port) {
             consecutiveReachable += 1
             consecutiveUnreachable = 0
+            lastRawSuccessAt = Date()
         } else {
             consecutiveUnreachable += 1
             consecutiveReachable = 0
@@ -72,6 +83,12 @@ enum ProxyEnforcer {
         if !debouncedReachableState, consecutiveReachable >= requiredConsecutiveReachabilitySamples {
             debouncedReachableState = true
         } else if debouncedReachableState, consecutiveUnreachable >= requiredConsecutiveReachabilitySamples {
+            debouncedReachableState = false
+        }
+
+        if debouncedReachableState,
+           let lastSuccess = lastRawSuccessAt,
+           Date().timeIntervalSince(lastSuccess) > maxStaleReachableInterval {
             debouncedReachableState = false
         }
         return debouncedReachableState

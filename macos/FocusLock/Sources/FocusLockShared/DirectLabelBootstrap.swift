@@ -72,4 +72,25 @@ public enum DirectLabelBootstrap {
         }
         return "\(label): both real-label and .direct-label bootstrap failed (\(directResult.output.trimmingCharacters(in: .whitespacesAndNewlines)))"
     }
+
+    /// Periodic safety net, meant to be called on every tick of a long-running recovery loop (see
+    /// `FocusLockWatchdog`) rather than only at the moment `bootstrapWithFallback` happens to
+    /// succeed. That success path deletes the `.direct` plist so it can't reappear on the next boot
+    /// (see `removeDirectLabelPlist`'s doc comment) -- but that only covers duplicates THIS code
+    /// creates. A duplicate from a build that predates that fix, or from anything else that manages
+    /// to leave both labels loaded at once, would otherwise sit there indefinitely: whichever job
+    /// answers `getStatus` this tick looks healthy, so nothing else in the watchdog's own
+    /// reachability-based recovery would ever notice or clean it up. Confirmed live 2026-09-02
+    /// (twice, across two separate causes) -- both real and `.direct` loaded simultaneously, one
+    /// silently losing the shared Mach service to the other with no error raised anywhere.
+    public static func reconcileDuplicateLabels(label: String) {
+        guard isLoaded("\(label).direct") else { return }
+        guard isLoaded(label) else { return }
+        ProcessRunner.runSilently("/bin/launchctl", ["bootout", "system/\(label).direct"])
+        removeDirectLabelPlist(originalLabel: label)
+    }
+
+    private static func isLoaded(_ label: String) -> Bool {
+        ProcessRunner.run("/bin/launchctl", ["print", "system/\(label)"]).status == 0
+    }
 }

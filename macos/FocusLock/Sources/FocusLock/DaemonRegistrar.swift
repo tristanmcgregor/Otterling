@@ -8,6 +8,13 @@ import ServiceManagement
 /// the service sits in `.requiresApproval` until they do -- there's nothing more the app can do to
 /// force that beyond surfacing the prompt again on next launch.
 enum DaemonRegistrar {
+    /// Populated by a registration failure below, read once by `FocusLockViewModel` at startup and
+    /// shown as a banner. Previously this only reached `NSLog` -- invisible unless someone thought
+    /// to go looking in Console.app -- so a stuck registration (`.requiresApproval`, a corrupted
+    /// Background Task Management database, or anything else `register()` can throw) could sit
+    /// silently broken indefinitely with no on-screen indication anything was wrong at all.
+    private(set) static var pendingWarnings: [String] = []
+
     static func registerIfNeeded() {
         registerIfNeeded(
             plistName: "\(FocusLockConstants.helperBundleIdentifier).plist",
@@ -55,7 +62,9 @@ enum DaemonRegistrar {
                 )
             }
         } catch {
-            NSLog("FocusLock: FocusLockScanner agent registration failed (status=\(service.status)): \(error)")
+            let message = "FocusLockScanner (trigger-word/screenshot scanner) failed to register (status=\(service.status)): \(error.localizedDescription)"
+            NSLog("FocusLock: \(message)")
+            pendingWarnings.append(message)
         }
     }
 
@@ -113,7 +122,9 @@ enum DaemonRegistrar {
                 lastError = error
             }
         }
-        NSLog("FocusLock: \(reportLabel) registration failed (status=\(service.status)): \(lastError!)")
+        let message = "\(reportLabel) failed to register (status=\(service.status)): \(lastError!.localizedDescription)"
+        NSLog("FocusLock: \(message)")
+        pendingWarnings.append(message)
     }
 
     private static func daemonIsReachable() -> Bool {
