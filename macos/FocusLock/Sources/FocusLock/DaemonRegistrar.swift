@@ -90,17 +90,30 @@ enum DaemonRegistrar {
             group.wait()
         }
 
-        do {
-            try service.register()
-            if wasStaleEnabled {
-                TamperReporter.report(
-                    type: "watchdog_or_daemon_reregistered",
-                    details: "\(reportLabel) was enabled but unreachable on GUI launch -- re-registered"
-                )
+        // `register()` right after `unregister()`'s completion handler fires can still throw
+        // SMAppServiceErrorDomain Code=1 ("Operation not permitted") with `service.status` still
+        // reporting stale `.enabled` -- confirmed live 2026-09-02: the completion handler fires
+        // before the system has actually finished tearing down the old registration, so an
+        // immediate re-register races it and loses. A few short, backed-off retries clear this
+        // reliably without needing a fixed, worst-case-sized sleep on the common (no unregister
+        // needed) path.
+        var lastError: Error?
+        for attempt in 0..<(wasStaleEnabled ? 5 : 1) {
+            if attempt > 0 { Thread.sleep(forTimeInterval: 0.3 * Double(attempt)) }
+            do {
+                try service.register()
+                if wasStaleEnabled {
+                    TamperReporter.report(
+                        type: "watchdog_or_daemon_reregistered",
+                        details: "\(reportLabel) was enabled but unreachable on GUI launch -- re-registered"
+                    )
+                }
+                return
+            } catch {
+                lastError = error
             }
-        } catch {
-            NSLog("FocusLock: \(reportLabel) registration failed (status=\(service.status)): \(error)")
         }
+        NSLog("FocusLock: \(reportLabel) registration failed (status=\(service.status)): \(lastError!)")
     }
 
     private static func daemonIsReachable() -> Bool {
