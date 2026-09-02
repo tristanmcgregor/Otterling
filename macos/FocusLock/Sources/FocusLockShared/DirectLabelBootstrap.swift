@@ -33,7 +33,16 @@ public enum DirectLabelBootstrap {
     /// the caller to log or report however fits its own context.
     @discardableResult
     public static func bootstrapWithFallback(label: String, plistPath: String) -> String {
+        // Boot out BOTH labels before trying either bootstrap, not just the one we're about to
+        // (re)try. Confirmed live: a stale `.direct` job left running from a previous fallback
+        // (e.g. this watchdog's own earlier recovery, or a prior `otterlingctl restore`) still
+        // holds the shared `MachServices` name when the real label's BTM registration later
+        // clears up on its own -- bootstrapping the real label on top of that doesn't replace it,
+        // it collides with it, so which job actually owns the mach port (and therefore answers
+        // XPC calls) becomes a coin flip per connection instead of a hard failure. Clearing both
+        // first guarantees at most one job ever holds the mach service at a time.
         ProcessRunner.runSilently("/bin/launchctl", ["bootout", "system/\(label)"])
+        ProcessRunner.runSilently("/bin/launchctl", ["bootout", "system/\(label).direct"])
         let result = ProcessRunner.run("/bin/launchctl", ["bootstrap", "system", plistPath])
         if result.status == 0 {
             return "\(label): bootstrapped"
@@ -42,7 +51,6 @@ public enum DirectLabelBootstrap {
         guard let directPlistPath = writeDirectLabelPlist(sourcePlistPath: plistPath, originalLabel: label) else {
             return "\(label): real-label bootstrap failed (\(result.output.trimmingCharacters(in: .whitespacesAndNewlines))) and could not prepare the .direct-label plist"
         }
-        ProcessRunner.runSilently("/bin/launchctl", ["bootout", "system/\(label).direct"])
         let directResult = ProcessRunner.run("/bin/launchctl", ["bootstrap", "system", directPlistPath])
         if directResult.status == 0 {
             return "\(label): real-label bootstrap failed, bootstrapped under \(label).direct instead"
