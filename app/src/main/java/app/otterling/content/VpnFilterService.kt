@@ -288,6 +288,7 @@ class VpnFilterService : VpnService() {
             port = cloudFilterSettings.proxyPort(),
             user = cloudFilterSettings.proxyUser(),
             password = cloudFilterSettings.proxyPassword(),
+            altPort = cloudFilterSettings.proxyAltPort(),
         )
 
         // Resolved once per tunnel generation (same lifecycle as proxyConfig) -- a Guardian

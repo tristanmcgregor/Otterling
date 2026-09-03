@@ -64,6 +64,16 @@ services:
     ports:
       # Internal listen is always 8080; host port is usually 8090 with port8080_mux.py on 8080.
       - "${PROXY_PORT:-8090}:8080/tcp"
+      # Second, non-colliding port for networks that block arbitrary ports like 8090 but allow
+      # common alt-HTTPS ports -- same internal target, same CONNECT/auth path, just a second way
+      # in. 443 itself isn't available here: Caddy (the `updates` service) already owns
+      # 0.0.0.0:443 in host network mode for ACME/webhook/dashboard traffic, and two listeners
+      # can't share one host IP:port regardless of Docker network mode. 8443 was picked over
+      # reusing 22 (this host's real SSH already owns that) since either way a taken port needs
+      # the same protocol-mux workaround this isn't attempting yet -- see README's Firewall
+      # section for the honest caveat this doesn't cover a network that allows only TCP/443
+      # outbound and nothing else.
+      - "${PROXY_PORT_ALT:-8443}:8080/tcp"
     volumes:
       # Persists the generated CA (mitmproxy creates ~/.mitmproxy/mitmproxy-ca-cert.pem here on
       # first run if this is empty) plus any other mitmproxy state across container restarts.

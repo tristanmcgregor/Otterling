@@ -29,6 +29,10 @@ data class ProxyConfig(
     val port: Int,
     val user: String,
     val password: String,
+    // 0 = unset/inert. Second port on the SAME proxy host for networks that block arbitrary ports
+    // like `port` above but allow common alt-HTTPS ports -- see attemptConnect's useAltPort param.
+    // Not a bypass: still the same CONNECT/auth path, just a different door in.
+    val altPort: Int = 0,
 )
 
 /**
@@ -246,6 +250,14 @@ class TcpRelayManager(
             delay(RETRY_DELAY_MS)
             socket = attemptConnect(connection, useProxy)
         }
+        if (socket == null && useProxy && proxyConfig.altPort > 0) {
+            // Still the same proxy host/auth, just a second port -- for networks that block
+            // proxyConfig.port specifically (e.g. school Wi-Fi allowlisting only common ports)
+            // rather than the proxy being genuinely down. Tried before the outage-detection/
+            // direct-fallback tier below since it's a same-proxy retry, not a degradation.
+            Log.d(TAG, "${connection.key.dstIp}:${connection.key.dstPort} proxy CONNECT failed on primary port -- trying alternate port ${proxyConfig.altPort}")
+            socket = attemptConnect(connection, useProxy, useAltPort = true)
+        }
         if (socket == null && useProxy) {
             onProxyConnectFailure(connection.key.dstIp)
             // Both the original CONNECT and its retry failed. Normally that's still fail-closed --
@@ -327,8 +339,9 @@ class TcpRelayManager(
      * logged. Called up to twice by [establish] (a single retry for proxy-eligible flows only) --
      * kept side-effect-free beyond [connection]/the socket itself so calling it twice is safe.
      */
-    private fun attemptConnect(connection: Connection, useProxy: Boolean): Socket? {
+    private fun attemptConnect(connection: Connection, useProxy: Boolean, useAltPort: Boolean = false): Socket? {
         val socket = Socket()
+        val proxyPort = if (useAltPort) proxyConfig.altPort else proxyConfig.port
         return try {
             // A freshly-constructed Socket has no underlying file descriptor until it's bound (or
             // connected) -- protect() silently fails on it otherwise, since there's nothing to mark.
@@ -344,7 +357,7 @@ class TcpRelayManager(
                 val proxyAddr = InetAddress.getAllByName(proxyConfig.host)
                     .firstOrNull { it is Inet4Address }
                     ?: InetAddress.getByName(proxyConfig.host)
-                socket.connect(InetSocketAddress(proxyAddr, proxyConfig.port), CONNECT_TIMEOUT_MS)
+                socket.connect(InetSocketAddress(proxyAddr, proxyPort), CONNECT_TIMEOUT_MS)
                 socket.tcpNoDelay = true
                 // Prefer a real hostname (from a DNS answer this device itself already saw) over
                 // the bare destination IP on the CONNECT line -- purely cosmetic/best-effort: the
@@ -361,7 +374,7 @@ class TcpRelayManager(
         } catch (error: Exception) {
             Log.w(
                 TAG,
-                "${if (useProxy) "Proxy CONNECT via ${proxyConfig.host}:${proxyConfig.port} to" else "TCP connect to"} " +
+                "${if (useProxy) "Proxy CONNECT via ${proxyConfig.host}:$proxyPort to" else "TCP connect to"} " +
                     "${connection.key.dstIp}:${connection.key.dstPort} failed",
                 error,
             )

@@ -72,6 +72,12 @@ class CloudFilterSettings(context: Context) {
         prefs.edit().putInt(KEY_PROXY_PORT, port).apply()
     }
 
+    fun proxyAltPort(): Int = prefs.getInt(KEY_PROXY_ALT_PORT, DEFAULT_PROXY_ALT_PORT)
+
+    fun setProxyAltPort(port: Int) {
+        prefs.edit().putInt(KEY_PROXY_ALT_PORT, port).apply()
+    }
+
     fun proxyUser(): String = securePrefs.getString(KEY_PROXY_USER, DEFAULT_PROXY_USER).orEmpty().ifBlank { DEFAULT_PROXY_USER }
 
     fun setProxyUser(user: String) {
@@ -161,6 +167,7 @@ class CloudFilterSettings(context: Context) {
         const val KEY_PORT = "port"
         const val KEY_PROXY_ENABLED = "proxy_enabled"
         const val KEY_PROXY_PORT = "proxy_port"
+        const val KEY_PROXY_ALT_PORT = "proxy_alt_port"
         const val KEY_PROXY_USER = "proxy_user"
         const val KEY_PROXY_PASSWORD = "proxy_password"
         const val DEFAULT_HOST = "vpn.bartholomew.help"
@@ -170,6 +177,10 @@ class CloudFilterSettings(context: Context) {
         // project's control -- phones now talk to mitmproxy's own host-mapped port (see
         // docker-compose.yml's "${PROXY_PORT:-8090}:8080/tcp") directly instead.
         const val DEFAULT_PROXY_PORT = 8090
+        // Second, non-colliding port on the SAME proxy host (docker-compose.yml's
+        // "${PROXY_PORT_ALT:-8443}:8080/tcp") for networks that block arbitrary ports like 8090
+        // but allow common alt-HTTPS ports -- see TcpRelayManager.ProxyConfig.altPort.
+        const val DEFAULT_PROXY_ALT_PORT = 8443
         const val DEFAULT_PROXY_USER = "otterling"
     }
 }

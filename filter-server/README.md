@@ -178,6 +178,12 @@ On the server PC:
   unrelated process, see the mitmproxy bullet at the top of this file), **UDP/TCP 53** (DNS), and
   **TCP 80/443** (update host), and optionally **TCP 3000** (AdGuard UI), from the router to the
   machine running Docker.
+- Also port-forward **TCP 8443** (`PROXY_PORT_ALT` in `docker-compose.yml`) -- a second path to the
+  same mitmproxy, for phones on networks that block arbitrary ports like 8090 but allow common
+  alt-HTTPS ports. Same proxy, same auth, just a second door in; it does **not** cover a network
+  that only allows outbound TCP/443 and nothing else (that would need Caddy's already-owned 443 to
+  multiplex proxy CONNECT traffic alongside its own HTTPS traffic by sniffing first bytes, which
+  this project isn't doing yet -- see `mitmproxy`'s `ports:` comment in `docker-compose.yml`).
 - Or run all of these only on LAN and use Tailscale/WireGuard mesh so the phone reaches them
   without opening any port to the world -- meaningfully safer, since 8090 is now a real proxy with
   your family's browsing passing through it, not just a DNS resolver (Caddy's Let's Encrypt cert
@@ -186,7 +192,7 @@ On the server PC:
 
 ## Firewall
 
-Restrict ports 53/8090 (and ideally 3000) to only the phone's IP if it's static, or your ISP's IP
+Restrict ports 53/8090/8443 (and ideally 3000) to only the phone's IP if it's static, or your ISP's IP
 range, rather than leaving them open to the whole internet -- an open recursive resolver is a
 standing abuse target, and an open MITM proxy is worse: proxy auth is the only thing stopping
 anyone who finds it from routing their own traffic through your server (and, if they also somehow
