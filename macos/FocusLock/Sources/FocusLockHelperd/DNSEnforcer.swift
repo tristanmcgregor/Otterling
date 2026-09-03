@@ -246,14 +246,29 @@ enum DNSEnforcer {
         return trimmed.split(separator: "\n").map(String.init)
     }
 
+    // `networksetup`'s writes go through configd's SCPreferences commit, which can transiently
+    // refuse a write ("Unable to commit changes to network database", exit 7) under contention --
+    // confirmed live 2026-09-03: with DNSEnforcer/ProxyEnforcer/PFBlocker all reasserting settings
+    // on their own tick cadences, configd got wedged into refusing EVERY commit (not just DNS, not
+    // just one service) for the rest of the session, which is indistinguishable from "no internet"
+    // and previously required a full reboot to clear since nothing -- not even killSwitch's own
+    // teardown -- could ever get a write to stick once wedged. A short bounded retry is the known,
+    // much cheaper recovery for this specific transient lock than the reboot this used to demand.
+    private static let commitRetryDelays: [TimeInterval] = [0.3, 0.8, 1.5]
+
     private static func setDNSServers(_ servers: [String], for service: String) {
+        var result = ProcessRunner.run("/usr/sbin/networksetup", ["-setdnsservers", service] + servers)
+        for delay in commitRetryDelays where result.status != 0 {
+            Thread.sleep(forTimeInterval: delay)
+            result = ProcessRunner.run("/usr/sbin/networksetup", ["-setdnsservers", service] + servers)
+        }
         // Was `runSilently` -- a failure here (wrong service name, networksetup erroring) used to
         // be completely invisible, which is exactly how a real bug in `remove()` went unnoticed
-        // during kill-switch testing. Log any non-zero exit so a silent failure can't happen again.
-        let result = ProcessRunner.run("/usr/sbin/networksetup", ["-setdnsservers", service] + servers)
+        // during kill-switch testing. Log any non-zero exit (even after retrying) so a silent
+        // failure can't happen again.
         if result.status != 0 {
             FileHandle.standardError.write(
-                "[dns] setdnsservers '\(service)' \(servers) failed (exit \(result.status)): \(result.output)\n".data(using: .utf8)!
+                "[dns] setdnsservers '\(service)' \(servers) failed (exit \(result.status)) after \(commitRetryDelays.count) retries: \(result.output)\n".data(using: .utf8)!
             )
         }
     }

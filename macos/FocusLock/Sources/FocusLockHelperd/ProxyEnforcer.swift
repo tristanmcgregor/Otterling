@@ -152,10 +152,8 @@ enum ProxyEnforcer {
             // become root anyway. Minimising the number of invocations is therefore the whole
             // available mitigation, which is what the skip below is for.
             guard !isProxyAlreadySet(service: service, host: target, port: port) else { continue }
-            ProcessRunner.runSilently("/usr/sbin/networksetup",
-                ["-setwebproxy", service, target, portString, "on", user, password])
-            ProcessRunner.runSilently("/usr/sbin/networksetup",
-                ["-setsecurewebproxy", service, target, portString, "on", user, password])
+            runNetworksetupWithRetry(["-setwebproxy", service, target, portString, "on", user, password], describing: "setwebproxy '\(service)'")
+            runNetworksetupWithRetry(["-setsecurewebproxy", service, target, portString, "on", user, password], describing: "setsecurewebproxy '\(service)'")
         }
         return true
     }
@@ -164,8 +162,8 @@ enum ProxyEnforcer {
         lastResolvedProxyIPs = []
         lastAppliedHost = ""
         for service in activeNetworkServices() {
-            ProcessRunner.runSilently("/usr/sbin/networksetup", ["-setwebproxystate", service, "off"])
-            ProcessRunner.runSilently("/usr/sbin/networksetup", ["-setsecurewebproxystate", service, "off"])
+            runNetworksetupWithRetry(["-setwebproxystate", service, "off"], describing: "setwebproxystate '\(service)'")
+            runNetworksetupWithRetry(["-setsecurewebproxystate", service, "off"], describing: "setsecurewebproxystate '\(service)'")
         }
     }
 
@@ -264,6 +262,27 @@ enum ProxyEnforcer {
             }
         }
         return addresses
+    }
+
+    // `networksetup`'s writes go through configd's SCPreferences commit, which can transiently
+    // refuse a write ("Unable to commit changes to network database", exit 7) under contention from
+    // this daemon's own frequent reasserts -- see DNSEnforcer.commitRetryDelays' doc comment for the
+    // 2026-09-03 incident this addresses (confirmed to wedge configd into refusing EVERY commit,
+    // proxy included, until a reboot). Was `runSilently`, which swallowed a failure here even more
+    // invisibly than DNSEnforcer's own past bug -- there wasn't even a logged line to notice by.
+    private static let commitRetryDelays: [TimeInterval] = [0.3, 0.8, 1.5]
+
+    private static func runNetworksetupWithRetry(_ args: [String], describing label: String) {
+        var result = ProcessRunner.run("/usr/sbin/networksetup", args)
+        for delay in commitRetryDelays where result.status != 0 {
+            Thread.sleep(forTimeInterval: delay)
+            result = ProcessRunner.run("/usr/sbin/networksetup", args)
+        }
+        if result.status != 0 {
+            FileHandle.standardError.write(
+                "[proxy] \(label) failed (exit \(result.status)) after \(commitRetryDelays.count) retries: \(result.output)\n".data(using: .utf8)!
+            )
+        }
     }
 
     /// Same active-service enumeration `DNSEnforcer` uses.
