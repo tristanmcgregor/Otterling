@@ -23,6 +23,15 @@ enum ProxyEnforcer {
     /// `EnforcementLoop` so `PFBlocker` can keep the proxy itself reachable when force-through is on.
     private(set) static var lastResolvedProxyIPs: [String] = []
 
+    /// The actual host `apply` last pointed the system proxy at -- i.e. `host` itself, or
+    /// `FocusLockConstants.homeLANHost` when the home-LAN shortcut swapped it in. Empty when not
+    /// enforcing. `EnforcementLoop` reads this for `ShellProxyEnvManager` so CLI tools' `HTTPS_PROXY`
+    /// matches the SAME address the system-wide GUI proxy actually uses -- passing `state.proxyHost`
+    /// there instead always aimed shell tools at the public hostname even on home LAN, where it
+    /// doesn't NAT-hairpin back to the home server, producing a connection that hangs until timeout
+    /// while the browser (correctly pointed at the LAN IP) worked fine.
+    private(set) static var lastAppliedHost: String = ""
+
     /// Debounced reachability signal for the current `target` -- same pattern (and same
     /// `requiredConsecutiveSamples` threshold) as `HomeLANState`, added for the same class of
     /// reason: a single slow/dropped 2s TCP probe against a proxy that's actually fine was flipping
@@ -126,6 +135,7 @@ enum ProxyEnforcer {
             return false
         }
         lastResolvedProxyIPs = ips
+        lastAppliedHost = target
 
         let user = FocusLockConstants.defaultProxyUser
         let portString = String(port)
@@ -152,6 +162,7 @@ enum ProxyEnforcer {
 
     static func remove() {
         lastResolvedProxyIPs = []
+        lastAppliedHost = ""
         for service in activeNetworkServices() {
             ProcessRunner.runSilently("/usr/sbin/networksetup", ["-setwebproxystate", service, "off"])
             ProcessRunner.runSilently("/usr/sbin/networksetup", ["-setsecurewebproxystate", service, "off"])

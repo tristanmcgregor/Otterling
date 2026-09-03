@@ -278,8 +278,13 @@ final class EnforcementLoop {
             // process environment. Only meaningful (and only run) when forceProxyActive is what
             // would actually block a direct connection -- see ShellProxyEnvManager's doc comment.
             if let password = ProxyEnforcer.currentProxyPassword() {
+                // Use ProxyEnforcer's actually-applied host, not state.proxyHost directly -- when
+                // the home-LAN shortcut is in effect that's the LAN IP, not the public hostname,
+                // and CLI tools need the same address the system-wide GUI proxy is really using
+                // (see ProxyEnforcer.lastAppliedHost's doc comment).
+                let shellProxyHost = self.proxyActive ? ProxyEnforcer.lastAppliedHost : state.proxyHost
                 ShellProxyEnvManager.apply(
-                    host: state.proxyHost, port: state.proxyPort,
+                    host: shellProxyHost, port: state.proxyPort,
                     user: FocusLockConstants.defaultProxyUser, password: password,
                     active: forceProxyActive
                 )
