@@ -77,13 +77,28 @@ final class AdultBlocklistManager {
         lock.unlock()
     }
 
+    // Bypasses whatever system-wide HTTP/HTTPS proxy ProxyEnforcer has configured -- confirmed
+    // live 2026-09-03: with proxy enforcement on, URLSession.shared (which honors the system
+    // proxy like everything else on the Mac) routed this download through mitmproxy same as any
+    // browser request, and one of the two source URLs below (a porn-domain HOSTS FILE, naturally
+    // named .../porn-only/hosts) got its own path matched by mitm_nsfw_addon.py's NSFW_PATH_PATTERNS
+    // and 403'd -- the filter blocking the download of its own blocklist. This is trusted,
+    // first-party maintenance traffic the daemon itself initiates, not user browsing that needs
+    // inspecting, so it explicitly goes direct instead of through whatever the user-facing proxy
+    // setting happens to be.
+    private static let directSession: URLSession = {
+        let config = URLSessionConfiguration.ephemeral
+        config.connectionProxyDictionary = [:]
+        return URLSession(configuration: config)
+    }()
+
     private func downloadHostsFile(_ urlString: String, into domains: inout Set<String>) {
         guard let url = URL(string: urlString) else { return }
         // Synchronous fetch -- refreshNow() already runs off the daemon's serial enforcement
         // queue, on this manager's own dedicated background queue.
         let semaphore = DispatchSemaphore(value: 0)
         var body: Data?
-        let task = URLSession.shared.dataTask(with: url) { data, _, _ in
+        let task = Self.directSession.dataTask(with: url) { data, _, _ in
             body = data
             semaphore.signal()
         }
