@@ -125,6 +125,7 @@ fun DashboardScreen(context: Context, onOpenSettings: () -> Unit) {
     var showCheckUpdates by remember { mutableStateOf(false) }
     var habitsRefreshing by remember { mutableStateOf(false) }
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    var lastKnownDay by remember { mutableStateOf(LocalDate.now()) }
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(refresh) {
@@ -133,9 +134,17 @@ fun DashboardScreen(context: Context, onOpenSettings: () -> Unit) {
             .onSuccess { data = it }
             .onFailure { loadError = "Couldn't load the dashboard. Tap refresh to try again." }
     }
+    // Reloads the dashboard the moment the calendar day rolls over, so "Done" statuses that only
+    // hold until midnight (see habitStatus's dateEpochDay check) don't keep showing yesterday's
+    // completions on a dashboard screen that's just been sitting open since before midnight.
     LaunchedEffect(Unit) {
         while (isActive) {
             now = System.currentTimeMillis()
+            val today = LocalDate.now()
+            if (today != lastKnownDay) {
+                lastKnownDay = today
+                refresh++
+            }
             delay(1_000)
         }
     }
@@ -803,7 +812,19 @@ private suspend fun loadDashboardData(context: Context): DashboardData {
     )
 }
 
-private fun DashboardData.label(packageName: String): String = appLabels[packageName] ?: packageName
+private fun DashboardData.label(packageName: String): String = appLabels[packageName] ?: prettyPackageName(packageName)
+
+/** Best-effort human-readable fallback for a target app that isn't installed on this device (so
+ *  its real launcher label can't be looked up) -- e.g. "com.google.android.youtube" -> "Youtube",
+ *  rather than showing the raw dotted package id. Package-visible: also used by
+ *  [HabitRulesSection]'s equivalent fallback. */
+internal fun prettyPackageName(packageName: String): String {
+    val lastSegment = packageName.substringAfterLast('.').ifBlank { packageName }
+    return lastSegment.split('_', '-')
+        .filter { it.isNotBlank() }
+        .joinToString(" ") { it.replaceFirstChar { char -> char.uppercase() } }
+        .ifBlank { packageName }
+}
 
 private fun habitStatus(
     name: String,

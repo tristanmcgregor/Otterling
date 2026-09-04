@@ -82,9 +82,10 @@ fun HabitRulesSection(context: Context) {
         isRefreshing = false
     }
 
-    /** Falls back to the raw package name if the app list hasn't loaded yet or it's been uninstalled. */
+    /** Falls back to a human-readable guess derived from the package id if the app list hasn't
+     * loaded yet or it's not installed on this device. */
     fun appLabel(packageName: String): String =
-        installedApps.find { it.packageName == packageName }?.label ?: packageName
+        installedApps.find { it.packageName == packageName }?.label ?: prettyPackageName(packageName)
 
     if (wizardOpen) {
         HabitRuleWizardHost(
