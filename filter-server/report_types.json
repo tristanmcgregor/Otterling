@@ -344,10 +344,10 @@
       "description": "Page-content inspection was automatically disabled for an app after its connections looked like certificate-pinning rejections. DNS filtering still applies, but this app's web traffic is no longer inspected -- worth confirming the app genuinely pins."
     },
     "MITM_EXEMPT_REFUSED": {
-      "enabled": true,
+      "enabled": false,
       "source": "android",
       "suspicion": "high",
-      "description": "A browser produced connections shaped like certificate-pinning rejections, which would normally auto-exempt an app from content inspection. Refused, because exempting a browser would disable filtering for all browsing through it. Repeated occurrences may mean a deliberate bypass attempt."
+      "description": "A browser produced connections shaped like certificate-pinning rejections, which would normally auto-exempt an app from content inspection. Refused, because exempting a browser would disable filtering for all browsing through it. Repeated occurrences may mean a deliberate bypass attempt. Disabled by default: this reports content filtering successfully holding, not a tamper attempt, and ordinary browser TLS hiccups triggered it as noise."
     }
   }
 }
