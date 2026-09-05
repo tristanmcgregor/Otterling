@@ -6,8 +6,11 @@ import FocusLockShared
 /// Mac -- `--restricted` (strips the Bash/PowerShell/REPL tools that could otherwise let it
 /// execute something itself) and `--bare` (skips hooks/CLAUDE.md/plugins/keychain reads, so it
 /// can't pick up untrusted local instructions or need an interactive login) -- authenticated with
-/// an API key from `FocusLockConstants.anthropicApiKeyPath`, since a root LaunchDaemon has no
-/// login session for `claude` to read the household's own interactive subscription from.
+/// a `CLAUDE_CODE_OAUTH_TOKEN` from `FocusLockConstants.claudeCodeOAuthTokenPath`: the same
+/// Claude Code CLI subscription-OAuth approach `ai_classifier.py`/`sudo_review_server.py` already
+/// use server-side, not a metered Anthropic API key (a root LaunchDaemon has no *login session*
+/// for `claude` to read an interactive subscription's stored credentials from, but a long-lived
+/// OAuth token needs none -- it's just a static credential passed via env var).
 ///
 /// IMPORTANT: this is a convenience layer over `SudoBroker`, not a second way to run commands.
 /// `translate()` below only turns natural language into candidate shell command(s) -- it does not
@@ -74,8 +77,8 @@ enum AIAssistantClient {
     /// Returns the candidate commands (empty on any failure/ambiguity/refusal -- never fabricates a
     /// command when the round-trip fails) and a short explanation to show the Guardian.
     static func translate(request: String) -> (commands: [String], explanation: String) {
-        guard let apiKey = nonEmpty(readTrimmed(FocusLockConstants.anthropicApiKeyPath)) else {
-            return ([], "Assistant is not reachable (no local Claude Code API key provisioned).")
+        guard let oauthToken = nonEmpty(readTrimmed(FocusLockConstants.claudeCodeOAuthTokenPath)) else {
+            return ([], "Assistant is not reachable (no local Claude Code OAuth token provisioned).")
         }
         guard let claudePath = resolveClaudeExecutable() else {
             return ([], "Assistant is not reachable (the claude CLI wasn't found on this Mac).")
@@ -92,10 +95,15 @@ enum AIAssistantClient {
         // so there's no local CLAUDE.md/config for a `--bare` session to even consider reading.
         process.currentDirectoryURL = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
 
+        // No ANTHROPIC_API_KEY here, deliberately -- it outranks CLAUDE_CODE_OAUTH_TOKEN in Claude
+        // Code's own credential precedence (see ai_classifier.py's _claude_subprocess_kwargs), so
+        // even an ambient one would silently steal auth back from the subscription token below.
+        // Building this dict from scratch rather than inheriting the daemon's environment already
+        // guarantees that.
         var environment: [String: String] = [
             "HOME": "/var/root",
             "PATH": "/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bin",
-            "ANTHROPIC_API_KEY": apiKey,
+            "CLAUDE_CODE_OAUTH_TOKEN": oauthToken,
         ]
         // Same reasoning ShellProxyEnvManager documents for every other CLI tool on this Mac
         // (Claude Code explicitly among them): when the household's filter is provisioned, `claude`

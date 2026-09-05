@@ -120,14 +120,19 @@ The GUI's "AI Assistant" chat box (see `AIAssistantClient.swift`) runs a local, 
 `claude` CLI session on this Mac to translate a plain-English request into candidate shell
 commands -- it never executes anything itself; every command it proposes still goes through the
 exact same `SudoBroker` denylist/allowlist/AI-review pipeline as the manual Sudo Terminal, one at a
-time. It needs its own Anthropic API key, separate from any interactive Claude Code subscription
-login, since the daemon runs as root with no login session to read OAuth credentials from:
+time. It authenticates that session with a `CLAUDE_CODE_OAUTH_TOKEN` -- the same Claude Code CLI
+subscription-OAuth approach the filter-server's `ai_classifier.py`/`sudo_review_server.py` already
+use, not a metered Anthropic API key -- since the daemon runs as root with no login session to read
+an interactive subscription's stored credentials from, but a long-lived OAuth token needs none.
+Generate one from an interactive terminal already logged into the household's Claude Code
+subscription, then provision it for the daemon:
 
 ```bash
+claude setup-token
 sudo install -d -m 755 -o root -g wheel "/Library/Application Support/FocusLock"
-sudo tee "/Library/Application Support/FocusLock/anthropic_api_key" > /dev/null <<< "sk-ant-..."
-sudo chown root:wheel "/Library/Application Support/FocusLock/anthropic_api_key"
-sudo chmod 600 "/Library/Application Support/FocusLock/anthropic_api_key"
+sudo tee "/Library/Application Support/FocusLock/claude_code_oauth_token" > /dev/null <<< "<token printed above>"
+sudo chown root:wheel "/Library/Application Support/FocusLock/claude_code_oauth_token"
+sudo chmod 600 "/Library/Application Support/FocusLock/claude_code_oauth_token"
 ```
 
 `claude` itself must actually be installed for the daemon to find -- it auto-probes
@@ -140,6 +145,6 @@ regardless of admin status, which on this setup is the filtered Standard account
 plant an arbitrary binary named `claude` for this root daemon to run. If `claude` lives somewhere
 else, set an explicit path in `"/Library/Application Support/FocusLock/claude_cli_path"` (same
 ownership/permissions as above) -- but first make sure that target binary itself isn't writable by
-the Standard account either, or this override just relocates the same hole. Leaving the API key
+the Standard account either, or this override just relocates the same hole. Leaving the OAuth token
 file unprovisioned just makes the AI Assistant report itself unreachable -- everything else in the
 app is unaffected.

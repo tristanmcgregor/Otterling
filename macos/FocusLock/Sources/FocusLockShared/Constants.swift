@@ -125,13 +125,17 @@ public enum FocusLockConstants {
     public static let lockProfileTokenPath = "\(stateDirectory)/lockprofile_token"
     public static let lockProfileHostPath = "\(stateDirectory)/lockprofile_host"
 
-    /// Root-only file holding the Anthropic API key `AIAssistantClient` exports into its local,
-    /// non-interactive `claude` CLI session -- API-key auth, not the household's own interactive
-    /// Claude Code subscription login, since a root LaunchDaemon has no login session for `claude`
-    /// to read OAuth credentials from (`--bare` mode deliberately refuses to try). Provision by
-    /// writing this file (0600, root:wheel) with nothing but the key. Absent -> the AI Assistant
+    /// Root-only file holding the `CLAUDE_CODE_OAUTH_TOKEN` `AIAssistantClient` exports into its
+    /// local, non-interactive `claude` CLI session -- the same Claude Code CLI subscription-OAuth
+    /// approach `ai_classifier.py`/`sudo_review_server.py` already use server-side, not a metered
+    /// Anthropic API key: a root LaunchDaemon has no *login session* for `claude` to read an
+    /// interactive subscription's stored credentials from (`--bare` mode deliberately refuses to
+    /// try that), but a long-lived OAuth token is just a static credential handed to it via env var,
+    /// no login session required. Generate one from an interactive terminal already logged into the
+    /// household's Claude Code subscription with `claude setup-token`, then provision it by writing
+    /// this file (0600, root:wheel) with nothing but the printed token. Absent -> the AI Assistant
     /// reports itself unreachable rather than silently doing nothing.
-    public static let anthropicApiKeyPath = "\(stateDirectory)/anthropic_api_key"
+    public static let claudeCodeOAuthTokenPath = "\(stateDirectory)/claude_code_oauth_token"
     /// Optional absolute path to the `claude` binary, for a Mac where it isn't in one of
     /// `AIAssistantClient`'s auto-probed install locations (`/opt/homebrew/bin`, `/usr/local/bin`
     /// -- deliberately never anywhere under a console user's home directory; see that type's
